@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  hermeskit:
+    name: HermesKit
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: swift build --package-path HermesKit
+
+      - name: Test
+        run: swift test --package-path HermesKit
+
+      - name: macOS App Build
+        run: |
+          xcodebuild build \
+            -project Talaria.xcodeproj \
+            -scheme Talaria \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: iOS Simulator Build
+        run: |
+          xcodebuild build \
+            -scheme HermesKit \
+            -destination 'generic/platform=iOS Simulator' \
+            -workspace Talaria.xcworkspace
