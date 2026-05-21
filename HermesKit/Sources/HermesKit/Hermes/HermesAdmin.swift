@@ -47,17 +47,22 @@ public struct LocalHermesAdminRunner: HermesAdminRunning {
 
         let stdoutBuffer = ProcessOutputBuffer()
         let stderrBuffer = ProcessOutputBuffer()
+        let readQueue = DispatchQueue(label: "com.talaria.HermesKit.LocalHermesAdminRunner.read")
 
         stdout.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if !data.isEmpty {
-                stdoutBuffer.append(data)
+            readQueue.async {
+                let data = handle.availableData
+                if !data.isEmpty {
+                    stdoutBuffer.append(data)
+                }
             }
         }
         stderr.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            if !data.isEmpty {
-                stderrBuffer.append(data)
+            readQueue.async {
+                let data = handle.availableData
+                if !data.isEmpty {
+                    stderrBuffer.append(data)
+                }
             }
         }
 
@@ -74,8 +79,10 @@ public struct LocalHermesAdminRunner: HermesAdminRunning {
 
         stdout.fileHandleForReading.readabilityHandler = nil
         stderr.fileHandleForReading.readabilityHandler = nil
-        stdoutBuffer.append(stdout.fileHandleForReading.readDataToEndOfFile())
-        stderrBuffer.append(stderr.fileHandleForReading.readDataToEndOfFile())
+        readQueue.sync {
+            stdoutBuffer.append(stdout.fileHandleForReading.readDataToEndOfFile())
+            stderrBuffer.append(stderr.fileHandleForReading.readDataToEndOfFile())
+        }
 
         return HermesAdminResult(
             exitCode: process.terminationStatus,

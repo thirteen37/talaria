@@ -11,6 +11,7 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
     private let inboundContinuation: AsyncThrowingStream<Data, Error>.Continuation
     private let stderrRing = StderrRingBuffer()
     private let readQueue = DispatchQueue(label: "com.talaria.HermesKit.LocalProcessTransport.read")
+    private let writeQueue = DispatchQueue(label: "com.talaria.HermesKit.LocalProcessTransport.write")
     private let lock = NSLock()
     private var started = false
     private var inboundFinished = false
@@ -115,7 +116,16 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
     }
 
     public func send(_ data: Data) async throws {
-        try inputPipe.fileHandleForWriting.write(contentsOf: data)
+        try await withCheckedThrowingContinuation { continuation in
+            writeQueue.async { [inputPipe] in
+                do {
+                    try inputPipe.fileHandleForWriting.write(contentsOf: data)
+                    continuation.resume(returning: ())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
     }
 
     public func close() async {

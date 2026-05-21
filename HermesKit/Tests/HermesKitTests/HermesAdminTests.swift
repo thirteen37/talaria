@@ -7,6 +7,8 @@ struct HermesAdminTests {
     @Test
     func localRunnerDrainsLargeStdoutAndStderr() async throws {
         let runner = LocalHermesAdminRunner(hermesPath: "/bin/sh")
+        let expectedStdout = (0..<20_000).map { "stdout-\($0)" }.joined(separator: "\n") + "\n"
+        let expectedStderr = (0..<20_000).map { "stderr-\($0)" }.joined(separator: "\n") + "\n"
         let script = """
         i=0
         while [ "$i" -lt 20000 ]; do
@@ -19,10 +21,8 @@ struct HermesAdminTests {
         let result = try await runner.run(HermesAdminCommand(arguments: ["-c", script]))
 
         #expect(result.exitCode == 0)
-        #expect(result.stdout.contains("stdout-0"))
-        #expect(result.stdout.contains("stdout-19999"))
-        #expect(result.stderr.contains("stderr-0"))
-        #expect(result.stderr.contains("stderr-19999"))
+        #expect(result.stdout == expectedStdout)
+        #expect(result.stderr == expectedStderr)
     }
 }
 #endif
