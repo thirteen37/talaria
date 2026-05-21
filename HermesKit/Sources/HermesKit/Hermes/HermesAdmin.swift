@@ -45,16 +45,64 @@ public struct LocalHermesAdminRunner: HermesAdminRunning {
         process.standardOutput = stdout
         process.standardError = stderr
 
-        try process.run()
-        process.waitUntilExit()
+        let stdoutBuffer = ProcessOutputBuffer()
+        let stderrBuffer = ProcessOutputBuffer()
 
-        let stdoutData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderr.fileHandleForReading.readDataToEndOfFile()
+        stdout.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if !data.isEmpty {
+                stdoutBuffer.append(data)
+            }
+        }
+        stderr.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if !data.isEmpty {
+                stderrBuffer.append(data)
+            }
+        }
+
+        try await withCheckedThrowingContinuation { continuation in
+            process.terminationHandler = { _ in
+                continuation.resume(returning: ())
+            }
+            do {
+                try process.run()
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+
+        stdout.fileHandleForReading.readabilityHandler = nil
+        stderr.fileHandleForReading.readabilityHandler = nil
+        stdoutBuffer.append(stdout.fileHandleForReading.readDataToEndOfFile())
+        stderrBuffer.append(stderr.fileHandleForReading.readDataToEndOfFile())
+
         return HermesAdminResult(
             exitCode: process.terminationStatus,
-            stdout: String(decoding: stdoutData, as: UTF8.self),
-            stderr: String(decoding: stderrData, as: UTF8.self)
+            stdout: stdoutBuffer.string(),
+            stderr: stderrBuffer.string()
         )
+    }
+}
+
+private final class ProcessOutputBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ newData: Data) {
+        guard !newData.isEmpty else {
+            return
+        }
+        lock.lock()
+        data.append(newData)
+        lock.unlock()
+    }
+
+    func string() -> String {
+        lock.lock()
+        let snapshot = data
+        lock.unlock()
+        return String(decoding: snapshot, as: UTF8.self)
     }
 }
 #endif
