@@ -24,6 +24,23 @@ struct JSONRPCFramerTests {
     }
 
     @Test
+    func manySmallFramesMayExceedLimitInAggregate() throws {
+        var framer = JSONRPCFramer(maximumFrameLength: 3)
+        let frames = try framer.append(Data("one\ntwo\n".utf8))
+
+        #expect(frames.map { String(decoding: $0, as: UTF8.self) } == ["one", "two"])
+    }
+
+    @Test
+    func unterminatedTailIsLimited() throws {
+        var framer = JSONRPCFramer(maximumFrameLength: 3)
+
+        #expect(throws: JSONRPCFramerError.lineTooLong(4)) {
+            try framer.append(Data("four".utf8))
+        }
+    }
+
+    @Test
     func finishReturnsTrailingPartialFrame() {
         var framer = JSONRPCFramer()
         _ = try? framer.append(Data("partial".utf8))

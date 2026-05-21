@@ -16,16 +16,21 @@ public struct JSONRPCFramer: Sendable {
 
     public mutating func append(_ data: Data) throws -> [Data] {
         buffer.append(data)
-        guard buffer.count <= maximumFrameLength else {
-            throw JSONRPCFramerError.lineTooLong(buffer.count)
-        }
 
         var frames: [Data] = []
         while let newlineIndex = buffer.firstIndex(of: 0x0A) {
             let frame = buffer[..<newlineIndex]
+            guard frame.count <= maximumFrameLength else {
+                throw JSONRPCFramerError.lineTooLong(frame.count)
+            }
             frames.append(Data(frame))
             buffer.removeSubrange(...newlineIndex)
         }
+
+        guard buffer.count <= maximumFrameLength else {
+            throw JSONRPCFramerError.lineTooLong(buffer.count)
+        }
+
         return frames
     }
 

@@ -16,6 +16,29 @@ public final class SSHTransport: Transport, @unchecked Sendable {
         hermesPath: String = "hermes",
         hermesHome: String? = nil
     ) {
+        let arguments = Self.makeArguments(
+            host: host,
+            user: user,
+            port: port,
+            identityFile: identityFile,
+            hermesPath: hermesPath,
+            hermesHome: hermesHome
+        )
+
+        self.processTransport = LocalProcessTransport(
+            executableURL: URL(fileURLWithPath: "/usr/bin/ssh"),
+            arguments: arguments
+        )
+    }
+
+    static func makeArguments(
+        host: String,
+        user: String? = nil,
+        port: Int? = nil,
+        identityFile: String? = nil,
+        hermesPath: String = "hermes",
+        hermesHome: String? = nil
+    ) -> [String] {
         var arguments = ["-T", "-o", "BatchMode=yes"]
         if let port {
             arguments += ["-p", String(port)]
@@ -25,16 +48,12 @@ public final class SSHTransport: Transport, @unchecked Sendable {
         }
 
         let destination = user.map { "\($0)@\(host)" } ?? host
-        arguments += [destination, "--"]
+        arguments += [destination]
         if let hermesHome {
             arguments += ["env", "HERMES_HOME=\(hermesHome)"]
         }
         arguments += [hermesPath, "acp"]
-
-        self.processTransport = LocalProcessTransport(
-            executableURL: URL(fileURLWithPath: "/usr/bin/ssh"),
-            arguments: arguments
-        )
+        return arguments
     }
 
     public func start() throws {
