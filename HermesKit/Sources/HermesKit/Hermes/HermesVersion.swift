@@ -37,7 +37,57 @@ public struct HermesVersion: Codable, Comparable, Equatable, Sendable {
         case (_?, nil):
             return true
         case let (lhs?, rhs?):
-            return lhs < rhs
+            return comparePrerelease(lhs, rhs) == .orderedAscending
         }
+    }
+
+    private static func comparePrerelease(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        let lhsIdentifiers = lhs.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+        let rhsIdentifiers = rhs.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+
+        for index in 0..<min(lhsIdentifiers.count, rhsIdentifiers.count) {
+            let result = comparePrereleaseIdentifier(lhsIdentifiers[index], rhsIdentifiers[index])
+            if result != .orderedSame {
+                return result
+            }
+        }
+
+        if lhsIdentifiers.count == rhsIdentifiers.count {
+            return .orderedSame
+        }
+        return lhsIdentifiers.count < rhsIdentifiers.count ? .orderedAscending : .orderedDescending
+    }
+
+    private static func comparePrereleaseIdentifier(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        let lhsNumber = prereleaseNumber(lhs)
+        let rhsNumber = prereleaseNumber(rhs)
+
+        switch (lhsNumber, rhsNumber) {
+        case let (lhs?, rhs?):
+            if lhs.count != rhs.count {
+                return lhs.count < rhs.count ? .orderedAscending : .orderedDescending
+            }
+            if lhs != rhs {
+                return lhs < rhs ? .orderedAscending : .orderedDescending
+            }
+            return .orderedSame
+        case (_?, nil):
+            return .orderedAscending
+        case (nil, _?):
+            return .orderedDescending
+        case (nil, nil):
+            if lhs == rhs {
+                return .orderedSame
+            }
+            return lhs < rhs ? .orderedAscending : .orderedDescending
+        }
+    }
+
+    private static func prereleaseNumber(_ identifier: String) -> String? {
+        guard !identifier.isEmpty, identifier.allSatisfy(\.isNumber) else {
+            return nil
+        }
+        let trimmed = identifier.drop { $0 == "0" }
+        return trimmed.isEmpty ? "0" : String(trimmed)
     }
 }

@@ -25,10 +25,26 @@ struct SSHTransportTests {
             "~/.ssh/id_ed25519",
             "me@example.com",
             "env",
-            "HERMES_HOME=/tmp/hermes",
-            "/opt/bin/hermes",
+            "'HERMES_HOME=/tmp/hermes'",
+            "'/opt/bin/hermes'",
             "acp",
         ])
+    }
+
+    @Test
+    func remoteCommandInsertsAreShellQuoted() {
+        let arguments = SSHTransport.makeArguments(
+            host: "example.com",
+            hermesPath: "/opt/Hermes Bin/hermes'agent",
+            hermesHome: "/var/lib/hermes data/it's; rm -rf ~"
+        )
+
+        #expect(arguments.suffix(4).elementsEqual([
+            "env",
+            "'HERMES_HOME=/var/lib/hermes data/it'\\''s; rm -rf ~'",
+            "'/opt/Hermes Bin/hermes'\\''agent'",
+            "acp",
+        ]))
     }
 }
 #endif

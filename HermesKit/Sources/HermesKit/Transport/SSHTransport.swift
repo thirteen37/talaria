@@ -50,10 +50,17 @@ public final class SSHTransport: Transport, @unchecked Sendable {
         let destination = user.map { "\($0)@\(host)" } ?? host
         arguments += [destination]
         if let hermesHome {
-            arguments += ["env", "HERMES_HOME=\(hermesHome)"]
+            arguments += ["env", shellQuote("HERMES_HOME=\(hermesHome)")]
         }
-        arguments += [hermesPath, "acp"]
+        arguments += [shellQuote(hermesPath), "acp"]
         return arguments
+    }
+
+    static func shellQuote(_ value: String) -> String {
+        guard !value.isEmpty else {
+            return "''"
+        }
+        return "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 
     public func start() throws {
