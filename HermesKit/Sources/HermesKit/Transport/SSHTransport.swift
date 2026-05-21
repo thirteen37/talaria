@@ -48,7 +48,7 @@ public final class SSHTransport: Transport, @unchecked Sendable {
         }
 
         let destination = user.map { "\($0)@\(host)" } ?? host
-        arguments += [destination]
+        arguments += ["--", destination]
         if let hermesHome {
             arguments += ["env", shellQuote("HERMES_HOME=\(hermesHome)")]
         }
