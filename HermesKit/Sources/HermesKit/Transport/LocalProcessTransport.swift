@@ -10,8 +10,10 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
     private let stderrPipe = Pipe()
     private let inboundContinuation: AsyncThrowingStream<Data, Error>.Continuation
     private let stderrRing = StderrRingBuffer()
+    private let readQueue = DispatchQueue(label: "com.talaria.HermesKit.LocalProcessTransport.read")
     private let lock = NSLock()
     private var started = false
+    private var inboundFinished = false
 
     public init(executableURL: URL, arguments: [String] = [], environment: [String: String] = [:]) {
         self.process = Process()
@@ -45,26 +47,64 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
         }
         started = true
 
-        outputPipe.fileHandleForReading.readabilityHandler = { [inboundContinuation] handle in
-            let data = handle.availableData
-            if data.isEmpty {
-                inboundContinuation.finish()
-            } else {
-                inboundContinuation.yield(data)
+        outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            guard let transport = self else {
+                return
+            }
+            transport.readQueue.async { [weak transport] in
+                guard let transport, !transport.inboundFinished else {
+                    return
+                }
+
+                let data = handle.availableData
+                if data.isEmpty {
+                    transport.finishInboundOnReadQueue()
+                } else {
+                    transport.inboundContinuation.yield(data)
+                }
             }
         }
 
-        stderrPipe.fileHandleForReading.readabilityHandler = { [stderrRing] handle in
-            let data = handle.availableData
-            if !data.isEmpty {
-                stderrRing.append(data)
+        stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            guard let transport = self else {
+                return
+            }
+            transport.readQueue.async { [weak transport] in
+                guard let transport else {
+                    return
+                }
+
+                let data = handle.availableData
+                if !data.isEmpty {
+                    transport.stderrRing.append(data)
+                }
             }
         }
 
-        process.terminationHandler = { [inboundContinuation, outputPipe, stderrPipe] _ in
-            outputPipe.fileHandleForReading.readabilityHandler = nil
-            stderrPipe.fileHandleForReading.readabilityHandler = nil
-            inboundContinuation.finish()
+        process.terminationHandler = { [weak self] _ in
+            guard let transport = self else {
+                return
+            }
+            transport.readQueue.async { [weak transport] in
+                guard let transport else {
+                    return
+                }
+
+                transport.outputPipe.fileHandleForReading.readabilityHandler = nil
+                transport.stderrPipe.fileHandleForReading.readabilityHandler = nil
+
+                let trailingOutput = transport.outputPipe.fileHandleForReading.readDataToEndOfFile()
+                if !trailingOutput.isEmpty, !transport.inboundFinished {
+                    transport.inboundContinuation.yield(trailingOutput)
+                }
+
+                let trailingStderr = transport.stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                if !trailingStderr.isEmpty {
+                    transport.stderrRing.append(trailingStderr)
+                }
+
+                transport.finishInboundOnReadQueue()
+            }
         }
 
         do {
@@ -82,12 +122,23 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
         inputPipe.fileHandleForWriting.closeFile()
         if process.isRunning {
             process.terminate()
+        } else {
+            readQueue.async { [weak self] in
+                self?.finishInboundOnReadQueue()
+            }
         }
-        inboundContinuation.finish()
     }
 
     public func recentStderr() -> String {
         stderrRing.snapshot()
+    }
+
+    private func finishInboundOnReadQueue() {
+        guard !inboundFinished else {
+            return
+        }
+        inboundFinished = true
+        inboundContinuation.finish()
     }
 }
 
