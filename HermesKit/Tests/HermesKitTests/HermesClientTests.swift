@@ -154,6 +154,84 @@ struct HermesClientTests {
     }
 
     @Test
+    func serverPermissionRequestGetsTypedEventAndResponse() async throws {
+        let transport = InMemoryTransport()
+        let client = HermesClient(transport: transport)
+
+        var iterator = client.notifications.makeAsyncIterator()
+        let nextNotification = Task {
+            try await iterator.next()
+        }
+
+        let request = RequestPermissionRequest(
+            sessionId: "session-1",
+            toolCall: ToolCallUpdate(toolCallId: "tool-1", title: "Edit file", kind: .edit, status: .pending),
+            options: [
+                PermissionOption(optionId: "allow", name: "Allow once", kind: .allowOnce),
+                PermissionOption(optionId: "reject", name: "Reject once", kind: .rejectOnce),
+            ]
+        )
+        transport.pushInbound(try JSONRPCFramer.encode(JSONRPCRequest(
+            id: .string("permission-1"),
+            method: ACPMethod.sessionRequestPermission,
+            params: request
+        )))
+
+        guard case let .permissionRequest(event)? = try await nextNotification.value else {
+            Issue.record("Expected typed permission request event")
+            return
+        }
+
+        #expect(event.id == .string("permission-1"))
+        #expect(event.request == request)
+
+        await event.respond(.selected(SelectedPermissionOutcome(optionId: "allow")))
+
+        let sent = try await waitForSentData(transport, count: 1)
+        let response = try decoder.decode(JSONRPCInboundMessage.self, from: sent[0].dropLastNewline())
+        #expect(response.id == .string("permission-1"))
+        guard case let .object(result)? = response.result,
+              case let .object(outcome)? = result["outcome"] else {
+            Issue.record("Expected permission response result")
+            return
+        }
+        #expect(outcome["outcome"] == .string("selected"))
+        #expect(outcome["optionId"] == .string("allow"))
+    }
+
+    @Test
+    func permissionResponseWriteFailureUsesClientRequestErrorEvent() async throws {
+        let transport = FailingSendTransport()
+        let client = HermesClient(transport: transport)
+
+        var iterator = client.notifications.makeAsyncIterator()
+
+        let request = RequestPermissionRequest(
+            sessionId: "session-1",
+            toolCall: ToolCallUpdate(toolCallId: "tool-1", title: "Edit file"),
+            options: [PermissionOption(optionId: "allow", name: "Allow once", kind: .allowOnce)]
+        )
+        transport.pushInbound(try JSONRPCFramer.encode(JSONRPCRequest(
+            id: .string("permission-1"),
+            method: ACPMethod.sessionRequestPermission,
+            params: request
+        )))
+
+        guard case let .permissionRequest(event)? = try await iterator.next() else {
+            Issue.record("Expected typed permission request event")
+            return
+        }
+
+        await event.respond(.cancelled)
+
+        #expect(try await iterator.next() == .clientRequestError(
+            id: .string("permission-1"),
+            method: ACPMethod.sessionRequestPermission,
+            message: TransportError.stdinClosed.localizedDescription
+        ))
+    }
+
+    @Test
     func malformedJSONFrameDoesNotStopReadLoop() async throws {
         let transport = InMemoryTransport()
         let client = HermesClient(transport: transport)
@@ -244,5 +322,30 @@ private extension Data {
             return self
         }
         return Data(dropLast())
+    }
+}
+
+private actor FailingSendTransport: Transport {
+    nonisolated let inbound: AsyncThrowingStream<Data, Error>
+    private nonisolated let continuation: AsyncThrowingStream<Data, Error>.Continuation
+
+    init() {
+        var captured: AsyncThrowingStream<Data, Error>.Continuation?
+        self.inbound = AsyncThrowingStream { continuation in
+            captured = continuation
+        }
+        self.continuation = captured!
+    }
+
+    func send(_ data: Data) async throws {
+        throw TransportError.stdinClosed
+    }
+
+    nonisolated func pushInbound(_ data: Data) {
+        continuation.yield(data)
+    }
+
+    func close() async {
+        continuation.finish()
     }
 }

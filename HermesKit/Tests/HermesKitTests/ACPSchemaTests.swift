@@ -142,6 +142,86 @@ struct ACPSchemaTests {
         }
     }
 
+    @Test
+    func requestPermissionRequestAndResponseRoundTrip() throws {
+        let request = RequestPermissionRequest(
+            sessionId: "session-1",
+            toolCall: ToolCallUpdate(
+                toolCallId: "tool-1",
+                title: "Edit README.md",
+                kind: .edit,
+                status: .pending
+            ),
+            options: [
+                PermissionOption(optionId: "allow", name: "Allow once", kind: .allowOnce),
+                PermissionOption(optionId: "reject", name: "Reject once", kind: .rejectOnce),
+            ]
+        )
+
+        let requestObject = try jsonObject(request)
+        #expect(requestObject["sessionId"] == .string("session-1"))
+        guard case let .object(toolCall)? = requestObject["toolCall"],
+              case let .array(options)? = requestObject["options"],
+              case let .object(firstOption)? = options.first else {
+            Issue.record("Expected typed permission request shape")
+            return
+        }
+        #expect(toolCall["toolCallId"] == .string("tool-1"))
+        #expect(toolCall["kind"] == .string("edit"))
+        #expect(firstOption["optionId"] == .string("allow"))
+        #expect(firstOption["kind"] == .string("allow_once"))
+
+        #expect(try decoder.decode(RequestPermissionRequest.self, from: encoder.encode(request)) == request)
+
+        let selected = RequestPermissionResponse(outcome: .selected(SelectedPermissionOutcome(optionId: "allow")))
+        let selectedObject = try jsonObject(selected)
+        guard case let .object(selectedOutcome)? = selectedObject["outcome"] else {
+            Issue.record("Expected selected outcome")
+            return
+        }
+        #expect(selectedOutcome["outcome"] == .string("selected"))
+        #expect(selectedOutcome["optionId"] == .string("allow"))
+        #expect(try decoder.decode(RequestPermissionResponse.self, from: encoder.encode(selected)) == selected)
+
+        let cancelled = RequestPermissionResponse(outcome: .cancelled)
+        let cancelledObject = try jsonObject(cancelled)
+        guard case let .object(cancelledOutcome)? = cancelledObject["outcome"] else {
+            Issue.record("Expected cancelled outcome")
+            return
+        }
+        #expect(cancelledOutcome["outcome"] == .string("cancelled"))
+        #expect(try decoder.decode(RequestPermissionResponse.self, from: encoder.encode(cancelled)) == cancelled)
+    }
+
+    @Test
+    func toolCallUpdateDiffPayloadRoundTrips() throws {
+        let update = ToolCallUpdate(
+            toolCallId: "tool-1",
+            title: "Patch file",
+            kind: .edit,
+            status: .completed,
+            content: [
+                .diff(Diff(path: "README.md", oldText: "before\n", newText: "after\n"))
+            ]
+        )
+
+        let decoded = try decoder.decode(ToolCallUpdate.self, from: encoder.encode(update))
+        #expect(decoded == update)
+
+        let sessionUpdate = SessionUpdate.toolCallUpdate(update)
+        let object = try jsonObject(sessionUpdate)
+        #expect(object["sessionUpdate"] == .string("tool_call_update"))
+        guard case let .array(content)? = object["content"],
+              case let .object(diff)? = content.first else {
+            Issue.record("Expected diff content")
+            return
+        }
+        #expect(diff["type"] == .string("diff"))
+        #expect(diff["path"] == .string("README.md"))
+        #expect(diff["oldText"] == .string("before\n"))
+        #expect(diff["newText"] == .string("after\n"))
+    }
+
     private func jsonObject<T: Encodable>(_ value: T) throws -> [String: JSONValue] {
         let data = try encoder.encode(value)
         guard case let .object(object) = try decoder.decode(JSONValue.self, from: data) else {
