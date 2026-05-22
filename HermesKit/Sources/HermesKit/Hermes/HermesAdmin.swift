@@ -45,26 +45,10 @@ public struct LocalHermesAdminRunner: HermesAdminRunning {
         process.standardOutput = stdout
         process.standardError = stderr
 
-        let stdoutBuffer = ProcessOutputBuffer()
-        let stderrBuffer = ProcessOutputBuffer()
-        let readQueue = DispatchQueue(label: "com.talaria.HermesKit.LocalHermesAdminRunner.read")
-
-        stdout.fileHandleForReading.readabilityHandler = { handle in
-            readQueue.async {
-                let data = handle.availableData
-                if !data.isEmpty {
-                    stdoutBuffer.append(data)
-                }
-            }
-        }
-        stderr.fileHandleForReading.readabilityHandler = { handle in
-            readQueue.async {
-                let data = handle.availableData
-                if !data.isEmpty {
-                    stderrBuffer.append(data)
-                }
-            }
-        }
+        let stdoutReader = ProcessOutputReader(handle: stdout.fileHandleForReading)
+        let stderrReader = ProcessOutputReader(handle: stderr.fileHandleForReading)
+        var stdoutTask: Task<Data, Never>?
+        var stderrTask: Task<Data, Never>?
 
         try await withCheckedThrowingContinuation { continuation in
             process.terminationHandler = { _ in
@@ -73,43 +57,38 @@ public struct LocalHermesAdminRunner: HermesAdminRunning {
             do {
                 try process.run()
             } catch {
+                process.terminationHandler = nil
                 continuation.resume(throwing: error)
+                return
+            }
+
+            stdoutTask = Task.detached(priority: .userInitiated) {
+                stdoutReader.readToEnd()
+            }
+            stderrTask = Task.detached(priority: .userInitiated) {
+                stderrReader.readToEnd()
             }
         }
-
-        stdout.fileHandleForReading.readabilityHandler = nil
-        stderr.fileHandleForReading.readabilityHandler = nil
-        readQueue.sync {
-            stdoutBuffer.append(stdout.fileHandleForReading.readDataToEndOfFile())
-            stderrBuffer.append(stderr.fileHandleForReading.readDataToEndOfFile())
-        }
+        let stdoutData = await stdoutTask?.value ?? Data()
+        let stderrData = await stderrTask?.value ?? Data()
 
         return HermesAdminResult(
             exitCode: process.terminationStatus,
-            stdout: stdoutBuffer.string(),
-            stderr: stderrBuffer.string()
+            stdout: String(decoding: stdoutData, as: UTF8.self),
+            stderr: String(decoding: stderrData, as: UTF8.self)
         )
     }
 }
 
-private final class ProcessOutputBuffer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var data = Data()
+private final class ProcessOutputReader: @unchecked Sendable {
+    private let handle: FileHandle
 
-    func append(_ newData: Data) {
-        guard !newData.isEmpty else {
-            return
-        }
-        lock.lock()
-        data.append(newData)
-        lock.unlock()
+    init(handle: FileHandle) {
+        self.handle = handle
     }
 
-    func string() -> String {
-        lock.lock()
-        let snapshot = data
-        lock.unlock()
-        return String(decoding: snapshot, as: UTF8.self)
+    func readToEnd() -> Data {
+        handle.readDataToEndOfFile()
     }
 }
 #endif

@@ -24,6 +24,14 @@ struct JSONRPCFramerTests {
     }
 
     @Test
+    func emptyLinesAreReturnedAsFrames() throws {
+        var framer = JSONRPCFramer()
+        let frames = try framer.append(Data("\n{}\n".utf8))
+
+        #expect(frames.map { String(decoding: $0, as: UTF8.self) } == ["", "{}"])
+    }
+
+    @Test
     func manySmallFramesMayExceedLimitInAggregate() throws {
         var framer = JSONRPCFramer(maximumFrameLength: 3)
         let frames = try framer.append(Data("one\ntwo\n".utf8))
@@ -37,6 +45,15 @@ struct JSONRPCFramerTests {
 
         #expect(throws: JSONRPCFramerError.lineTooLong(4)) {
             try framer.append(Data("four".utf8))
+        }
+    }
+
+    @Test
+    func oversizedLineEndingInNewlineThrows() throws {
+        var framer = JSONRPCFramer(maximumFrameLength: 3)
+
+        #expect(throws: JSONRPCFramerError.lineTooLong(4)) {
+            try framer.append(Data("four\n".utf8))
         }
     }
 

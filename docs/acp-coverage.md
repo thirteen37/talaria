@@ -17,4 +17,6 @@ This file tracks which ACP methods and events Talaria handles.
 
 ## Current Scaffold
 
-The codebase currently includes JSON-RPC framing and minimal initialize request models. Full vendored ACP schema coverage is the first Sprint 1 task.
+Sprint 1 includes v0.13.2-shaped Swift Codable models for the stable ACP schema, typed JSON-RPC request/response dispatch, typed `session/update` streaming, local `initialize`, `session/new`, `session/prompt`, and `session/cancel` client APIs, and a single local chat surface.
+
+Permission requests, diff-specific UI, session browsing, SSH-backed live sessions, and admin surfaces remain later-sprint work.
