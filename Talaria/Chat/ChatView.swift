@@ -151,8 +151,41 @@ final class LocalChatViewModel {
         }
 
         pendingPermission = nil
+        applyLocalToolStatus(for: outcome, permission: permission)
         await permission.respond(outcome)
         statusText = "Permission response sent"
+    }
+
+    private func applyLocalToolStatus(for outcome: PermissionOutcome, permission: PermissionPromptState) {
+        let toolCallId = permission.request.toolCall.toolCallId
+        switch outcome {
+        case .cancelled:
+            setToolStatus(.failed, for: toolCallId)
+        case let .selected(selection):
+            guard let option = permission.request.options.first(where: { $0.optionId == selection.optionId }) else {
+                return
+            }
+            switch option.kind {
+            case .allowOnce, .allowAlways:
+                setToolStatus(nil, for: toolCallId)
+            case .rejectOnce, .rejectAlways:
+                setToolStatus(.failed, for: toolCallId)
+            }
+        case .raw:
+            return
+        }
+    }
+
+    private func setToolStatus(_ status: ToolCallStatus?, for toolCallId: ToolCallId) {
+        guard let messageId = toolMessageIds[toolCallId],
+              let index = messages.firstIndex(where: { $0.id == messageId }) else {
+            return
+        }
+        let displayTitle = messages[index].toolTitle ?? toolTitles[toolCallId] ?? toolCallId
+        messages[index].toolStatus = status
+        messages[index].text = [displayTitle, status.map { "(\($0.rawValue))" }]
+            .compactMap { $0 }
+            .joined(separator: " ")
     }
 
     func shutdown() async {
