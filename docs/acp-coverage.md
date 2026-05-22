@@ -15,8 +15,10 @@ This file tracks which ACP methods and events Talaria handles.
 - permission requests
 - diff payloads
 
-## Current Scaffold
+## Current Coverage
 
-Sprint 1 includes v0.13.2-shaped Swift Codable models for the stable ACP schema, typed JSON-RPC request/response dispatch, typed `session/update` streaming, local `initialize`, `session/new`, `session/prompt`, and `session/cancel` client APIs, and a single local chat surface.
+Sprint 2 includes v0.13.2-shaped Swift Codable models for the stable ACP schema, typed JSON-RPC request/response dispatch, typed `session/update` streaming, local `initialize`, `session/new`, `session/prompt`, and `session/cancel` client APIs.
 
-Permission requests, diff-specific UI, session browsing, SSH-backed live sessions, and admin surfaces remain later-sprint work.
+Talaria now handles agent-initiated `session/request_permission` requests with typed permission outcomes, renders tool-call diff payloads in chat, renders markdown text bubbles, surfaces slash commands from `available_commands_update`, and shows local turn status with elapsed time plus the session git branch.
+
+Session browsing, SSH-backed live sessions, and admin surfaces remain later-sprint work.

@@ -5,6 +5,7 @@ public typealias SessionId = String
 public typealias ToolCallId = String
 public typealias RequestId = String
 public typealias PermissionOptionId = String
+public typealias PermissionOutcome = RequestPermissionOutcome
 public typealias SessionModeId = String
 public typealias SessionConfigId = String
 public typealias SessionConfigGroupId = String
@@ -1440,12 +1441,23 @@ public struct WriteTextFileResponse: ACPMessage {
 }
 
 public enum RequestPermissionOutcome: Codable, Equatable, Sendable {
+    case cancelled
     case selected(SelectedPermissionOutcome)
     case raw(JSONValue)
 
     public init(from decoder: Decoder) throws {
         let value = try JSONValue(from: decoder)
-        if case let .object(object) = value, object["optionId"] != nil {
+        if case let .object(object) = value,
+           case let .string(outcome)? = object["outcome"] {
+            switch outcome {
+            case "cancelled":
+                self = .cancelled
+            case "selected":
+                self = .selected(try JSONDecoder().decode(SelectedPermissionOutcome.self, from: JSONEncoder().encode(value)))
+            default:
+                self = .raw(value)
+            }
+        } else if case let .object(object) = value, object["optionId"] != nil {
             self = .selected(try JSONDecoder().decode(SelectedPermissionOutcome.self, from: JSONEncoder().encode(value)))
         } else {
             self = .raw(value)
@@ -1454,7 +1466,10 @@ public enum RequestPermissionOutcome: Codable, Equatable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         switch self {
-        case let .selected(outcome): try outcome.encode(to: encoder)
+        case .cancelled:
+            try JSONValue.object(["outcome": .string("cancelled")]).encode(to: encoder)
+        case let .selected(outcome):
+            try outcome.encodeWithOutcome("selected", to: encoder)
         case let .raw(value): try value.encode(to: encoder)
         }
     }
@@ -1470,11 +1485,30 @@ public struct SelectedPermissionOutcome: ACPMessage {
     enum CodingKeys: String, CodingKey { case meta = "_meta"; case optionId }
 }
 
-public struct RequestPermissionRequest: Codable, Equatable, Sendable {
-    public var value: JSONValue
-    public init(value: JSONValue) { self.value = value }
-    public init(from decoder: Decoder) throws { value = try JSONValue(from: decoder) }
-    public func encode(to encoder: Encoder) throws { try value.encode(to: encoder) }
+public struct RequestPermissionRequest: ACPMessage {
+    public var meta: [String: JSONValue]?
+    public var sessionId: SessionId
+    public var toolCall: ToolCallUpdate
+    public var options: [PermissionOption]
+
+    public init(
+        meta: [String: JSONValue]? = nil,
+        sessionId: SessionId,
+        toolCall: ToolCallUpdate,
+        options: [PermissionOption]
+    ) {
+        self.meta = meta
+        self.sessionId = sessionId
+        self.toolCall = toolCall
+        self.options = options
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case meta = "_meta"
+        case sessionId
+        case toolCall
+        case options
+    }
 }
 
 public struct RequestPermissionResponse: ACPMessage {
@@ -1487,11 +1521,25 @@ public struct RequestPermissionResponse: ACPMessage {
     enum CodingKeys: String, CodingKey { case meta = "_meta"; case outcome }
 }
 
-public struct PermissionOption: Codable, Equatable, Sendable {
-    public var value: JSONValue
-    public init(value: JSONValue) { self.value = value }
-    public init(from decoder: Decoder) throws { value = try JSONValue(from: decoder) }
-    public func encode(to encoder: Encoder) throws { try value.encode(to: encoder) }
+public struct PermissionOption: ACPMessage {
+    public var meta: [String: JSONValue]?
+    public var optionId: PermissionOptionId
+    public var name: String
+    public var kind: PermissionOptionKind
+
+    public init(meta: [String: JSONValue]? = nil, optionId: PermissionOptionId, name: String, kind: PermissionOptionKind) {
+        self.meta = meta
+        self.optionId = optionId
+        self.name = name
+        self.kind = kind
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case meta = "_meta"
+        case optionId
+        case name
+        case kind
+    }
 }
 
 public enum PermissionOptionKind: String, Codable, Equatable, Sendable {
@@ -1584,6 +1632,10 @@ private extension Encodable {
 
     func encodeWithSessionUpdate(_ sessionUpdate: String, to encoder: Encoder) throws {
         try encodeAdding("sessionUpdate", value: sessionUpdate, to: encoder)
+    }
+
+    func encodeWithOutcome(_ outcome: String, to encoder: Encoder) throws {
+        try encodeAdding("outcome", value: outcome, to: encoder)
     }
 }
 

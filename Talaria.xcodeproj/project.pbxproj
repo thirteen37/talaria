@@ -8,14 +8,25 @@
 
 /* Begin PBXBuildFile section */
 		05373FFD890DF132B906065E /* SkillsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E5FD3271C03262E8A67B725 /* SkillsView.swift */; };
+		1964C2ACA58980B5A5A68B49 /* PermissionPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748E28FC6797F351A6EBB220 /* PermissionPrompt.swift */; };
+		21F863E247E5CFE4FF377689 /* ChatBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7708C07FD33792DB6597C593 /* ChatBubble.swift */; };
 		2C450AF777BC8222A5E42E39 /* ServerWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = D29958F2AEE3B9C542F9987E /* ServerWindow.swift */; };
+		2EE9D69FC8789FCC0DF4B49C /* ChatModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA57702C4F0773DF6231FDD1 /* ChatModels.swift */; };
+		412453BCEDDA513AC77AECD1 /* Markdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0726E977A155E433A5401996 /* Markdown.swift */; };
+		4AE1CCD2FAA490BDF400EAC4 /* SlashMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7914D7DB63EFCABE5A2D84BA /* SlashMenu.swift */; };
 		4E7061CE24B864B40FE49C0F /* DoctorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30DFD8DFB5E048EC77638CD /* DoctorView.swift */; };
 		509BA0FE78675098B5B350C5 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A12A6961B7D8E937263627BB /* LogsView.swift */; };
+		57771E6BC6CB365C66D21370 /* StatusBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = D73190DC0343E43442753E5E /* StatusBar.swift */; };
 		5B16B9E3E352309807458920 /* UpdatesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BE3C2E6EB6E8620978EE451 /* UpdatesView.swift */; };
 		6168D745D22D531C88F18732 /* CronView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 451D8EBE2DA75CD69C94FFD8 /* CronView.swift */; };
+		705C24E629FF24D1B2D27069 /* ToolCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09D9869DC5BF08FEDB227ACF /* ToolCard.swift */; };
+		762AEA4C3482528E246E3A92 /* Composer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82CA47B4FE65F06FAC7B45D9 /* Composer.swift */; };
+		83727994132ADEA7D5549C6C /* ReasoningPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D2C3E35C2AD0E82789D5C9 /* ReasoningPanel.swift */; };
+		923AEE54A92630F73015A4E7 /* TranscriptRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC599A81E82D875768DD55B4 /* TranscriptRow.swift */; };
 		A02B104E12133E6F4524390A /* SettingsScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9796E1F868CE6779773DB1A /* SettingsScene.swift */; };
 		A9B777810249FD981588E862 /* TalariaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 812946B922D766AFF070E868 /* TalariaApp.swift */; };
 		AB02605BD95213C83617A813 /* SessionsBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C21784B6CC62C9E498749A73 /* SessionsBrowser.swift */; };
+		B9A1BE8BABCD8D8AC1125F51 /* DiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFE066B74B82DFA8FC5F8F24 /* DiffView.swift */; };
 		C214FD4CCCF298E8F06FBB11 /* ToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3EDBB9C99D2FF50800A31BE /* ToolsView.swift */; };
 		C6CD91309172B4FADFB06592 /* HermesKit in Frameworks */ = {isa = PBXBuildFile; productRef = BBB6C95B2C73AA1B6DB0B78B /* HermesKit */; };
 		D8FEB4067CD793B27680FBF0 /* ProfileEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D65AF64BE04BFB6D54B5775 /* ProfileEditor.swift */; };
@@ -23,19 +34,30 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		0726E977A155E433A5401996 /* Markdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Markdown.swift; sourceTree = "<group>"; };
+		09D9869DC5BF08FEDB227ACF /* ToolCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCard.swift; sourceTree = "<group>"; };
 		3BE3C2E6EB6E8620978EE451 /* UpdatesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdatesView.swift; sourceTree = "<group>"; };
 		451D8EBE2DA75CD69C94FFD8 /* CronView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CronView.swift; sourceTree = "<group>"; };
 		6E5FD3271C03262E8A67B725 /* SkillsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkillsView.swift; sourceTree = "<group>"; };
+		748E28FC6797F351A6EBB220 /* PermissionPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionPrompt.swift; sourceTree = "<group>"; };
+		7708C07FD33792DB6597C593 /* ChatBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatBubble.swift; sourceTree = "<group>"; };
+		7914D7DB63EFCABE5A2D84BA /* SlashMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlashMenu.swift; sourceTree = "<group>"; };
 		812946B922D766AFF070E868 /* TalariaApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalariaApp.swift; sourceTree = "<group>"; };
+		82CA47B4FE65F06FAC7B45D9 /* Composer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Composer.swift; sourceTree = "<group>"; };
 		8D65AF64BE04BFB6D54B5775 /* ProfileEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditor.swift; sourceTree = "<group>"; };
 		9CA01C5F2F7904E83DB29961 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		A12A6961B7D8E937263627BB /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
 		A30DFD8DFB5E048EC77638CD /* DoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoctorView.swift; sourceTree = "<group>"; };
 		A9796E1F868CE6779773DB1A /* SettingsScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScene.swift; sourceTree = "<group>"; };
 		C21784B6CC62C9E498749A73 /* SessionsBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsBrowser.swift; sourceTree = "<group>"; };
+		C3D2C3E35C2AD0E82789D5C9 /* ReasoningPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningPanel.swift; sourceTree = "<group>"; };
 		CF4DD77146A6664BBB6ABC3F /* Talaria.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Talaria.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D29958F2AEE3B9C542F9987E /* ServerWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerWindow.swift; sourceTree = "<group>"; };
+		D73190DC0343E43442753E5E /* StatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBar.swift; sourceTree = "<group>"; };
+		DA57702C4F0773DF6231FDD1 /* ChatModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatModels.swift; sourceTree = "<group>"; };
+		DFE066B74B82DFA8FC5F8F24 /* DiffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffView.swift; sourceTree = "<group>"; };
 		E3EDBB9C99D2FF50800A31BE /* ToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolsView.swift; sourceTree = "<group>"; };
+		EC599A81E82D875768DD55B4 /* TranscriptRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptRow.swift; sourceTree = "<group>"; };
 		F60C409BF8E2169D2D41DAEE /* HermesKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = HermesKit; path = HermesKit; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
@@ -54,7 +76,18 @@
 		0011A042DC786A6D357F8B2B /* Chat */ = {
 			isa = PBXGroup;
 			children = (
+				7708C07FD33792DB6597C593 /* ChatBubble.swift */,
+				DA57702C4F0773DF6231FDD1 /* ChatModels.swift */,
 				9CA01C5F2F7904E83DB29961 /* ChatView.swift */,
+				82CA47B4FE65F06FAC7B45D9 /* Composer.swift */,
+				DFE066B74B82DFA8FC5F8F24 /* DiffView.swift */,
+				0726E977A155E433A5401996 /* Markdown.swift */,
+				748E28FC6797F351A6EBB220 /* PermissionPrompt.swift */,
+				C3D2C3E35C2AD0E82789D5C9 /* ReasoningPanel.swift */,
+				7914D7DB63EFCABE5A2D84BA /* SlashMenu.swift */,
+				D73190DC0343E43442753E5E /* StatusBar.swift */,
+				09D9869DC5BF08FEDB227ACF /* ToolCard.swift */,
+				EC599A81E82D875768DD55B4 /* TranscriptRow.swift */,
 			);
 			path = Chat;
 			sourceTree = "<group>";
@@ -198,17 +231,28 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				21F863E247E5CFE4FF377689 /* ChatBubble.swift in Sources */,
+				2EE9D69FC8789FCC0DF4B49C /* ChatModels.swift in Sources */,
 				FF4B12C0890FE3A218309E50 /* ChatView.swift in Sources */,
+				762AEA4C3482528E246E3A92 /* Composer.swift in Sources */,
 				6168D745D22D531C88F18732 /* CronView.swift in Sources */,
+				B9A1BE8BABCD8D8AC1125F51 /* DiffView.swift in Sources */,
 				4E7061CE24B864B40FE49C0F /* DoctorView.swift in Sources */,
 				509BA0FE78675098B5B350C5 /* LogsView.swift in Sources */,
+				412453BCEDDA513AC77AECD1 /* Markdown.swift in Sources */,
+				1964C2ACA58980B5A5A68B49 /* PermissionPrompt.swift in Sources */,
 				D8FEB4067CD793B27680FBF0 /* ProfileEditor.swift in Sources */,
+				83727994132ADEA7D5549C6C /* ReasoningPanel.swift in Sources */,
 				2C450AF777BC8222A5E42E39 /* ServerWindow.swift in Sources */,
 				AB02605BD95213C83617A813 /* SessionsBrowser.swift in Sources */,
 				A02B104E12133E6F4524390A /* SettingsScene.swift in Sources */,
 				05373FFD890DF132B906065E /* SkillsView.swift in Sources */,
+				4AE1CCD2FAA490BDF400EAC4 /* SlashMenu.swift in Sources */,
+				57771E6BC6CB365C66D21370 /* StatusBar.swift in Sources */,
 				A9B777810249FD981588E862 /* TalariaApp.swift in Sources */,
+				705C24E629FF24D1B2D27069 /* ToolCard.swift in Sources */,
 				C214FD4CCCF298E8F06FBB11 /* ToolsView.swift in Sources */,
+				923AEE54A92630F73015A4E7 /* TranscriptRow.swift in Sources */,
 				5B16B9E3E352309807458920 /* UpdatesView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

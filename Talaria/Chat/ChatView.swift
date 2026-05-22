@@ -29,102 +29,53 @@ struct ChatView: View {
                 }
             }
 
-            if let status = viewModel.statusText {
-                Text(status)
-                    .font(.footnote)
-                    .foregroundStyle(viewModel.hasError ? .red : .secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.bar)
-            }
+            StatusBar(
+                statusText: viewModel.statusText,
+                hasError: viewModel.hasError,
+                isSending: viewModel.isSending,
+                turnStartDate: viewModel.turnStartDate,
+                gitBranch: viewModel.gitBranch
+            )
 
             Composer(
                 prompt: $viewModel.prompt,
                 isSending: viewModel.isSending,
+                isBlocked: viewModel.pendingPermission != nil,
+                availableCommands: viewModel.availableCommands,
                 send: { Task { await viewModel.sendPrompt() } },
                 cancel: { Task { await viewModel.cancel() } }
             )
         }
         .navigationTitle("Chat")
+        .sheet(item: $viewModel.pendingPermission) { permission in
+            PermissionPrompt(
+                state: permission,
+                select: { option in
+                    Task { await viewModel.resolvePermission(.selected(SelectedPermissionOutcome(optionId: option.optionId))) }
+                },
+                cancel: {
+                    Task { await viewModel.resolvePermission(.cancelled) }
+                }
+            )
+        }
         .onDisappear {
             Task { await viewModel.shutdown() }
         }
     }
 }
 
-private struct TranscriptRow: View {
-    let message: ChatTranscriptMessage
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: message.kind.systemImage)
-                .foregroundStyle(message.kind.tint)
-                .frame(width: 20)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(message.kind.title)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Text(message.text)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .padding(10)
-        .background(message.kind.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
-private struct Composer: View {
-    @Binding var prompt: String
-    var isSending: Bool
-    var send: () -> Void
-    var cancel: () -> Void
-
-    private var trimmedPrompt: String {
-        prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            TextField("Message Hermes", text: $prompt, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...6)
-                .onKeyPress(.return, phases: .down) { press in
-                    if press.modifiers.contains(.shift) {
-                        return .ignored
-                    }
-                    send()
-                    return .handled
-                }
-
-            if isSending {
-                Button(action: cancel) {
-                    Image(systemName: "stop.fill")
-                }
-                .help("Cancel")
-            } else {
-                Button(action: send) {
-                    Image(systemName: "paperplane.fill")
-                }
-                .help("Send")
-                .disabled(trimmedPrompt.isEmpty)
-            }
-        }
-        .padding(12)
-    }
-}
-
 @MainActor
 @Observable
-private final class LocalChatViewModel {
+final class LocalChatViewModel {
     var prompt = ""
     var messages: [ChatTranscriptMessage] = []
     var isSending = false
     var statusText: String?
     var hasError = false
+    var pendingPermission: PermissionPromptState?
+    var availableCommands: [AvailableCommand] = []
+    var gitBranch: String?
+    var turnStartDate: Date?
 
     private var transport: LocalProcessTransport?
     private var client: HermesClient?
@@ -140,15 +91,16 @@ private final class LocalChatViewModel {
 
     func sendPrompt() async {
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isSending else {
+        guard !text.isEmpty, !isSending, pendingPermission == nil else {
             return
         }
 
         prompt = ""
-        currentUserStreamMessageId = append(kind: .user, text: text)
+        _ = append(kind: .user, text: text)
         resetStreamingMessages()
         currentUserStreamMessageId = messages.last?.id
         isSending = true
+        turnStartDate = Date()
         statusText = "Connecting to Hermes..."
         hasError = false
 
@@ -166,13 +118,20 @@ private final class LocalChatViewModel {
                 statusText = errorMessage(for: error)
             }
             isSending = false
+            turnStartDate = nil
         }
     }
 
     func cancel() async {
         promptTask?.cancel()
+
+        if pendingPermission != nil {
+            await resolvePermission(.cancelled)
+        }
+
         guard let client, let sessionId else {
             isSending = false
+            turnStartDate = nil
             statusText = "Cancelled"
             return
         }
@@ -186,17 +145,33 @@ private final class LocalChatViewModel {
         }
     }
 
+    func resolvePermission(_ outcome: PermissionOutcome) async {
+        guard let permission = pendingPermission else {
+            return
+        }
+
+        pendingPermission = nil
+        await permission.respond(outcome)
+        statusText = "Permission response sent"
+    }
+
     func shutdown() async {
         notificationTask?.cancel()
         promptTask?.cancel()
+        if pendingPermission != nil {
+            await resolvePermission(.cancelled)
+        }
         await client?.close()
         client = nil
         transport = nil
         sessionId = nil
         isSending = false
+        turnStartDate = nil
         resetStreamingMessages()
         toolMessageIds.removeAll()
         toolTitles.removeAll()
+        availableCommands.removeAll()
+        gitBranch = nil
     }
 
     private func ensureClient() async throws -> HermesClient {
@@ -250,31 +225,26 @@ private final class LocalChatViewModel {
         let response = try await client.newSession(cwd: sessionCwd, mcpServers: [])
         sessionId = response.sessionId
         statusText = "Session cwd: \(sessionCwd)"
+        loadGitBranch()
         return response.sessionId
+    }
+
+    private func loadGitBranch() {
+        let cwd = sessionCwd
+        Task {
+            gitBranch = await GitInfo.branch(cwd: cwd)
+        }
     }
 
     private func handle(notification: HermesNotification) {
         switch notification {
         case let .sessionUpdate(notification):
-            switch notification.update {
-            case let .userMessageChunk(chunk):
-                appendStreaming(kind: .user, text: chunk.content.plainText ?? "", stream: .user)
-            case let .agentMessageChunk(chunk):
-                appendStreaming(kind: .agent, text: chunk.content.plainText ?? "", stream: .agent)
-            case let .agentThoughtChunk(chunk):
-                appendStreaming(kind: .thought, text: chunk.content.plainText ?? "", stream: .thought)
-            case let .toolCall(toolCall):
-                resetStreamingMessages()
-                upsertToolMessage(id: toolCall.toolCallId, title: toolCall.title, status: toolCall.status)
-            case let .toolCallUpdate(update):
-                resetStreamingMessages()
-                upsertToolMessage(id: update.toolCallId, title: update.title, status: update.status)
-            default:
-                if let text = notification.update.displayText {
-                    resetStreamingMessages()
-                    append(kind: .event, text: text)
-                }
-            }
+            handle(sessionUpdate: notification.update)
+        case let .permissionRequest(event):
+            handle(permissionRequest: event)
+        case let .clientRequestError(_, method, message):
+            hasError = true
+            statusText = "\(method) response failed: \(message)"
         case let .raw(method, _):
             resetStreamingMessages()
             append(kind: .event, text: method)
@@ -288,6 +258,54 @@ private final class LocalChatViewModel {
                 )
             }
         }
+    }
+
+    private func handle(sessionUpdate update: SessionUpdate) {
+        switch update {
+        case let .userMessageChunk(chunk):
+            appendStreaming(kind: .user, text: chunk.content.plainText ?? "", stream: .user)
+        case let .agentMessageChunk(chunk):
+            appendStreaming(kind: .agent, text: chunk.content.plainText ?? "", stream: .agent)
+        case let .agentThoughtChunk(chunk):
+            appendStreaming(kind: .thought, text: chunk.content.plainText ?? "", stream: .thought)
+        case let .toolCall(toolCall):
+            resetStreamingMessages()
+            upsertToolMessage(
+                id: toolCall.toolCallId,
+                title: toolCall.title,
+                status: toolCall.status,
+                content: toolCall.content
+            )
+        case let .toolCallUpdate(update):
+            resetStreamingMessages()
+            upsertToolMessage(
+                id: update.toolCallId,
+                title: update.title,
+                status: update.status,
+                content: update.content
+            )
+        case let .availableCommandsUpdate(update):
+            availableCommands = update.availableCommands
+        default:
+            if let text = update.displayText {
+                resetStreamingMessages()
+                append(kind: .event, text: text)
+            }
+        }
+    }
+
+    private func handle(permissionRequest event: PermissionRequestEvent) {
+        resetStreamingMessages()
+        upsertToolMessage(
+            id: event.request.toolCall.toolCallId,
+            title: event.request.toolCall.title,
+            status: event.request.toolCall.status ?? .pending,
+            content: event.request.toolCall.content
+        )
+        pendingPermission = PermissionPromptState(id: event.id, request: event.request) { outcome in
+            await event.respond(outcome)
+        }
+        statusText = "Waiting for permission"
     }
 
     private func handleNotificationError(_ error: Error) {
@@ -322,7 +340,12 @@ private final class LocalChatViewModel {
         setCurrentMessageId(id, for: stream)
     }
 
-    private func upsertToolMessage(id toolCallId: ToolCallId, title: String?, status: ToolCallStatus?) {
+    private func upsertToolMessage(
+        id toolCallId: ToolCallId,
+        title: String?,
+        status: ToolCallStatus?,
+        content: [ToolCallContent]?
+    ) {
         if let title {
             toolTitles[toolCallId] = title
         }
@@ -335,8 +358,24 @@ private final class LocalChatViewModel {
         if let messageId = toolMessageIds[toolCallId],
            let index = messages.firstIndex(where: { $0.id == messageId }) {
             messages[index].text = text
-        } else if let messageId = append(kind: .tool, text: text, toolCallId: toolCallId) {
-            toolMessageIds[toolCallId] = messageId
+            messages[index].toolTitle = displayTitle
+            if let status {
+                messages[index].toolStatus = status
+            }
+            if let content {
+                messages[index].toolContent = content
+            }
+        } else {
+            let message = ChatTranscriptMessage(
+                kind: .tool,
+                text: text,
+                toolCallId: toolCallId,
+                toolTitle: displayTitle,
+                toolStatus: status,
+                toolContent: content ?? []
+            )
+            messages.append(message)
+            toolMessageIds[toolCallId] = message.id
         }
     }
 
@@ -374,65 +413,4 @@ private final class LocalChatViewModel {
         }
         return error.localizedDescription
     }
-}
-
-private enum StreamKind {
-    case user
-    case agent
-    case thought
-}
-
-private struct ChatTranscriptMessage: Identifiable, Equatable {
-    enum Kind: Equatable {
-        case user
-        case agent
-        case thought
-        case tool
-        case event
-
-        var title: String {
-            switch self {
-            case .user: "You"
-            case .agent: "Hermes"
-            case .thought: "Thinking"
-            case .tool: "Tool"
-            case .event: "Event"
-            }
-        }
-
-        var systemImage: String {
-            switch self {
-            case .user: "person.crop.circle"
-            case .agent: "sparkles"
-            case .thought: "brain.head.profile"
-            case .tool: "wrench.and.screwdriver"
-            case .event: "info.circle"
-            }
-        }
-
-        var tint: Color {
-            switch self {
-            case .user: .blue
-            case .agent: .green
-            case .thought: .purple
-            case .tool: .orange
-            case .event: .secondary
-            }
-        }
-
-        var background: Color {
-            switch self {
-            case .user: Color.blue.opacity(0.08)
-            case .agent: Color.green.opacity(0.08)
-            case .thought: Color.purple.opacity(0.08)
-            case .tool: Color.orange.opacity(0.08)
-            case .event: Color.gray.opacity(0.08)
-            }
-        }
-    }
-
-    let id = UUID()
-    var kind: Kind
-    var text: String
-    var toolCallId: ToolCallId?
 }

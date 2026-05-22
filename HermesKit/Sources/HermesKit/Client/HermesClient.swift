@@ -8,8 +8,32 @@ public enum HermesClientError: Error, Equatable, Sendable {
 
 public enum HermesNotification: Equatable, Sendable {
     case sessionUpdate(SessionNotification)
+    case permissionRequest(PermissionRequestEvent)
+    case clientRequestError(id: JSONRPCID, method: String, message: String)
     case request(id: JSONRPCID, method: String, params: JSONValue?)
     case raw(method: String, params: JSONValue?)
+}
+
+public struct PermissionRequestEvent: Sendable {
+    public var id: JSONRPCID
+    public var request: RequestPermissionRequest
+    public var respond: @Sendable (PermissionOutcome) async -> Void
+
+    public init(
+        id: JSONRPCID,
+        request: RequestPermissionRequest,
+        respond: @escaping @Sendable (PermissionOutcome) async -> Void
+    ) {
+        self.id = id
+        self.request = request
+        self.respond = respond
+    }
+}
+
+extension PermissionRequestEvent: Equatable {
+    public static func == (lhs: PermissionRequestEvent, rhs: PermissionRequestEvent) -> Bool {
+        lhs.id == rhs.id && lhs.request == rhs.request
+    }
 }
 
 public actor HermesClient {
@@ -22,6 +46,7 @@ public actor HermesClient {
     private var framer = JSONRPCFramer()
     private var nextID = 1
     private var pending: [JSONRPCID: CheckedContinuation<JSONValue, Error>] = [:]
+    private var pendingClientRequests: Set<JSONRPCID> = []
     private var closed = false
 
     public init(transport: any Transport) {
@@ -162,7 +187,7 @@ public actor HermesClient {
 
         if let method = message.method {
             if let id = message.id {
-                notificationContinuation.yield(.request(id: id, method: method, params: message.params))
+                handleRequest(id: id, method: method, params: message.params)
             } else {
                 handleNotification(method: method, params: message.params)
             }
@@ -198,6 +223,40 @@ public actor HermesClient {
         }
     }
 
+    private func handleRequest(id: JSONRPCID, method: String, params: JSONValue?) {
+        if method == ACPMethod.sessionRequestPermission, let params {
+            do {
+                let data = try encoder.encode(params)
+                let request = try decoder.decode(RequestPermissionRequest.self, from: data)
+                pendingClientRequests.insert(id)
+                let event = PermissionRequestEvent(id: id, request: request) { [weak self] outcome in
+                    await self?.respondToPermissionRequest(id: id, outcome: outcome)
+                }
+                notificationContinuation.yield(.permissionRequest(event))
+            } catch {
+                notificationContinuation.yield(.request(id: id, method: method, params: params))
+            }
+        } else {
+            notificationContinuation.yield(.request(id: id, method: method, params: params))
+        }
+    }
+
+    private func respondToPermissionRequest(id: JSONRPCID, outcome: PermissionOutcome) async {
+        guard pendingClientRequests.remove(id) != nil else {
+            return
+        }
+
+        do {
+            try await respond(id: id, result: RequestPermissionResponse(outcome: outcome))
+        } catch {
+            notificationContinuation.yield(.clientRequestError(
+                id: id,
+                method: ACPMethod.sessionRequestPermission,
+                message: error.localizedDescription
+            ))
+        }
+    }
+
     private func failPending(id: JSONRPCID, error: Error) {
         pending.removeValue(forKey: id)?.resume(throwing: error)
     }
@@ -205,6 +264,7 @@ public actor HermesClient {
     private func finish(error: Error?) {
         let continuations = pending.values
         pending.removeAll()
+        pendingClientRequests.removeAll()
         for continuation in continuations {
             continuation.resume(throwing: error ?? HermesClientError.transportClosed)
         }
