@@ -14,6 +14,7 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
     private let writeQueue = DispatchQueue(label: "com.talaria.HermesKit.LocalProcessTransport.write")
     private let lock = NSLock()
     private var started = false
+    private var closed = false
     private var inboundFinished = false
 
     public init(executableURL: URL, arguments: [String] = [], environment: [String: String] = [:]) {
@@ -47,6 +48,7 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
             throw TransportError.processAlreadyStarted
         }
         started = true
+        closed = false
 
         outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             guard let transport = self else {
@@ -59,7 +61,12 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
 
                 let data = handle.availableData
                 if data.isEmpty {
-                    transport.finishInboundOnReadQueue()
+                    transport.outputPipe.fileHandleForReading.readabilityHandler = nil
+                    if transport.process.isRunning {
+                        transport.finishOrTerminateAfterStdoutEOF()
+                    } else {
+                        transport.finishAfterProcessTerminationOnReadQueue()
+                    }
                 } else {
                     transport.inboundContinuation.yield(data)
                 }
@@ -91,45 +98,60 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
                     return
                 }
 
-                transport.outputPipe.fileHandleForReading.readabilityHandler = nil
-                transport.stderrPipe.fileHandleForReading.readabilityHandler = nil
-
-                let trailingOutput = transport.outputPipe.fileHandleForReading.readDataToEndOfFile()
-                if !trailingOutput.isEmpty, !transport.inboundFinished {
-                    transport.inboundContinuation.yield(trailingOutput)
-                }
-
-                let trailingStderr = transport.stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                if !trailingStderr.isEmpty {
-                    transport.stderrRing.append(trailingStderr)
-                }
-
-                transport.finishInboundOnReadQueue()
+                transport.finishAfterProcessTerminationOnReadQueue()
             }
         }
 
         do {
             try process.run()
         } catch {
+            started = false
+            closed = true
+            readQueue.async { [weak self] in
+                self?.finishInboundOnReadQueue()
+            }
             throw TransportError.processDidNotStart(error.localizedDescription)
         }
     }
 
     public func send(_ data: Data) async throws {
-        try await withCheckedThrowingContinuation { continuation in
-            writeQueue.async { [inputPipe] in
+        let state = stateForSend()
+
+        guard state.didStart else {
+            throw TransportError.processNotStarted
+        }
+        guard state.canSend else {
+            throw TransportError.stdinClosed
+        }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            writeQueue.async { [weak self, inputPipe] in
+                guard let self else {
+                    continuation.resume(throwing: TransportError.transportClosed)
+                    return
+                }
+
+                guard !self.isClosed() else {
+                    continuation.resume(throwing: TransportError.stdinClosed)
+                    return
+                }
+
                 do {
                     try inputPipe.fileHandleForWriting.write(contentsOf: data)
                     continuation.resume(returning: ())
                 } catch {
-                    continuation.resume(throwing: error)
+                    continuation.resume(throwing: TransportError.writeFailed(error.localizedDescription))
                 }
             }
         }
     }
 
     public func close() async {
-        inputPipe.fileHandleForWriting.closeFile()
+        if markClosed() {
+            return
+        }
+
+        try? inputPipe.fileHandleForWriting.close()
         if process.isRunning {
             process.terminate()
         } else {
@@ -149,6 +171,61 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
         }
         inboundFinished = true
         inboundContinuation.finish()
+    }
+
+    private func finishAfterProcessTerminationOnReadQueue() {
+        outputPipe.fileHandleForReading.readabilityHandler = nil
+        stderrPipe.fileHandleForReading.readabilityHandler = nil
+
+        let trailingOutput = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        if !trailingOutput.isEmpty, !inboundFinished {
+            inboundContinuation.yield(trailingOutput)
+        }
+
+        let trailingStderr = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        if !trailingStderr.isEmpty {
+            stderrRing.append(trailingStderr)
+        }
+
+        finishInboundOnReadQueue()
+    }
+
+    private func finishOrTerminateAfterStdoutEOF() {
+        readQueue.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+            guard let self, !self.inboundFinished else {
+                return
+            }
+
+            if self.process.isRunning {
+                self.finishInboundOnReadQueue()
+                self.process.terminate()
+            } else {
+                self.finishAfterProcessTerminationOnReadQueue()
+            }
+        }
+    }
+
+    private func stateForSend() -> (didStart: Bool, canSend: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        let canSend = started && !closed && process.isRunning
+        return (started, canSend)
+    }
+
+    private func isClosed() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return closed
+    }
+
+    private func markClosed() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if closed {
+            return true
+        }
+        closed = true
+        return false
     }
 }
 

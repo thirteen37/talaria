@@ -80,6 +80,66 @@ public struct JSONRPCResponse<Result: Codable & Sendable>: Codable, Sendable {
     }
 }
 
+public struct JSONRPCInboundMessage: Codable, Sendable {
+    public var jsonrpc: String?
+    public var id: JSONRPCID?
+    public var method: String?
+    public var params: JSONValue?
+    public var result: JSONValue?
+    public var hasResult: Bool
+    public var error: JSONRPCError?
+
+    public init(
+        jsonrpc: String? = nil,
+        id: JSONRPCID? = nil,
+        method: String? = nil,
+        params: JSONValue? = nil,
+        result: JSONValue? = nil,
+        hasResult: Bool = false,
+        error: JSONRPCError? = nil
+    ) {
+        self.jsonrpc = jsonrpc
+        self.id = id
+        self.method = method
+        self.params = params
+        self.result = result
+        self.hasResult = hasResult
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case jsonrpc
+        case id
+        case method
+        case params
+        case result
+        case error
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        jsonrpc = try container.decodeIfPresent(String.self, forKey: .jsonrpc)
+        id = try container.decodeIfPresent(JSONRPCID.self, forKey: .id)
+        method = try container.decodeIfPresent(String.self, forKey: .method)
+        params = try container.decodeIfPresent(JSONValue.self, forKey: .params)
+        hasResult = container.contains(.result)
+        result = try container.decodeIfPresent(JSONValue.self, forKey: .result)
+        error = try container.decodeIfPresent(JSONRPCError.self, forKey: .error)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(jsonrpc, forKey: .jsonrpc)
+        try container.encodeIfPresent(id, forKey: .id)
+        try container.encodeIfPresent(method, forKey: .method)
+        try container.encodeIfPresent(params, forKey: .params)
+        if hasResult {
+            try container.encode(result ?? .null, forKey: .result)
+        }
+        try container.encodeIfPresent(error, forKey: .error)
+    }
+}
+
 public struct JSONRPCError: Codable, Error, Equatable, Sendable {
     public var code: Int
     public var message: String

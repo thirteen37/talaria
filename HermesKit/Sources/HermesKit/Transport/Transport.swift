@@ -8,7 +8,10 @@ public protocol Transport: Sendable {
 
 public enum TransportError: Error, Equatable, Sendable {
     case processAlreadyStarted
+    case processNotStarted
     case processDidNotStart(String)
     case stdinClosed
+    case transportClosed
+    case writeFailed(String)
     case unsupportedPlatform
 }
