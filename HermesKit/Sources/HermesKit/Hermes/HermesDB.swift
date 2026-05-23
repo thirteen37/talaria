@@ -23,6 +23,28 @@ public struct HermesDBConfiguration: Equatable, Sendable {
         self.databaseURL = databaseURL
         self.readOnly = readOnly
     }
+
+    /// Picks the right SQLite file for a profile: the bundled local Hermes
+    /// directory for `.local`, or the cached remote snapshot for `.ssh`.
+    public static func forProfile(_ profile: ServerProfile, remoteSnapshotPath: URL? = nil) -> HermesDBConfiguration {
+        switch profile.kind {
+        case .local:
+            let home = profile.hermesHome.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+                ?? FileManager.default
+                    .homeDirectoryForCurrentUser
+                    .appendingPathComponent(".hermes", isDirectory: true)
+            return HermesDBConfiguration(databaseURL: home.appendingPathComponent("state.db", isDirectory: false))
+        case .ssh:
+            let url = remoteSnapshotPath
+                ?? FileManager.default
+                    .urls(for: .cachesDirectory, in: .userDomainMask)
+                    .first!
+                    .appendingPathComponent("Talaria", isDirectory: true)
+                    .appendingPathComponent(profile.id.uuidString, isDirectory: true)
+                    .appendingPathComponent("state.db", isDirectory: false)
+            return HermesDBConfiguration(databaseURL: url)
+        }
+    }
 }
 
 public enum HermesDBError: Error, Equatable, Sendable {

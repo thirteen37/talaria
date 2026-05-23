@@ -25,21 +25,29 @@ final class SessionsStore {
 
     let manager: SessionManager
     let adminRunner: HermesAdminRunning?
+    let snapshot: RemoteSnapshot?
     let defaultCwd: String
 
     private var statusTasks: [SessionId: Task<Void, Never>] = [:]
     private var viewModels: [SessionId: LocalChatViewModel] = [:]
     private var pendingOpens: Set<SessionId> = []
+    /// Per-session map from `toolCallId` → declared `kind`. ACP sets `kind`
+    /// on the initial `tool_call` event but typically omits it on the
+    /// follow-up `tool_call_update` events; we look up the original kind to
+    /// decide whether a completion should invalidate the snapshot.
+    private var toolKinds: [SessionId: [ToolCallId: ToolKind]] = [:]
     private let cwdStore: SessionsCwdStore
 
     init(
         manager: SessionManager,
         adminRunner: HermesAdminRunning? = nil,
+        snapshot: RemoteSnapshot? = nil,
         defaultCwd: String = FileManager.default.homeDirectoryForCurrentUser.path,
         cwdStore: SessionsCwdStore = SessionsCwdStore()
     ) {
         self.manager = manager
         self.adminRunner = adminRunner
+        self.snapshot = snapshot
         self.defaultCwd = defaultCwd
         self.cwdStore = cwdStore
     }
@@ -103,6 +111,7 @@ final class SessionsStore {
         statusTasks[id]?.cancel()
         statusTasks[id] = nil
         statuses[id] = nil
+        toolKinds.removeValue(forKey: id)
         openSessions.removeAll { $0.id == id }
         if selection == id {
             selection = openSessions.first?.id
@@ -128,6 +137,9 @@ final class SessionsStore {
                 openSessions[index].title = title
             }
             browserRefreshToken &+= 1
+            if let snapshot {
+                await snapshot.invalidate()
+            }
         } catch {
             lastError = error.localizedDescription
         }
@@ -151,6 +163,9 @@ final class SessionsStore {
             }
             cwdStore.forget(id: id)
             browserRefreshToken &+= 1
+            if let snapshot {
+                await snapshot.invalidate()
+            }
         } catch {
             lastError = error.localizedDescription
         }
@@ -207,10 +222,73 @@ final class SessionsStore {
             statuses[id] = .working
         case let .clientRequestError(_, _, message):
             statuses[id] = .error(message)
+        case let .sessionUpdate(notification):
+            handleStateMutation(sessionId: id, update: notification.update)
         default:
             break
         }
     }
+
+    private func handleStateMutation(sessionId: SessionId, update: SessionUpdate) {
+        // Stale the cached SQLite snapshot when the agent has touched state on
+        // the server. We don't refresh eagerly — the sidebar pulls on next
+        // appearance or manual refresh.
+        let mutates: Bool
+        switch update {
+        case let .toolCall(toolCall):
+            mutates = recordAndDecide(
+                sessionId: sessionId,
+                toolCallId: toolCall.toolCallId,
+                kind: toolCall.kind,
+                status: toolCall.status
+            )
+        case let .toolCallUpdate(toolCall):
+            mutates = recordAndDecide(
+                sessionId: sessionId,
+                toolCallId: toolCall.toolCallId,
+                kind: toolCall.kind,
+                status: toolCall.status
+            )
+        case .sessionInfoUpdate:
+            mutates = true
+        default:
+            mutates = false
+        }
+        guard mutates, let snapshot else { return }
+        Task { await snapshot.invalidate() }
+    }
+
+    /// Updates the per-session tool-kind cache, decides whether the event
+    /// completes a mutating tool, and prunes the cache once the call resolves
+    /// so the map stays bounded across long sessions.
+    private func recordAndDecide(
+        sessionId: SessionId,
+        toolCallId: ToolCallId,
+        kind: ToolKind?,
+        status: ToolCallStatus?
+    ) -> Bool {
+        // ACP sets `kind` on the initial `tool_call` and usually omits it on
+        // follow-up updates; remember it so completion events can look it up.
+        if let kind {
+            toolKinds[sessionId, default: [:]][toolCallId] = kind
+        }
+        let resolvedKind = kind ?? toolKinds[sessionId]?[toolCallId]
+        let isCompleted = status == .completed
+        let mutates = isCompleted && (resolvedKind.map(Self.mutatingToolKinds.contains) ?? false)
+
+        // Prune once the call resolves — `.completed` and `.failed` are both
+        // terminal in the ACP status enum, so the map stays bounded even for
+        // sessions with thousands of tool calls.
+        if isCompleted || status == .failed {
+            toolKinds[sessionId]?[toolCallId] = nil
+            if toolKinds[sessionId]?.isEmpty == true {
+                toolKinds.removeValue(forKey: sessionId)
+            }
+        }
+        return mutates
+    }
+
+    private static let mutatingToolKinds: Set<ToolKind> = [.edit, .delete, .move]
 
     private func markIdle(id: SessionId) {
         if case .working = statuses[id] {

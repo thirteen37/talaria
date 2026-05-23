@@ -15,6 +15,12 @@ struct SessionsBrowser: View {
         Group {
             if let db {
                 content(db: db)
+            } else if store.snapshot != nil {
+                ContentUnavailableView(
+                    "Snapshot not fetched yet",
+                    systemImage: "arrow.down.circle.dotted",
+                    description: Text("Pull the remote SQLite snapshot from the sidebar to browse sessions.")
+                )
             } else {
                 ContentUnavailableView(
                     "No Hermes sessions yet",
