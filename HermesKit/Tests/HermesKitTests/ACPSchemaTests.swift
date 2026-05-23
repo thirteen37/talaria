@@ -134,6 +134,7 @@ struct ACPSchemaTests {
             .agentThoughtChunk(Content(content: .text("thought"))),
             .toolCall(ToolCall(toolCallId: "tool-1", title: "Read file", kind: .read, status: .pending)),
             .toolCallUpdate(ToolCallUpdate(toolCallId: "tool-1", title: "Read file", status: .completed)),
+            .usageUpdate(UsageUpdate(size: 200_000, used: 12_345)),
         ]
 
         for update in updates {
@@ -220,6 +221,61 @@ struct ACPSchemaTests {
         #expect(diff["path"] == .string("README.md"))
         #expect(diff["oldText"] == .string("before\n"))
         #expect(diff["newText"] == .string("after\n"))
+    }
+
+    @Test
+    func usageUpdateDecodesFromHermesPayload() throws {
+        let raw = #"{"sessionUpdate":"usage_update","size":200000,"used":1234}"#
+        let decoded = try decoder.decode(SessionUpdate.self, from: Data(raw.utf8))
+        guard case let .usageUpdate(usage) = decoded else {
+            Issue.record("Expected usage update")
+            return
+        }
+        #expect(usage.size == 200_000)
+        #expect(usage.used == 1234)
+
+        let object = try jsonObject(decoded)
+        #expect(object["sessionUpdate"] == .string("usage_update"))
+        #expect(object["size"] == .number(200_000))
+        #expect(object["used"] == .number(1234))
+    }
+
+    @Test
+    func loadSessionRequestRoundTrips() throws {
+        let request = LoadSessionRequest(
+            sessionId: "session-1",
+            cwd: "/tmp/project",
+            mcpServers: [
+                .stdio(McpServerStdio(name: "local", command: "/usr/bin/echo")),
+            ]
+        )
+
+        let object = try jsonObject(request)
+        #expect(object["sessionId"] == .string("session-1"))
+        #expect(object["cwd"] == .string("/tmp/project"))
+        guard case let .array(servers)? = object["mcpServers"],
+              case let .object(stdio)? = servers.first else {
+            Issue.record("Expected mcpServers array")
+            return
+        }
+        #expect(stdio["name"] == .string("local"))
+
+        let decoded = try decoder.decode(LoadSessionRequest.self, from: encoder.encode(request))
+        #expect(decoded == request)
+    }
+
+    @Test
+    func loadSessionResponseRoundTrips() throws {
+        let response = LoadSessionResponse(
+            modes: SessionModeState(
+                currentModeId: "default",
+                availableModes: [SessionMode(id: "default", name: "Default")]
+            ),
+            configOptions: []
+        )
+
+        let decoded = try decoder.decode(LoadSessionResponse.self, from: encoder.encode(response))
+        #expect(decoded == response)
     }
 
     private func jsonObject<T: Encodable>(_ value: T) throws -> [String: JSONValue] {

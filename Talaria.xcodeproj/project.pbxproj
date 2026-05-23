@@ -26,6 +26,12 @@
 		A02B104E12133E6F4524390A /* SettingsScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9796E1F868CE6779773DB1A /* SettingsScene.swift */; };
 		A9B777810249FD981588E862 /* TalariaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 812946B922D766AFF070E868 /* TalariaApp.swift */; };
 		AB02605BD95213C83617A813 /* SessionsBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C21784B6CC62C9E498749A73 /* SessionsBrowser.swift */; };
+		AB02605BD95213C83617A814 /* SessionsSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = C21784B6CC62C9E498749A74 /* SessionsSidebar.swift */; };
+		AB02605BD95213C83617A815 /* SessionsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C21784B6CC62C9E498749A75 /* SessionsStore.swift */; };
+		AB02605BD95213C83617A816 /* SessionIdFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C21784B6CC62C9E498749A76 /* SessionIdFormatter.swift */; };
+		AB02605BD95213C83617A817 /* SessionsCwdStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C21784B6CC62C9E498749A77 /* SessionsCwdStore.swift */; };
+		AB02605BD95213C83617A818 /* LoginShellPATHResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C21784B6CC62C9E498749A78 /* LoginShellPATHResolver.swift */; };
+		AB02605BD95213C83617A819 /* PathAwareHermesAdminRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C21784B6CC62C9E498749A79 /* PathAwareHermesAdminRunner.swift */; };
 		B9A1BE8BABCD8D8AC1125F51 /* DiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFE066B74B82DFA8FC5F8F24 /* DiffView.swift */; };
 		C214FD4CCCF298E8F06FBB11 /* ToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3EDBB9C99D2FF50800A31BE /* ToolsView.swift */; };
 		C6CD91309172B4FADFB06592 /* HermesKit in Frameworks */ = {isa = PBXBuildFile; productRef = BBB6C95B2C73AA1B6DB0B78B /* HermesKit */; };
@@ -50,6 +56,12 @@
 		A30DFD8DFB5E048EC77638CD /* DoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoctorView.swift; sourceTree = "<group>"; };
 		A9796E1F868CE6779773DB1A /* SettingsScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScene.swift; sourceTree = "<group>"; };
 		C21784B6CC62C9E498749A73 /* SessionsBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsBrowser.swift; sourceTree = "<group>"; };
+		C21784B6CC62C9E498749A74 /* SessionsSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsSidebar.swift; sourceTree = "<group>"; };
+		C21784B6CC62C9E498749A75 /* SessionsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsStore.swift; sourceTree = "<group>"; };
+		C21784B6CC62C9E498749A76 /* SessionIdFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionIdFormatter.swift; sourceTree = "<group>"; };
+		C21784B6CC62C9E498749A77 /* SessionsCwdStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsCwdStore.swift; sourceTree = "<group>"; };
+		C21784B6CC62C9E498749A78 /* LoginShellPATHResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginShellPATHResolver.swift; sourceTree = "<group>"; };
+		C21784B6CC62C9E498749A79 /* PathAwareHermesAdminRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathAwareHermesAdminRunner.swift; sourceTree = "<group>"; };
 		C3D2C3E35C2AD0E82789D5C9 /* ReasoningPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningPanel.swift; sourceTree = "<group>"; };
 		CF4DD77146A6664BBB6ABC3F /* Talaria.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Talaria.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D29958F2AEE3B9C542F9987E /* ServerWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerWindow.swift; sourceTree = "<group>"; };
@@ -96,6 +108,10 @@
 			isa = PBXGroup;
 			children = (
 				C21784B6CC62C9E498749A73 /* SessionsBrowser.swift */,
+				C21784B6CC62C9E498749A74 /* SessionsSidebar.swift */,
+				C21784B6CC62C9E498749A75 /* SessionsStore.swift */,
+				C21784B6CC62C9E498749A76 /* SessionIdFormatter.swift */,
+				C21784B6CC62C9E498749A77 /* SessionsCwdStore.swift */,
 			);
 			path = Sessions;
 			sourceTree = "<group>";
@@ -138,6 +154,15 @@
 			path = Windows;
 			sourceTree = "<group>";
 		};
+		D627F6C98B1D08E7A60380AA /* System */ = {
+			isa = PBXGroup;
+			children = (
+				C21784B6CC62C9E498749A78 /* LoginShellPATHResolver.swift */,
+				C21784B6CC62C9E498749A79 /* PathAwareHermesAdminRunner.swift */,
+			);
+			path = System;
+			sourceTree = "<group>";
+		};
 		D7564DA576AC5D795BFCA34D /* Packages */ = {
 			isa = PBXGroup;
 			children = (
@@ -154,6 +179,7 @@
 				562A82B7D5D13781AE7BC1B4 /* Manage */,
 				9C9844FEBE7AD1EA9F62D088 /* Profiles */,
 				0F3BDB93DF040FC65F24CE8C /* Sessions */,
+				D627F6C98B1D08E7A60380AA /* System */,
 				D627F6C98B1D08E7A60380A9 /* Windows */,
 			);
 			path = Talaria;
@@ -245,6 +271,12 @@
 				83727994132ADEA7D5549C6C /* ReasoningPanel.swift in Sources */,
 				2C450AF777BC8222A5E42E39 /* ServerWindow.swift in Sources */,
 				AB02605BD95213C83617A813 /* SessionsBrowser.swift in Sources */,
+				AB02605BD95213C83617A814 /* SessionsSidebar.swift in Sources */,
+				AB02605BD95213C83617A815 /* SessionsStore.swift in Sources */,
+				AB02605BD95213C83617A816 /* SessionIdFormatter.swift in Sources */,
+				AB02605BD95213C83617A817 /* SessionsCwdStore.swift in Sources */,
+				AB02605BD95213C83617A818 /* LoginShellPATHResolver.swift in Sources */,
+				AB02605BD95213C83617A819 /* PathAwareHermesAdminRunner.swift in Sources */,
 				A02B104E12133E6F4524390A /* SettingsScene.swift in Sources */,
 				05373FFD890DF132B906065E /* SkillsView.swift in Sources */,
 				4AE1CCD2FAA490BDF400EAC4 /* SlashMenu.swift in Sources */,

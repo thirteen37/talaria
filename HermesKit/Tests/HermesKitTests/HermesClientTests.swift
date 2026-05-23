@@ -33,6 +33,37 @@ struct HermesClientTests {
     }
 
     @Test
+    func loadSessionReturnsTypedResponse() async throws {
+        let transport = InMemoryTransport()
+        let client = HermesClient(transport: transport)
+
+        let task = Task {
+            try await client.loadSession(sessionId: "session-1", cwd: "/tmp/project")
+        }
+
+        let requests = try await waitForSentData(transport, count: 1)
+        let request = try decodeRequest(requests[0])
+        #expect(request.method == ACPMethod.sessionLoad)
+        guard case let .object(params)? = request.params else {
+            Issue.record("Expected loadSession params")
+            return
+        }
+        #expect(params["sessionId"] == .string("session-1"))
+        #expect(params["cwd"] == .string("/tmp/project"))
+
+        let response = LoadSessionResponse(
+            modes: SessionModeState(
+                currentModeId: "default",
+                availableModes: [SessionMode(id: "default", name: "Default")]
+            )
+        )
+        transport.pushInbound(try JSONRPCFramer.encode(JSONRPCResponse(id: request.id, result: response)))
+
+        let result = try await task.value
+        #expect(result.modes?.currentModeId == "default")
+    }
+
+    @Test
     func correlatesResponsesOutOfOrder() async throws {
         let transport = InMemoryTransport()
         let client = HermesClient(transport: transport)

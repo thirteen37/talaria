@@ -21,4 +21,6 @@ Sprint 2 includes v0.13.2-shaped Swift Codable models for the stable ACP schema,
 
 Talaria now handles agent-initiated `session/request_permission` requests with typed permission outcomes, renders tool-call diff payloads in chat, renders markdown text bubbles, surfaces slash commands from `available_commands_update`, and shows local turn status with elapsed time plus the session git branch.
 
-Session browsing, SSH-backed live sessions, and admin surfaces remain later-sprint work.
+Sprint 3 adds `session/load` on `HermesClient`, a `SessionManager` that multiplexes multiple sessions per window, and a read-only `HermesDB` that browses `~/.hermes/state.db` (FTS5 with a `LIKE` fallback). Rename and delete go through the `hermes` CLI via `HermesAdmin`. `session/list` is **not** wired — we read the on-disk database directly for now; a remote `session/list` path will be considered for the SSH snapshot pipeline.
+
+SSH-backed live sessions and admin surfaces remain later-sprint work.
