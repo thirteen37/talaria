@@ -30,8 +30,7 @@ public struct HermesDBConfiguration: Equatable, Sendable {
         switch profile.kind {
         case .local:
             let home = profile.hermesHome.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
-                ?? FileManager.default
-                    .homeDirectoryForCurrentUser
+                ?? URL(fileURLWithPath: NSHomeDirectory())
                     .appendingPathComponent(".hermes", isDirectory: true)
             return HermesDBConfiguration(databaseURL: home.appendingPathComponent("state.db", isDirectory: false))
         case .ssh:
