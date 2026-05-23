@@ -6,6 +6,8 @@ struct StatusBar: View {
     var isSending: Bool
     var turnStartDate: Date?
     var gitBranch: String?
+    var contextUsed: Int?
+    var contextSize: Int?
 
     @State private var now = Date()
     @State private var timer: Timer?
@@ -21,6 +23,11 @@ struct StatusBar: View {
             }
 
             Spacer(minLength: 8)
+
+            if let contextText {
+                Label(contextText, systemImage: "gauge.with.dots.needle.33percent")
+                    .foregroundStyle(.secondary)
+            }
 
             if let gitBranch {
                 Label(gitBranch, systemImage: "arrow.triangle.branch")
@@ -55,6 +62,21 @@ struct StatusBar: View {
         }
         let seconds = max(0, Int(now.timeIntervalSince(turnStartDate)))
         return "\(seconds)s"
+    }
+
+    private var contextText: String? {
+        guard let contextUsed, let contextSize, contextSize > 0 else {
+            return nil
+        }
+        let pct = Int((Double(contextUsed) / Double(contextSize) * 100).rounded())
+        return "\(formatTokens(contextUsed)) / \(formatTokens(contextSize)) (\(pct)%)"
+    }
+
+    private func formatTokens(_ count: Int) -> String {
+        if count >= 1000 {
+            return String(format: "%.1fk", Double(count) / 1000.0)
+        }
+        return "\(count)"
     }
 
     private func updateTimer(isActive: Bool) {

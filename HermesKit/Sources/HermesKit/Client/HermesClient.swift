@@ -133,6 +133,18 @@ public actor HermesClient {
         )
     }
 
+    public func loadSession(
+        sessionId: SessionId,
+        cwd: String,
+        mcpServers: [McpServer] = []
+    ) async throws -> LoadSessionResponse {
+        try await request(
+            method: ACPMethod.sessionLoad,
+            params: LoadSessionRequest(sessionId: sessionId, cwd: cwd, mcpServers: mcpServers),
+            as: LoadSessionResponse.self
+        )
+    }
+
     public func prompt(sessionId: SessionId, content: [ContentBlock]) async throws -> PromptResponse {
         try await request(
             method: ACPMethod.sessionPrompt,

@@ -910,6 +910,7 @@ public enum SessionUpdate: Codable, Equatable, Sendable {
     case currentModeUpdate(CurrentModeUpdate)
     case configOptionUpdate(ConfigOptionUpdate)
     case sessionInfoUpdate(SessionInfoUpdate)
+    case usageUpdate(UsageUpdate)
     case unknown(kind: String, payload: JSONValue)
 
     public init(from decoder: Decoder) throws {
@@ -941,6 +942,8 @@ public enum SessionUpdate: Codable, Equatable, Sendable {
             self = .configOptionUpdate(try decoder.decode(ConfigOptionUpdate.self, from: data))
         case "session_info_update":
             self = .sessionInfoUpdate(try decoder.decode(SessionInfoUpdate.self, from: data))
+        case "usage_update":
+            self = .usageUpdate(try decoder.decode(UsageUpdate.self, from: data))
         default:
             self = .unknown(kind: kind, payload: value)
         }
@@ -968,6 +971,8 @@ public enum SessionUpdate: Codable, Equatable, Sendable {
             try update.encodeWithSessionUpdate("config_option_update", to: encoder)
         case let .sessionInfoUpdate(update):
             try update.encodeWithSessionUpdate("session_info_update", to: encoder)
+        case let .usageUpdate(update):
+            try update.encodeWithSessionUpdate("usage_update", to: encoder)
         case let .unknown(_, payload):
             try payload.encode(to: encoder)
         }
@@ -1301,6 +1306,22 @@ public struct SessionInfoUpdate: ACPMessage {
         self.updatedAt = updatedAt
     }
     enum CodingKeys: String, CodingKey { case meta = "_meta"; case title; case updatedAt }
+}
+
+public struct UsageUpdate: ACPMessage {
+    public var meta: [String: JSONValue]?
+    public var size: Int
+    public var used: Int
+    public var cost: JSONValue?
+
+    public init(meta: [String: JSONValue]? = nil, size: Int, used: Int, cost: JSONValue? = nil) {
+        self.meta = meta
+        self.size = size
+        self.used = used
+        self.cost = cost
+    }
+
+    enum CodingKeys: String, CodingKey { case meta = "_meta"; case size; case used; case cost }
 }
 
 public struct SessionInfo: ACPMessage {

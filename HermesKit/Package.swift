@@ -16,11 +16,17 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "HermesKit"
+            name: "HermesKit",
+            linkerSettings: [
+                .linkedLibrary("sqlite3"),
+            ]
         ),
         .testTarget(
             name: "HermesKitTests",
-            dependencies: ["HermesKit"]
+            dependencies: ["HermesKit"],
+            linkerSettings: [
+                .linkedLibrary("sqlite3"),
+            ]
         ),
     ],
     swiftLanguageModes: [.v6]

@@ -51,41 +51,44 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
         closed = false
 
         outputPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            // Foundation invokes this handler on its own dispatch source.
+            // We must read `handle.availableData` synchronously here so the
+            // source rearms; deferring the read to another queue leaves the
+            // FD buffered but the GCD source un-rearmed, and the handler
+            // never fires again.
+            let data = handle.availableData
             guard let transport = self else {
                 return
             }
-            transport.readQueue.async { [weak transport] in
-                guard let transport, !transport.inboundFinished else {
-                    return
-                }
-
-                let data = handle.availableData
-                if data.isEmpty {
+            if data.isEmpty {
+                transport.readQueue.async { [weak transport] in
+                    guard let transport, !transport.inboundFinished else {
+                        return
+                    }
                     transport.outputPipe.fileHandleForReading.readabilityHandler = nil
                     if transport.process.isRunning {
                         transport.finishOrTerminateAfterStdoutEOF()
                     } else {
                         transport.finishAfterProcessTerminationOnReadQueue()
                     }
-                } else {
+                }
+            } else {
+                transport.readQueue.async { [weak transport] in
+                    guard let transport, !transport.inboundFinished else {
+                        return
+                    }
                     transport.inboundContinuation.yield(data)
                 }
             }
         }
 
         stderrPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            guard let transport = self else {
+            let data = handle.availableData
+            guard let transport = self, !data.isEmpty else {
                 return
             }
             transport.readQueue.async { [weak transport] in
-                guard let transport else {
-                    return
-                }
-
-                let data = handle.availableData
-                if !data.isEmpty {
-                    transport.stderrRing.append(data)
-                }
+                transport?.stderrRing.append(data)
             }
         }
 
@@ -154,9 +157,41 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
         try? inputPipe.fileHandleForWriting.close()
         if process.isRunning {
             process.terminate()
+            // Wait for the child to actually exit before returning. Without
+            // this, callers can't safely sequence dependent work that touches
+            // shared state the child was writing to (e.g. a CLI subprocess
+            // mutating the same SQLite DB).
+            await waitUntilExit()
         } else {
             readQueue.async { [weak self] in
                 self?.finishInboundOnReadQueue()
+            }
+        }
+    }
+
+    // SIGTERM should be enough for any well-behaved child, but if the process
+    // ignores it (or is wedged), we don't want close() to hang the UI close
+    // path forever. Wait up to 2 seconds, then escalate to SIGKILL.
+    private static let terminateGracePeriod: TimeInterval = 2.0
+    private static let killGracePeriod: TimeInterval = 1.0
+
+    private func waitUntilExit() async {
+        let proc = process
+        if await Self.pollUntilExit(proc, timeout: Self.terminateGracePeriod) {
+            return
+        }
+        kill(proc.processIdentifier, SIGKILL)
+        _ = await Self.pollUntilExit(proc, timeout: Self.killGracePeriod)
+    }
+
+    private static func pollUntilExit(_ proc: Process, timeout: TimeInterval) async -> Bool {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let deadline = Date().addingTimeInterval(timeout)
+                while proc.isRunning && Date() < deadline {
+                    Thread.sleep(forTimeInterval: 0.05)
+                }
+                continuation.resume(returning: !proc.isRunning)
             }
         }
     }

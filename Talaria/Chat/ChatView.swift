@@ -2,7 +2,10 @@ import HermesKit
 import SwiftUI
 
 struct ChatView: View {
-    @State private var viewModel = LocalChatViewModel()
+    // The view model is owned by SessionsStore (keyed by sessionId) so it
+    // survives view destruction — switching tabs no longer cancels the
+    // in-flight prompt or loses the transcript.
+    @Bindable var viewModel: LocalChatViewModel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,7 +37,9 @@ struct ChatView: View {
                 hasError: viewModel.hasError,
                 isSending: viewModel.isSending,
                 turnStartDate: viewModel.turnStartDate,
-                gitBranch: viewModel.gitBranch
+                gitBranch: viewModel.gitBranch,
+                contextUsed: viewModel.contextUsed,
+                contextSize: viewModel.contextSize
             )
 
             Composer(
@@ -58,9 +63,6 @@ struct ChatView: View {
                 }
             )
         }
-        .onDisappear {
-            Task { await viewModel.shutdown() }
-        }
     }
 }
 
@@ -76,10 +78,13 @@ final class LocalChatViewModel {
     var availableCommands: [AvailableCommand] = []
     var gitBranch: String?
     var turnStartDate: Date?
+    var contextUsed: Int?
+    var contextSize: Int?
 
-    private var transport: LocalProcessTransport?
-    private var client: HermesClient?
-    private var sessionId: SessionId?
+    private weak var manager: SessionManager?
+    private weak var store: SessionsStore?
+    private let sessionId: SessionId
+    private let cwd: String
     private var notificationTask: Task<Void, Never>?
     private var promptTask: Task<Void, Never>?
     private var currentUserStreamMessageId: UUID?
@@ -87,11 +92,37 @@ final class LocalChatViewModel {
     private var currentThoughtMessageId: UUID?
     private var toolMessageIds: [ToolCallId: UUID] = [:]
     private var toolTitles: [ToolCallId: String] = [:]
-    private var sessionCwd = FileManager.default.homeDirectoryForCurrentUser.path
+
+    init(manager: SessionManager, sessionId: SessionId, cwd: String, store: SessionsStore? = nil) {
+        self.manager = manager
+        self.sessionId = sessionId
+        self.cwd = cwd
+        self.store = store
+    }
+
+    func start() async {
+        guard notificationTask == nil, let manager else {
+            return
+        }
+        statusText = "Session cwd: \(cwd)"
+        loadGitBranch()
+
+        let stream = await manager.notifications(for: sessionId)
+        notificationTask = Task { [weak self] in
+            for await notification in stream {
+                await self?.handle(notification: notification)
+            }
+        }
+    }
 
     func sendPrompt() async {
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSending, pendingPermission == nil else {
+            return
+        }
+        guard let manager, let client = await manager.client(for: sessionId) else {
+            hasError = true
+            statusText = "Session is not active"
             return
         }
 
@@ -101,24 +132,24 @@ final class LocalChatViewModel {
         currentUserStreamMessageId = messages.last?.id
         isSending = true
         turnStartDate = Date()
-        statusText = "Connecting to Hermes..."
+        statusText = "Hermes is working in \(cwd)..."
         hasError = false
+        store?.markTurnStarted(id: sessionId)
 
-        promptTask = Task {
+        let id = sessionId
+        promptTask = Task { [weak self] in
             do {
-                let client = try await ensureClient()
-                let sessionId = try await ensureSession(client: client)
-                statusText = "Hermes is working in \(sessionCwd)..."
-                let response = try await client.prompt(sessionId: sessionId, content: text)
-                statusText = "Stopped: \(response.stopReason.rawValue)"
+                let response = try await client.prompt(sessionId: id, content: text)
+                self?.statusText = "Stopped: \(response.stopReason.rawValue)"
             } catch is CancellationError {
-                statusText = "Cancelled"
+                self?.statusText = "Cancelled"
             } catch {
-                hasError = true
-                statusText = errorMessage(for: error)
+                self?.hasError = true
+                self?.statusText = self?.errorMessage(for: error)
             }
-            isSending = false
-            turnStartDate = nil
+            self?.isSending = false
+            self?.turnStartDate = nil
+            self?.store?.markTurnFinished(id: id)
         }
     }
 
@@ -129,7 +160,7 @@ final class LocalChatViewModel {
             await resolvePermission(.cancelled)
         }
 
-        guard let client, let sessionId else {
+        guard let manager, let client = await manager.client(for: sessionId) else {
             isSending = false
             turnStartDate = nil
             statusText = "Cancelled"
@@ -190,90 +221,34 @@ final class LocalChatViewModel {
 
     func shutdown() async {
         notificationTask?.cancel()
+        notificationTask = nil
         promptTask?.cancel()
         if pendingPermission != nil {
             await resolvePermission(.cancelled)
         }
-        await client?.close()
-        client = nil
-        transport = nil
-        sessionId = nil
         isSending = false
         turnStartDate = nil
         resetStreamingMessages()
-        toolMessageIds.removeAll()
-        toolTitles.removeAll()
-        availableCommands.removeAll()
-        gitBranch = nil
-    }
-
-    private func ensureClient() async throws -> HermesClient {
-        if let client {
-            return client
-        }
-
-        #if os(macOS)
-        let transport = LocalProcessTransport()
-        try transport.start()
-        self.transport = transport
-
-        let client = HermesClient(transport: transport)
-        self.client = client
-
-        let task = Task.detached { [weak self, notifications = client.notifications] in
-            do {
-                for try await notification in notifications {
-                    await self?.handle(notification: notification)
-                }
-            } catch is CancellationError {
-                // Normal shutdown cancels the notification task.
-            } catch {
-                await self?.handleNotificationError(error)
-            }
-        }
-        notificationTask = task
-
-        do {
-            _ = try await client.initialize()
-            statusText = "Connected"
-            return client
-        } catch {
-            task.cancel()
-            notificationTask = nil
-            self.client = nil
-            self.transport = nil
-            await client.close()
-            throw error
-        }
-        #else
-        throw TransportError.unsupportedPlatform
-        #endif
-    }
-
-    private func ensureSession(client: HermesClient) async throws -> SessionId {
-        if let sessionId {
-            return sessionId
-        }
-
-        let response = try await client.newSession(cwd: sessionCwd, mcpServers: [])
-        sessionId = response.sessionId
-        statusText = "Session cwd: \(sessionCwd)"
-        loadGitBranch()
-        return response.sessionId
     }
 
     private func loadGitBranch() {
-        let cwd = sessionCwd
+        let cwd = cwd
         Task {
             gitBranch = await GitInfo.branch(cwd: cwd)
         }
     }
 
-    private func handle(notification: HermesNotification) {
+    private func handle(notification: HermesNotification) async {
         switch notification {
         case let .sessionUpdate(notification):
+            guard notification.sessionId == sessionId else {
+                return
+            }
             handle(sessionUpdate: notification.update)
         case let .permissionRequest(event):
+            guard event.request.sessionId == sessionId else {
+                return
+            }
             handle(permissionRequest: event)
         case let .clientRequestError(_, method, message):
             hasError = true
@@ -284,8 +259,8 @@ final class LocalChatViewModel {
         case let .request(id, method, _):
             resetStreamingMessages()
             append(kind: .event, text: "Unsupported Hermes request: \(method)")
-            Task { [client] in
-                try? await client?.respond(
+            if let client = await manager?.client(for: sessionId) {
+                try? await client.respond(
                     id: id,
                     error: JSONRPCError(code: -32601, message: "Talaria does not support \(method) yet")
                 )
@@ -319,6 +294,9 @@ final class LocalChatViewModel {
             )
         case let .availableCommandsUpdate(update):
             availableCommands = update.availableCommands
+        case let .usageUpdate(update):
+            contextUsed = update.used
+            contextSize = update.size
         default:
             if let text = update.displayText {
                 resetStreamingMessages()
@@ -339,13 +317,6 @@ final class LocalChatViewModel {
             await event.respond(outcome)
         }
         statusText = "Waiting for permission"
-    }
-
-    private func handleNotificationError(_ error: Error) {
-        if !hasError {
-            hasError = true
-            statusText = errorMessage(for: error)
-        }
     }
 
     @discardableResult

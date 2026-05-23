@@ -26,6 +26,20 @@ public protocol HermesAdminRunning: Sendable {
     func run(_ command: HermesAdminCommand) async throws -> HermesAdminResult
 }
 
+public extension HermesAdminRunning {
+    @discardableResult
+    func renameSession(_ id: SessionId, to title: String) async throws -> HermesAdminResult {
+        // `--` separator so a title or id starting with `-` isn't interpreted
+        // as a CLI flag by hermes' argparse.
+        try await run(HermesAdminCommand(arguments: ["sessions", "rename", "--", id, title]))
+    }
+
+    @discardableResult
+    func deleteSession(_ id: SessionId) async throws -> HermesAdminResult {
+        try await run(HermesAdminCommand(arguments: ["sessions", "delete", "--yes", "--", id]))
+    }
+}
+
 #if os(macOS)
 public struct LocalHermesAdminRunner: HermesAdminRunning {
     public var hermesPath: String
