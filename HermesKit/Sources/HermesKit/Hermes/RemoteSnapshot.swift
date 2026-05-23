@@ -41,7 +41,7 @@ public actor RemoteSnapshot {
     /// badge view, not here.
     public static let staleThreshold: TimeInterval = 5 * 60
 
-    public let profile: ServerProfile
+    public nonisolated let profile: ServerProfile
 
     private let cacheRoot: URL
     private var subscribers: [UUID: AsyncStream<SnapshotState>.Continuation] = [:]
