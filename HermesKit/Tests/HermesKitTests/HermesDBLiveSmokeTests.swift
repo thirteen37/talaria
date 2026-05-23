@@ -8,7 +8,7 @@ import Testing
 struct HermesDBLiveSmokeTests {
     @Test
     func listAndSearchRealDatabase() async throws {
-        let url = FileManager.default.homeDirectoryForCurrentUser
+        let url = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
             .appendingPathComponent(".hermes/state.db")
         guard FileManager.default.fileExists(atPath: url.path) else {
             return
