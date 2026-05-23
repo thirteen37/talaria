@@ -8,11 +8,11 @@ struct TalariaApp: App {
 
     var body: some Scene {
         WindowGroup(for: UUID.self) { $profileId in
-            ServerWindow(profileId: profileId ?? ProfileDirectory.localProfileID)
+            ServerWindow(profileId: profileId)
                 .environment(directory)
                 .task {
                     await directory.reload()
-                    recents.record(profileId ?? ProfileDirectory.localProfileID)
+                    recents.record(profileId)
                 }
         } defaultValue: {
             ProfileDirectory.localProfileID
