@@ -34,15 +34,7 @@ struct SessionsBrowser: View {
 
     @ViewBuilder
     private func content(db: HermesDB) -> some View {
-        VStack(spacing: 0) {
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
+        Group {
             if sessions.isEmpty && !isLoading {
                 ContentUnavailableView(
                     query.isEmpty ? "No Sessions" : "No matches",
@@ -55,6 +47,16 @@ struct SessionsBrowser: View {
                         Task { await store.openExisting(summary) }
                     }
                 }
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.bar)
             }
         }
         .searchable(text: $query, prompt: "Search sessions")
