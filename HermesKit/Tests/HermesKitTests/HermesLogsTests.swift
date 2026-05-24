@@ -48,6 +48,31 @@ struct HermesLogsTests {
         #expect(line.message == "message-without-colon")
     }
 
+    @Test
+    func parsesPythonLoggingFormatWithoutBrackets() {
+        // The real hermes agent.log lines look like:
+        //   `2026-05-24 15:18:06,289 INFO hermes_cli.plugins: msg`
+        // Before this fix the parser required `[ts] [LEVEL]` brackets, so
+        // every line in the logs view came back as level=.unknown,
+        // component="".
+        let raw = "2026-05-24 15:18:06,289 INFO hermes_cli.plugins: Plugin discovery complete: 27 found, 23 enabled"
+        let line = HermesLogs.parse(raw)
+        #expect(line.level == .info)
+        #expect(line.component == "hermes_cli.plugins")
+        #expect(line.message == "Plugin discovery complete: 27 found, 23 enabled")
+        #expect(line.timestamp != nil)
+    }
+
+    @Test
+    func parsesPythonLoggingWithSessionIDBracket() {
+        // errors.log adds a `[session-uuid]` between LEVEL and component.
+        let raw = "2026-05-23 14:16:55,994 ERROR [ca17a751-0682-4e38-a2dd-2988bc0455f0] root: API call failed after 3 retries."
+        let line = HermesLogs.parse(raw)
+        #expect(line.level == .error)
+        #expect(line.component == "root")
+        #expect(line.message == "API call failed after 3 retries.")
+    }
+
 #if os(macOS)
     @Test
     func localLogTailingPicksUpAppends() async throws {

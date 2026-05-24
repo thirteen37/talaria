@@ -83,17 +83,46 @@ public extension HermesAdminRunning {
 
 #if os(macOS)
 public struct LocalHermesAdminRunner: HermesAdminRunning {
-    public var hermesPath: String
+    /// Launcher that actually gets spawned. Defaults to `/usr/bin/env` so the
+    /// resolved login-shell PATH (injected by `PathAwareHermesAdminRunner`) is
+    /// honored when `argumentPrefix` is a bare name like `["hermes"]`. Tests
+    /// substitute a different launcher (e.g. `/bin/sh`) via the test-seam init.
+    public var executableURL: URL
+    /// Arguments prepended to each command's `arguments`. In production this is
+    /// `[profile.hermesPath]` so the spawned `env` invocation matches the
+    /// session transport's `env <hermesPath> acp …` shape — sessions and admin
+    /// must agree on which binary to launch, or the user sees `env: hermes: No
+    /// such file or directory` from admin only when their profile points at an
+    /// absolute path.
+    public var argumentPrefix: [String]
+    /// Baseline environment merged with each command's environment. Lets the
+    /// caller seed values that are stable per-runner (e.g. `HERMES_HOME` from
+    /// the profile) without re-passing them through every `HermesAdminCommand`.
+    public var baseEnvironment: [String: String]
 
-    public init(hermesPath: String = "/usr/bin/env") {
-        self.hermesPath = hermesPath
+    /// Production init: invokes `/usr/bin/env <hermesPath> <args>`. Mirrors the
+    /// session transport so PATH resolution and absolute-path handling behave
+    /// identically across the chat and Manage surfaces.
+    public init(hermesPath: String = "hermes", environment: [String: String] = [:]) {
+        self.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        self.argumentPrefix = [hermesPath]
+        self.baseEnvironment = environment
+    }
+
+    /// Test-only seam: spawns `executableURL` directly with `argumentPrefix +
+    /// command.arguments`. Avoids relying on `/usr/bin/env` and a real hermes
+    /// binary in the test target.
+    public init(executableURL: URL, argumentPrefix: [String] = [], environment: [String: String] = [:]) {
+        self.executableURL = executableURL
+        self.argumentPrefix = argumentPrefix
+        self.baseEnvironment = environment
     }
 
     public func run(_ command: HermesAdminCommand) async throws -> HermesAdminResult {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: hermesPath)
-        process.arguments = hermesPath == "/usr/bin/env" ? ["hermes"] + command.arguments : command.arguments
-        process.environment = command.environment.merging(ProcessInfo.processInfo.environment) { local, _ in local }
+        process.executableURL = executableURL
+        process.arguments = argumentPrefix + command.arguments
+        process.environment = mergedEnvironment(command: command)
 
         let stdout = Pipe()
         let stderr = Pipe()
@@ -135,12 +164,14 @@ public struct LocalHermesAdminRunner: HermesAdminRunning {
     }
 
     public func runStream(_ command: HermesAdminCommand) -> AsyncThrowingStream<AdminEvent, Error> {
-        let hermesPath = hermesPath
+        let executableURL = executableURL
+        let argumentPrefix = argumentPrefix
+        let mergedEnvironment = mergedEnvironment(command: command)
         return AsyncThrowingStream { continuation in
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: hermesPath)
-            process.arguments = hermesPath == "/usr/bin/env" ? ["hermes"] + command.arguments : command.arguments
-            process.environment = command.environment.merging(ProcessInfo.processInfo.environment) { local, _ in local }
+            process.executableURL = executableURL
+            process.arguments = argumentPrefix + command.arguments
+            process.environment = mergedEnvironment
 
             let stdoutPipe = Pipe()
             let stderrPipe = Pipe()
@@ -180,6 +211,22 @@ public struct LocalHermesAdminRunner: HermesAdminRunning {
             stdoutReader.start()
             stderrReader.start()
         }
+    }
+
+    /// Layer the three env sources so command-specific keys win over the
+    /// runner's baseline (e.g. profile HERMES_HOME), and either of those wins
+    /// over whatever the host process inherited. Without this layering an
+    /// ambient PATH on the host process would shadow the resolved login-shell
+    /// PATH that `PathAwareHermesAdminRunner` injects per-call.
+    private func mergedEnvironment(command: HermesAdminCommand) -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        for (key, value) in baseEnvironment {
+            env[key] = value
+        }
+        for (key, value) in command.environment {
+            env[key] = value
+        }
+        return env
     }
 }
 

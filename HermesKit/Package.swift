@@ -24,6 +24,9 @@ let package = Package(
         .testTarget(
             name: "HermesKitTests",
             dependencies: ["HermesKit"],
+            resources: [
+                .copy("Fixtures"),
+            ],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
             ]

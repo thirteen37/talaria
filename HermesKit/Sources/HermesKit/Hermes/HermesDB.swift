@@ -198,10 +198,26 @@ public actor HermesDB {
 
         var db: OpaquePointer?
         let path = configuration.databaseURL.path
-        let flags = configuration.readOnly
-            ? (SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX)
-            : (SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX)
-        let rc = sqlite3_open_v2(path, &db, flags, nil)
+        // Hermes' state.db runs in WAL journal mode, which means even a
+        // SQLITE_OPEN_READONLY reader normally has to create/open the `-shm`
+        // and `-wal` companion files in the same directory. That surfaces as
+        // a misleading `unable to open database file` failure on the first
+        // query when something keeps Talaria from those files (TCC, write
+        // access on a read-only mount, …). The URI form with `immutable=1`
+        // tells SQLite to treat the file as a frozen snapshot — no WAL/SHM
+        // initialisation, no locks — which is exactly what the sessions
+        // browser wants: a consistent point-in-time view, refreshed on
+        // subsequent opens.
+        let flags: Int32
+        let openTarget: String
+        if configuration.readOnly {
+            flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX | SQLITE_OPEN_URI
+            openTarget = "file:\(Self.uriEscapedPath(path))?immutable=1"
+        } else {
+            flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX
+            openTarget = path
+        }
+        let rc = sqlite3_open_v2(openTarget, &db, flags, nil)
         guard rc == SQLITE_OK, let db else {
             let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "sqlite open failed (rc=\(rc))"
             if let db {
@@ -211,6 +227,33 @@ public actor HermesDB {
         }
         box.handle = db
         return db
+    }
+
+    /// Percent-encodes the characters SQLite's URI-mode parser treats as
+    /// metacharacters (`?`, `#`, space) and the percent sign itself. Path
+    /// separators stay verbatim so the absolute-path semantics survive.
+    ///
+    /// `%` MUST escape first: with `SQLITE_OPEN_URI`, SQLite percent-decodes
+    /// the path before opening it. A literal `%` in a directory name (e.g.
+    /// `/Users/foo/100%off/.hermes`) would otherwise be interpreted as the
+    /// start of an escape sequence and fail with a misleading parse error
+    /// (`%of` isn't a valid byte).
+    static func uriEscapedPath(_ path: String) -> String {
+        var out = ""
+        out.reserveCapacity(path.count)
+        for scalar in path.unicodeScalars {
+            switch scalar {
+            case "%":
+                out.append("%25")
+            case "?", "#":
+                out.append(String(format: "%%%02X", scalar.value))
+            case " ":
+                out.append("%20")
+            default:
+                out.unicodeScalars.append(scalar)
+            }
+        }
+        return out
     }
 
     private func query(

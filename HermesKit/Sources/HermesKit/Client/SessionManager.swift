@@ -31,7 +31,20 @@ public actor SessionManager {
         let cwd: String
         var subscribers: [UUID: AsyncStream<HermesNotification>.Continuation] = [:]
         var pumpTask: Task<Void, Never>?
+        /// Notifications that arrived while no subscriber was attached.
+        /// Replayed in order to each new subscriber so resumed sessions
+        /// actually surface their history — hermes streams the prior
+        /// transcript as session updates *during* `session/load`, which
+        /// completes before SessionsStore can construct the chat view's
+        /// `LocalChatViewModel`. Without this buffer those updates fanned
+        /// out to zero subscribers and got dropped.
+        var replay: [HermesNotification] = []
     }
+
+    /// Upper bound on the replay buffer so a multi-thousand-message session
+    /// can't OOM us during a resume. Older entries are dropped first; the
+    /// trade-off is the head of a very long transcript may scroll off.
+    private static let replayCap = 10_000
 
     private let transportFactory: TransportFactory
     private let clientInfo: ClientInfo
@@ -172,12 +185,21 @@ public actor SessionManager {
     }
 
     private func fanOut(sessionId: SessionId, notification: HermesNotification) {
-        guard let active = sessions[sessionId] else {
+        guard var active = sessions[sessionId] else {
             return
+        }
+        // Always buffer for replay so a late subscriber (e.g. a chat tab
+        // opened after the session was registered) still sees the full
+        // resumed transcript. The cap prevents an unbounded transcript
+        // from growing memory without bound.
+        active.replay.append(notification)
+        if active.replay.count > Self.replayCap {
+            active.replay.removeFirst(active.replay.count - Self.replayCap)
         }
         for (_, continuation) in active.subscribers {
             continuation.yield(notification)
         }
+        sessions[sessionId] = active
     }
 
     private func finishSubscribers(sessionId: SessionId) {
@@ -199,6 +221,14 @@ public actor SessionManager {
         guard var active = sessions[id] else {
             continuation.finish()
             return
+        }
+        // Drain buffered history before registering so the new subscriber
+        // observes notifications in send order. Replay even runs for the
+        // very first subscriber — that's the resume-history path. Yielding
+        // happens synchronously (AsyncStream uses an unbounded continuation
+        // buffer by default), so this can't deadlock the actor.
+        for notification in active.replay {
+            continuation.yield(notification)
         }
         active.subscribers[token] = continuation
         sessions[id] = active

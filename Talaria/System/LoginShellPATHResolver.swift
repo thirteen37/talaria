@@ -105,7 +105,14 @@ actor LoginShellPATHResolver {
             pipe.fileHandleForReading.readabilityHandler = nil
             return nil
         }
-        let deadline = Date().addingTimeInterval(2)
+        // 10s — heavy interactive-shell configs (zgenom/oh-my-zsh + mise/asdf
+        // hooks, work tooling that injects credentials, etc.) routinely take
+        // 2-4s to finish sourcing rc files. 2s SIGTERMed the shell before it
+        // could print PATH, which silently fell admin runs back to
+        // ProcessInfo's minimal PATH and surfaced as `env: hermes: No such
+        // file or directory`. The probe is async/background and only runs
+        // once per app session, so the longer cap doesn't block UI.
+        let deadline = Date().addingTimeInterval(10)
         while process.isRunning && Date() < deadline {
             Thread.sleep(forTimeInterval: 0.05)
         }

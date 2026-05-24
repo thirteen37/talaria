@@ -7,7 +7,7 @@ import Testing
 struct HermesAdminTests {
     @Test
     func localRunnerDrainsLargeStdoutAndStderr() async throws {
-        let runner = LocalHermesAdminRunner(hermesPath: "/bin/sh")
+        let runner = LocalHermesAdminRunner(executableURL: URL(fileURLWithPath: "/bin/sh"))
         let expectedStdout = (0..<20_000).map { "stdout-\($0)" }.joined(separator: "\n") + "\n"
         let expectedStderr = (0..<20_000).map { "stderr-\($0)" }.joined(separator: "\n") + "\n"
         let script = """
@@ -28,7 +28,7 @@ struct HermesAdminTests {
 
     @Test
     func runStreamEmitsLinesAndExit() async throws {
-        let runner = LocalHermesAdminRunner(hermesPath: "/bin/sh")
+        let runner = LocalHermesAdminRunner(executableURL: URL(fileURLWithPath: "/bin/sh"))
         let script = """
         echo "alpha"
         echo "beta"
@@ -55,7 +55,7 @@ struct HermesAdminTests {
 
     @Test
     func runStreamHandlesLargeOutputOrderingAndLineBoundaries() async throws {
-        let runner = LocalHermesAdminRunner(hermesPath: "/bin/sh")
+        let runner = LocalHermesAdminRunner(executableURL: URL(fileURLWithPath: "/bin/sh"))
         let script = """
         i=0
         while [ "$i" -lt 20000 ]; do
@@ -93,7 +93,7 @@ struct HermesAdminTests {
 
     @Test
     func runStreamEmitsTrailingPartialLineWithoutNewline() async throws {
-        let runner = LocalHermesAdminRunner(hermesPath: "/bin/sh")
+        let runner = LocalHermesAdminRunner(executableURL: URL(fileURLWithPath: "/bin/sh"))
         // printf without trailing newline — the final partial line still needs
         // to surface on stream termination.
         let script = #"printf "no-newline-here""#
@@ -107,7 +107,7 @@ struct HermesAdminTests {
 
     @Test
     func runStreamCancellationTerminatesChild() async throws {
-        let runner = LocalHermesAdminRunner(hermesPath: "/bin/sh")
+        let runner = LocalHermesAdminRunner(executableURL: URL(fileURLWithPath: "/bin/sh"))
         // Long-running emitter: prints a line per 50ms forever.
         let script = """
         while true; do

@@ -5,6 +5,41 @@ import Testing
 @Suite
 struct HermesCronTests {
     @Test
+    func parsesIndentedBlockFormat() throws {
+        // Regression: real hermes emits a banner followed by indented
+        // `<id> [active|paused]` / `    Key: value` blocks. The old
+        // per-line parser tried to match `id  schedule  command  enabled`
+        // and grabbed key-value lines like `    Last run: 2026-…  ok` as
+        // bogus rows.
+        let url = try #require(Bundle.module.url(forResource: "Fixtures/cron-rich", withExtension: "txt"))
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let jobs = HermesCron.parse(text)
+        #expect(jobs.count == 2)
+        let first = try #require(jobs.first)
+        #expect(first.id == "c164af3d9600")
+        #expect(first.schedule == "0 9 * * *")
+        #expect(first.command == "talaria-fixture")
+        #expect(first.enabled == true)
+        let second = jobs[1]
+        #expect(second.id == "f19e42b678fe")
+        #expect(second.schedule == "*/15 * * * *")
+        #expect(second.command == "another")
+        #expect(second.enabled == true)
+    }
+
+    @Test
+    func recognizesPausedStatus() throws {
+        let url = try #require(Bundle.module.url(forResource: "Fixtures/cron-rich-paused", withExtension: "txt"))
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let jobs = HermesCron.parse(text)
+        #expect(jobs.count == 2)
+        let paused = try #require(jobs.first(where: { $0.id == "c164af3d9600" }))
+        #expect(paused.enabled == false, "[paused] status must not register as enabled")
+        let active = try #require(jobs.first(where: { $0.id == "f19e42b678fe" }))
+        #expect(active.enabled == true)
+    }
+
+    @Test
     func parsesTabSeparatedRows() {
         let text = "job1\t0 9 * * 1-5\thermes update\tyes\t2026-05-23T08:00:00Z\n"
                  + "job2\t*/15 * * * *\thermes doctor\tno\t-\n"

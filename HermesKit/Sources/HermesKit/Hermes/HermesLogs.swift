@@ -40,14 +40,26 @@ public protocol HermesLogTailing: Sendable {
 }
 
 public enum HermesLogs {
-    /// Parse a single log line into a structured `LogLine`. Tolerates the
-    /// common Hermes format `[ISO8601] [LEVEL ] component: message` and falls
-    /// back to `level = .unknown, component = "", message = raw` for free-form
-    /// lines (e.g. tracebacks or printf output that escaped the logger).
+    /// Parse a single log line into a structured `LogLine`. Recognizes:
+    ///   * Bracketed form `[ISO8601] [LEVEL] component: msg`
+    ///   * Python-logging form `YYYY-MM-DD HH:MM:SS,mmm LEVEL component: msg`
+    ///     — the actual hermes log layout, optionally followed by an
+    ///     `[session-uuid]` bracket between LEVEL and component.
+    /// Free-form lines (tracebacks, printf escapees) fall through with
+    /// `level = .unknown, component = ""`.
     public static func parse(_ raw: String) -> LogLine {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let parsed = parseStructured(trimmed) {
+        if let parsed = parseBracketed(trimmed) {
+            return LogLine(
+                timestamp: parsed.timestamp,
+                level: parsed.level,
+                component: parsed.component,
+                message: parsed.message,
+                raw: raw
+            )
+        }
+        if let parsed = parsePythonLogging(trimmed) {
             return LogLine(
                 timestamp: parsed.timestamp,
                 level: parsed.level,
@@ -66,7 +78,7 @@ public enum HermesLogs {
         let message: String
     }
 
-    private static func parseStructured(_ line: String) -> Parsed? {
+    private static func parseBracketed(_ line: String) -> Parsed? {
         // [timestamp] [level] component: message
         guard line.hasPrefix("[") else { return nil }
         let scanner = Scanner(string: line)
@@ -99,6 +111,69 @@ public enum HermesLogs {
 
         let timestamp = parseTimestamp(ts)
         return Parsed(timestamp: timestamp, level: level, component: component, message: message)
+    }
+
+    /// Parses Python's stdlib logging default format:
+    ///   `YYYY-MM-DD HH:MM:SS,mmm LEVEL [session-uuid] component: message`
+    /// where the `[session-uuid]` block is optional. Anchoring on the
+    /// fixed-width date prefix avoids spurious matches on free-form lines
+    /// that happen to start with a digit.
+    private static func parsePythonLogging(_ line: String) -> Parsed? {
+        // Cheapest possible structural check: index 4 and 7 must be '-' for
+        // YYYY-MM-DD; without this the regex below burns time on every
+        // stack-trace continuation line.
+        let chars = Array(line)
+        guard chars.count >= 23,
+              chars[4] == "-", chars[7] == "-",
+              chars[10] == " ",
+              chars[13] == ":", chars[16] == ":" else {
+            return nil
+        }
+        let tsString = String(chars[0..<23])
+        let afterTimestamp = String(chars[23...]).trimmingCharacters(in: .whitespaces)
+        // Next field: LEVEL (alphabetic, uppercase).
+        guard let spaceAfterLevel = afterTimestamp.firstIndex(where: { $0.isWhitespace }) else {
+            return nil
+        }
+        let levelText = String(afterTimestamp[afterTimestamp.startIndex..<spaceAfterLevel])
+        guard !levelText.isEmpty, levelText.allSatisfy({ $0.isLetter }) else { return nil }
+        let level = LogLevel(string: levelText)
+        var rest = afterTimestamp[afterTimestamp.index(after: spaceAfterLevel)...].drop(while: { $0.isWhitespace })
+
+        // Optional [session-id] bracket. Skip past it — useful as context
+        // but doesn't fit any first-class LogLine field today.
+        if rest.first == "[" {
+            if let close = rest.firstIndex(of: "]") {
+                rest = rest[rest.index(after: close)...].drop(while: { $0.isWhitespace })
+            }
+        }
+        // `component: message`
+        let restString = String(rest)
+        let component: String
+        let message: String
+        if let colon = restString.firstIndex(of: ":") {
+            component = restString[restString.startIndex..<colon].trimmingCharacters(in: .whitespaces)
+            message = String(restString[restString.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+        } else {
+            component = ""
+            message = restString.trimmingCharacters(in: .whitespaces)
+        }
+        return Parsed(timestamp: parsePythonTimestamp(tsString), level: level, component: component, message: message)
+    }
+
+    /// `YYYY-MM-DD HH:MM:SS,mmm` — Python logging's default. The comma
+    /// separator means stdlib ISO8601 parsers reject it; we swap in a dot
+    /// and reuse the fractional-seconds formatter.
+    static func parsePythonTimestamp(_ value: String) -> Date? {
+        let normalized = value.replacingOccurrences(of: ",", with: ".")
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        // Hermes runs in the host TZ (this is python's default logging
+        // formatter behaviour). Without setting a TZ here Foundation
+        // assumes UTC and the rendered times drift by the user's offset.
+        formatter.timeZone = TimeZone.current
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return formatter.date(from: normalized)
     }
 
     static func parseTimestamp(_ value: String) -> Date? {
