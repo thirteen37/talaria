@@ -17,4 +17,28 @@ struct PathAwareHermesAdminRunner: HermesAdminRunning {
         }
         return try await inner.run(HermesAdminCommand(arguments: command.arguments, environment: env))
     }
+
+    func runStream(_ command: HermesAdminCommand) -> AsyncThrowingStream<AdminEvent, Error> {
+        let inner = inner
+        let resolver = resolver
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                let extra = await resolver.extraEnv()
+                var env = command.environment
+                for (key, value) in extra where env[key] == nil {
+                    env[key] = value
+                }
+                let stream = inner.runStream(HermesAdminCommand(arguments: command.arguments, environment: env))
+                do {
+                    for try await event in stream {
+                        continuation.yield(event)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
 }

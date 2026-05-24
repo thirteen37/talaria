@@ -386,6 +386,31 @@ private struct ProfileDetailView: View {
                         TextField("Hermes binary", text: $draft.hermesPath)
                         TextField("HERMES_HOME (optional)", text: bindingString(\.hermesHome))
                     }
+
+                    if draft.kind == .ssh {
+                        Section {
+                            Picker("Remote shell", selection: $draft.remoteShellMode) {
+                                ForEach(RemoteShellMode.allCases, id: \.self) { mode in
+                                    Text(mode.label).tag(mode)
+                                }
+                            }
+                            if draft.remoteShellMode == .custom {
+                                TextField(
+                                    "Custom prefix (e.g. \"mise exec --\")",
+                                    text: bindingString(\.remoteShellPrefix)
+                                )
+                                .font(.system(.body, design: .monospaced))
+                            }
+                        } header: {
+                            Text("Remote shell")
+                        } footer: {
+                            Text(
+                                "Ssh's non-interactive command path doesn't source ~/.zshrc or ~/.bashrc, so PATH-based hermes lookups fail. Login-shell wrappers source profile files where PATH is usually set. Pick Direct if hermes is at an absolute path."
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 .formStyle(.grouped)
 

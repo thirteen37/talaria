@@ -15,6 +15,10 @@ struct SSHTransportTests {
             hermesHome: "/tmp/hermes"
         )
 
+        // The remote command is built as a single argv element so the chosen
+        // RemoteShellMode wrapper (`sh -lc '<cmd>'`, etc.) keeps the inner
+        // command in pristine single-quoted form when ssh space-joins the
+        // post-destination args on the wire.
         #expect(arguments == [
             "-T",
             "-o",
@@ -25,10 +29,7 @@ struct SSHTransportTests {
             "~/.ssh/id_ed25519",
             "--",
             "me@example.com",
-            "env",
-            "'HERMES_HOME=/tmp/hermes'",
-            "'/opt/bin/hermes'",
-            "acp",
+            "env 'HERMES_HOME=/tmp/hermes' '/opt/bin/hermes' acp",
         ])
     }
 
@@ -40,12 +41,7 @@ struct SSHTransportTests {
             hermesHome: "/var/lib/hermes data/it's; rm -rf ~"
         )
 
-        #expect(arguments.suffix(4).elementsEqual([
-            "env",
-            "'HERMES_HOME=/var/lib/hermes data/it'\\''s; rm -rf ~'",
-            "'/opt/Hermes Bin/hermes'\\''agent'",
-            "acp",
-        ]))
+        #expect(arguments.last == "env 'HERMES_HOME=/var/lib/hermes data/it'\\''s; rm -rf ~' '/opt/Hermes Bin/hermes'\\''agent' acp")
     }
 
     @Test
@@ -56,12 +52,55 @@ struct SSHTransportTests {
         )
 
         #expect(arguments.contains("--"))
-        #expect(arguments.suffix(4).elementsEqual([
+        #expect(arguments.suffix(3).elementsEqual([
             "--",
             "-lroot@-oProxyCommand=touch /tmp/bad",
-            "'hermes'",
-            "acp",
+            "'hermes' acp",
         ]))
+    }
+
+    // Wrapping puts the inner command (itself already containing single
+    // quotes around `hermes`) inside another single-quoted block; each inner
+    // `'` is escaped as the standard `'\''` idiom for sh-compatible nesting.
+    @Test
+    func remoteShellModeBashLoginWrapsCommand() {
+        let arguments = SSHTransport.makeArguments(
+            host: "example.com",
+            hermesPath: "hermes",
+            remoteShellMode: .bashLogin
+        )
+        #expect(arguments.last == "bash -lc ''\\''hermes'\\'' acp'")
+    }
+
+    @Test
+    func remoteShellModeShLoginWrapsCommand() {
+        let arguments = SSHTransport.makeArguments(
+            host: "example.com",
+            hermesPath: "hermes",
+            remoteShellMode: .shLogin
+        )
+        #expect(arguments.last == "sh -lc ''\\''hermes'\\'' acp'")
+    }
+
+    @Test
+    func remoteShellModeCustomPrefixWrapsCommand() {
+        let arguments = SSHTransport.makeArguments(
+            host: "example.com",
+            hermesPath: "hermes",
+            remoteShellMode: .custom,
+            remoteShellPrefix: "mise exec --"
+        )
+        #expect(arguments.last == "mise exec -- ''\\''hermes'\\'' acp'")
+    }
+
+    @Test
+    func remoteShellModeDirectLeavesCommandUnwrapped() {
+        let arguments = SSHTransport.makeArguments(
+            host: "example.com",
+            hermesPath: "hermes",
+            remoteShellMode: .direct
+        )
+        #expect(arguments.last == "'hermes' acp")
     }
 
     @Test

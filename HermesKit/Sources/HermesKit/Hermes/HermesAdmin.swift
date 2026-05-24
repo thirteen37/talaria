@@ -22,11 +22,43 @@ public struct HermesAdminResult: Equatable, Sendable {
     }
 }
 
+public enum AdminEvent: Sendable, Equatable {
+    case stdoutLine(String)
+    case stderrLine(String)
+    case exit(Int32)
+}
+
 public protocol HermesAdminRunning: Sendable {
     func run(_ command: HermesAdminCommand) async throws -> HermesAdminResult
+    func runStream(_ command: HermesAdminCommand) -> AsyncThrowingStream<AdminEvent, Error>
 }
 
 public extension HermesAdminRunning {
+    // Default fallback for one-shot runners: drains the captured output once
+    // the child has exited, then synthesises line events. Loses stdout/stderr
+    // interleaving; concrete runners that want true live streaming should
+    // override this method.
+    func runStream(_ command: HermesAdminCommand) -> AsyncThrowingStream<AdminEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let result = try await self.run(command)
+                    for line in Self.splitIntoLines(result.stdout) {
+                        continuation.yield(.stdoutLine(line))
+                    }
+                    for line in Self.splitIntoLines(result.stderr) {
+                        continuation.yield(.stderrLine(line))
+                    }
+                    continuation.yield(.exit(result.exitCode))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
     @discardableResult
     func renameSession(_ id: SessionId, to title: String) async throws -> HermesAdminResult {
         // `--` separator so a title or id starting with `-` isn't interpreted
@@ -37,6 +69,15 @@ public extension HermesAdminRunning {
     @discardableResult
     func deleteSession(_ id: SessionId) async throws -> HermesAdminResult {
         try await run(HermesAdminCommand(arguments: ["sessions", "delete", "--yes", "--", id]))
+    }
+
+    static func splitIntoLines(_ text: String) -> [String] {
+        guard !text.isEmpty else { return [] }
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if text.hasSuffix("\n"), lines.last == "" {
+            lines.removeLast()
+        }
+        return lines
     }
 }
 
@@ -92,6 +133,54 @@ public struct LocalHermesAdminRunner: HermesAdminRunning {
             stderr: String(decoding: stderrData, as: UTF8.self)
         )
     }
+
+    public func runStream(_ command: HermesAdminCommand) -> AsyncThrowingStream<AdminEvent, Error> {
+        let hermesPath = hermesPath
+        return AsyncThrowingStream { continuation in
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: hermesPath)
+            process.arguments = hermesPath == "/usr/bin/env" ? ["hermes"] + command.arguments : command.arguments
+            process.environment = command.environment.merging(ProcessInfo.processInfo.environment) { local, _ in local }
+
+            let stdoutPipe = Pipe()
+            let stderrPipe = Pipe()
+            process.standardOutput = stdoutPipe
+            process.standardError = stderrPipe
+
+            let stdoutReader = AdminLineReader(handle: stdoutPipe.fileHandleForReading, label: "stdout") { line in
+                continuation.yield(.stdoutLine(line))
+            }
+            let stderrReader = AdminLineReader(handle: stderrPipe.fileHandleForReading, label: "stderr") { line in
+                continuation.yield(.stderrLine(line))
+            }
+
+            process.terminationHandler = { proc in
+                // Drain any data still queued on the readers (and the trailing
+                // partial line) before announcing exit, so consumers see all
+                // output before `.exit`.
+                stdoutReader.finish()
+                stderrReader.finish()
+                continuation.yield(.exit(proc.terminationStatus))
+                continuation.finish()
+            }
+
+            continuation.onTermination = { _ in
+                if process.isRunning {
+                    process.terminate()
+                }
+            }
+
+            do {
+                try process.run()
+            } catch {
+                continuation.finish(throwing: error)
+                return
+            }
+
+            stdoutReader.start()
+            stderrReader.start()
+        }
+    }
 }
 
 private final class ProcessOutputReader: @unchecked Sendable {
@@ -103,6 +192,72 @@ private final class ProcessOutputReader: @unchecked Sendable {
 
     func readToEnd() -> Data {
         handle.readDataToEndOfFile()
+    }
+}
+
+/// Line-buffered reader over a `FileHandle`. The `readabilityHandler` drains
+/// `availableData` on Foundation's source queue; we then hop onto a dedicated
+/// serial queue so newline splitting and continuation yields are serialised
+/// per stream. `finish()` is called synchronously from the process's
+/// termination handler — it tears down the source, reads any trailing buffered
+/// bytes, and flushes the partial line, guaranteeing all output is emitted
+/// before `.exit`.
+final class AdminLineReader: @unchecked Sendable {
+    private let handle: FileHandle
+    private let onLine: (String) -> Void
+    private let queue: DispatchQueue
+    private var buffer = Data()
+    private var finished = false
+
+    init(handle: FileHandle, label: String, onLine: @escaping (String) -> Void) {
+        self.handle = handle
+        self.onLine = onLine
+        self.queue = DispatchQueue(label: "com.talaria.HermesKit.AdminLineReader.\(label)")
+    }
+
+    func start() {
+        handle.readabilityHandler = { [weak self] h in
+            let data = h.availableData
+            guard let self else { return }
+            if data.isEmpty {
+                self.queue.async {
+                    self.handle.readabilityHandler = nil
+                }
+                return
+            }
+            self.queue.async {
+                self.append(data)
+            }
+        }
+    }
+
+    func finish() {
+        queue.sync {
+            guard !finished else { return }
+            handle.readabilityHandler = nil
+            let trailing = handle.readDataToEndOfFile()
+            if !trailing.isEmpty {
+                append(trailing)
+            }
+            if !buffer.isEmpty {
+                onLine(String(decoding: buffer, as: UTF8.self))
+                buffer.removeAll()
+            }
+            finished = true
+        }
+    }
+
+    private func append(_ data: Data) {
+        buffer.append(data)
+        while let nl = buffer.firstIndex(of: 0x0A) {
+            var end = nl
+            if end > buffer.startIndex, buffer[end - 1] == 0x0D {
+                end -= 1
+            }
+            let line = buffer.subdata(in: buffer.startIndex..<end)
+            onLine(String(decoding: line, as: UTF8.self))
+            buffer.removeSubrange(buffer.startIndex...nl)
+        }
     }
 }
 #endif

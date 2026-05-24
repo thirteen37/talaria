@@ -214,7 +214,15 @@ public actor RemoteSnapshot {
         let destination = profile.user.map { "\($0)@\(host)" } ?? host
         arguments.append(destination)
 
-        let batch = Self.sftpGetCommand(remoteTmp: remoteTmp, localPath: localURL.path) + "\n"
+        // Download to a sibling tmp file then atomically rename, so any
+        // SessionsBrowser query still holding an open handle to the old
+        // state.db keeps reading the previous inode instead of tripping on
+        // torn pages mid-transfer. The rename is on the same filesystem
+        // (same parent directory) so it's truly atomic.
+        let tmpURL = localURL.appendingPathExtension("downloading-\(UUID().uuidString)")
+        try? FileManager.default.removeItem(at: tmpURL)
+
+        let batch = Self.sftpGetCommand(remoteTmp: remoteTmp, localPath: tmpURL.path) + "\n"
         let stdin = Data(batch.utf8)
 
         let result = try await OneShotProcess.run(
@@ -224,14 +232,34 @@ public actor RemoteSnapshot {
             timeout: 60
         )
         if result.timedOut {
+            try? FileManager.default.removeItem(at: tmpURL)
             throw RemoteSnapshotError.sshFailed(.commandTimeout("sftp get timed out after 60s"))
         }
         if result.exitCode != 0 {
+            try? FileManager.default.removeItem(at: tmpURL)
             let stderr = result.stderr.isEmpty ? result.stdout : result.stderr
             throw RemoteSnapshotError.sftpFailed(stderr)
         }
-        guard FileManager.default.fileExists(atPath: localURL.path) else {
-            throw RemoteSnapshotError.sftpFailed("sftp succeeded but local file is missing at \(localURL.path)")
+        guard FileManager.default.fileExists(atPath: tmpURL.path) else {
+            throw RemoteSnapshotError.sftpFailed("sftp succeeded but local file is missing at \(tmpURL.path)")
+        }
+        do {
+            if FileManager.default.fileExists(atPath: localURL.path) {
+                // `replaceItemAt` is atomic on the same filesystem, but it
+                // requires the destination to *already* exist (otherwise it
+                // throws "file doesn't exist"). For the steady-state refresh
+                // path this is what we want — the open SQLite handle keeps
+                // reading the old inode while the swap happens.
+                _ = try FileManager.default.replaceItemAt(localURL, withItemAt: tmpURL)
+            } else {
+                // First refresh for a profile, or after the cache dir was
+                // cleared: there's nothing to replace. A plain rename installs
+                // the snapshot. Same-directory rename is still atomic.
+                try FileManager.default.moveItem(at: tmpURL, to: localURL)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: tmpURL)
+            throw RemoteSnapshotError.ioFailed("rename \(tmpURL.lastPathComponent) → \(localURL.lastPathComponent) failed: \(error.localizedDescription)")
         }
     }
 

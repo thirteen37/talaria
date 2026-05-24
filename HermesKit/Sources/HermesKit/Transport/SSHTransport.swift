@@ -43,7 +43,9 @@ public final class SSHTransport: Transport, @unchecked Sendable {
         port: Int? = nil,
         identityFile: String? = nil,
         hermesPath: String = "hermes",
-        hermesHome: String? = nil
+        hermesHome: String? = nil,
+        remoteShellMode: RemoteShellMode = .direct,
+        remoteShellPrefix: String? = nil
     ) {
         let arguments = Self.makeArguments(
             host: host,
@@ -51,7 +53,9 @@ public final class SSHTransport: Transport, @unchecked Sendable {
             port: port,
             identityFile: identityFile,
             hermesPath: hermesPath,
-            hermesHome: hermesHome
+            hermesHome: hermesHome,
+            remoteShellMode: remoteShellMode,
+            remoteShellPrefix: remoteShellPrefix
         )
 
         self.processTransport = LocalProcessTransport(
@@ -66,7 +70,9 @@ public final class SSHTransport: Transport, @unchecked Sendable {
         port: Int? = nil,
         identityFile: String? = nil,
         hermesPath: String = "hermes",
-        hermesHome: String? = nil
+        hermesHome: String? = nil,
+        remoteShellMode: RemoteShellMode = .direct,
+        remoteShellPrefix: String? = nil
     ) -> [String] {
         var arguments = ["-T", "-o", "BatchMode=yes"]
         if let port {
@@ -78,10 +84,17 @@ public final class SSHTransport: Transport, @unchecked Sendable {
 
         let destination = user.map { "\($0)@\(host)" } ?? host
         arguments += ["--", destination]
+        var remoteParts: [String] = []
         if let hermesHome {
-            arguments += ["env", shellQuote("HERMES_HOME=\(hermesHome)")]
+            remoteParts += ["env", shellQuote("HERMES_HOME=\(hermesHome)")]
         }
-        arguments += [shellQuote(hermesPath), "acp"]
+        remoteParts += [shellQuote(hermesPath), "acp"]
+        let inner = remoteParts.joined(separator: " ")
+        // Splitting the wrapped command across multiple argv tokens would
+        // break the `<login-shell> -lc '<inner>'` form, since ssh joins
+        // post-destination args with spaces before handing them to the
+        // remote shell. Append as a single argv element.
+        arguments.append(remoteShellMode.wrap(command: inner, customPrefix: remoteShellPrefix))
         return arguments
     }
 

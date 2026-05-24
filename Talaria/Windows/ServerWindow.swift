@@ -127,12 +127,12 @@ struct ServerWindow: View {
             switch browse ?? .sessions {
             case .sessions:
                 SessionsBrowser(store: harness.store, db: harness.db)
-            case .skills: SkillsView()
-            case .tools: ToolsView()
-            case .cron: CronView()
-            case .logs: LogsView()
-            case .doctor: DoctorView()
-            case .updates: UpdatesView()
+            case .skills: SkillsView(runner: harness.store.adminRunner)
+            case .tools: ToolsView(runner: harness.store.adminRunner)
+            case .cron: CronView(runner: harness.store.adminRunner)
+            case .logs: LogsView(runner: harness.store.adminRunner, profile: harness.profile)
+            case .doctor: DoctorView(runner: harness.store.adminRunner, profile: harness.profile)
+            case .updates: UpdatesView(runner: harness.store.adminRunner)
             }
         }
     }
@@ -259,7 +259,9 @@ final class ServerWindowHarness {
                 port: profile.port,
                 identityFile: profile.identityFile,
                 hermesPath: profile.hermesPath,
-                hermesHome: profile.hermesHome
+                hermesHome: profile.hermesHome,
+                remoteShellMode: profile.remoteShellMode,
+                remoteShellPrefix: profile.remoteShellPrefix
             )
             try transport.start()
             return transport

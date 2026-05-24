@@ -1,0 +1,3 @@
+[x] Bash    posix
+[x] Read    universal
+[ ] Edit    universal

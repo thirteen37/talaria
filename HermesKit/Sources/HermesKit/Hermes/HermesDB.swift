@@ -46,9 +46,18 @@ public struct HermesDBConfiguration: Equatable, Sendable {
     }
 }
 
-public enum HermesDBError: Error, Equatable, Sendable {
+public enum HermesDBError: Error, Equatable, Sendable, LocalizedError {
     case openFailed(String)
     case queryFailed(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .openFailed(let message):
+            return "Couldn't open Hermes database: \(message)"
+        case .queryFailed(let message):
+            return "Hermes database query failed: \(message)"
+        }
+    }
 }
 
 public enum HermesDBSortOrder: Sendable, Hashable {
