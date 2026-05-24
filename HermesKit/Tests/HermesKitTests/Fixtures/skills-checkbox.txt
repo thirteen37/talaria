@@ -1,0 +1,3 @@
+[x] commit-push  ~/.hermes/skills/commit-push
+[ ] cr           ~/.hermes/skills/cr
+[x] review       ~/.hermes/skills/review

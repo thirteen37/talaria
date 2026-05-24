@@ -39,6 +39,7 @@
 		C214FD4CCCF298E8F06FBB11 /* ToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3EDBB9C99D2FF50800A31BE /* ToolsView.swift */; };
 		C6CD91309172B4FADFB06592 /* HermesKit in Frameworks */ = {isa = PBXBuildFile; productRef = BBB6C95B2C73AA1B6DB0B78B /* HermesKit */; };
 		D8FEB4067CD793B27680FBF0 /* ProfileEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D65AF64BE04BFB6D54B5775 /* ProfileEditor.swift */; };
+		FDA938862AD8209C8779D721 /* ManageHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = F71BFC25850A646580866C0D /* ManageHarness.swift */; };
 		FF4B12C0890FE3A218309E50 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CA01C5F2F7904E83DB29961 /* ChatView.swift */; };
 /* End PBXBuildFile section */
 
@@ -77,6 +78,7 @@
 		EBD51D628CE76D533C526BAA /* PathAwareHermesAdminRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathAwareHermesAdminRunner.swift; sourceTree = "<group>"; };
 		EC599A81E82D875768DD55B4 /* TranscriptRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptRow.swift; sourceTree = "<group>"; };
 		F60C409BF8E2169D2D41DAEE /* HermesKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = HermesKit; path = HermesKit; sourceTree = SOURCE_ROOT; };
+		F71BFC25850A646580866C0D /* ManageHarness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ManageHarness.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -137,6 +139,7 @@
 				451D8EBE2DA75CD69C94FFD8 /* CronView.swift */,
 				A30DFD8DFB5E048EC77638CD /* DoctorView.swift */,
 				A12A6961B7D8E937263627BB /* LogsView.swift */,
+				F71BFC25850A646580866C0D /* ManageHarness.swift */,
 				6E5FD3271C03262E8A67B725 /* SkillsView.swift */,
 				E3EDBB9C99D2FF50800A31BE /* ToolsView.swift */,
 				3BE3C2E6EB6E8620978EE451 /* UpdatesView.swift */,
@@ -275,6 +278,7 @@
 				4E7061CE24B864B40FE49C0F /* DoctorView.swift in Sources */,
 				1B6C2A65741D37BBCD7904E7 /* LoginShellPATHResolver.swift in Sources */,
 				509BA0FE78675098B5B350C5 /* LogsView.swift in Sources */,
+				FDA938862AD8209C8779D721 /* ManageHarness.swift in Sources */,
 				412453BCEDDA513AC77AECD1 /* Markdown.swift in Sources */,
 				9D82FB6C34ACDFFB00A5AF5C /* PathAwareHermesAdminRunner.swift in Sources */,
 				1964C2ACA58980B5A5A68B49 /* PermissionPrompt.swift in Sources */,

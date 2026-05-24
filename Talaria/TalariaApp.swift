@@ -15,7 +15,11 @@ struct TalariaApp: App {
                     recents.record(profileId)
                 }
         } defaultValue: {
-            ProfileDirectory.localProfileID
+            // Last-opened profile wins on launch. `RecentServers.init` reads
+            // UserDefaults synchronously, so the first window opened on app
+            // launch sees the user's prior session's choice instead of
+            // always landing on the bundled local profile.
+            recents.ids.first ?? ProfileDirectory.localProfileID
         }
         .commands {
             ServerCommands(directory: directory, recents: recents)

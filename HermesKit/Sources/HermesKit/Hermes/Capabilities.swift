@@ -22,6 +22,13 @@ public struct CapabilityTable: Sendable {
         return version >= required
     }
 
+    /// Uniform `has(_:in:)` query for view-level gating. Defers to
+    /// `supports(_:version:)`; named to read fluently at call sites
+    /// (`if capabilities.has(.cronCRUD, in: version) { ... }`).
+    public func has(_ capability: HermesCapability, in version: HermesVersion?) -> Bool {
+        supports(capability, version: version)
+    }
+
     public static let defaults: [HermesCapability: HermesVersion] = [
         .acp: HermesVersion(major: 0, minor: 0, patch: 0),
         .permissions: HermesVersion(major: 0, minor: 0, patch: 0),
