@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		05373FFD890DF132B906065E /* SkillsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E5FD3271C03262E8A67B725 /* SkillsView.swift */; };
+		0ABDCA69A2B9FF88CA82E91A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B71A6200C3475A1788F447EE /* Assets.xcassets */; };
 		1964C2ACA58980B5A5A68B49 /* PermissionPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748E28FC6797F351A6EBB220 /* PermissionPrompt.swift */; };
 		1B6C2A65741D37BBCD7904E7 /* LoginShellPATHResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43E8AD585C9C96142F44663E /* LoginShellPATHResolver.swift */; };
 		1C8FCA7408B8AACE039E5CA0 /* RecentServers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F61968C9D6A00AA0704AE7B /* RecentServers.swift */; };
@@ -65,6 +66,7 @@
 		A12A6961B7D8E937263627BB /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
 		A30DFD8DFB5E048EC77638CD /* DoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoctorView.swift; sourceTree = "<group>"; };
 		A9796E1F868CE6779773DB1A /* SettingsScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScene.swift; sourceTree = "<group>"; };
+		B71A6200C3475A1788F447EE /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C21784B6CC62C9E498749A73 /* SessionsBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsBrowser.swift; sourceTree = "<group>"; };
 		C3D2C3E35C2AD0E82789D5C9 /* ReasoningPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReasoningPanel.swift; sourceTree = "<group>"; };
 		C92A4408751CCA22446EA7AE /* ProfileDirectory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileDirectory.swift; sourceTree = "<group>"; };
@@ -186,6 +188,7 @@
 		DE125BC2E9E0D4673B61BFF7 /* Talaria */ = {
 			isa = PBXGroup;
 			children = (
+				B71A6200C3475A1788F447EE /* Assets.xcassets */,
 				812946B922D766AFF070E868 /* TalariaApp.swift */,
 				0011A042DC786A6D357F8B2B /* Chat */,
 				562A82B7D5D13781AE7BC1B4 /* Manage */,
@@ -214,6 +217,7 @@
 			buildConfigurationList = 6FA2862A2994464CF29E360F /* Build configuration list for PBXNativeTarget "Talaria" */;
 			buildPhases = (
 				0909E99EF4BBD40F434D1AB5 /* Sources */,
+				071B8062BEC13B6ABCEB136A /* Resources */,
 				E5E6E21F33FBFD3645A204F9 /* Frameworks */,
 			);
 			buildRules = (
@@ -263,6 +267,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		071B8062BEC13B6ABCEB136A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0ABDCA69A2B9FF88CA82E91A /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		0909E99EF4BBD40F434D1AB5 /* Sources */ = {
