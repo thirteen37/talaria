@@ -1,14 +1,23 @@
 import Foundation
 
 public struct UpdateStatus: Sendable, Equatable {
-    public let current: HermesVersion
+    /// Nil when the underlying `hermes update --check` output doesn't include
+    /// a semver (e.g. the source-install build reports "N commits behind
+    /// origin/main" instead of a version delta). The UI falls back to
+    /// `detail` in that case.
+    public let current: HermesVersion?
     public let latest: HermesVersion?
     public let available: Bool
+    /// Human-readable freshness phrase for non-semver builds — e.g.
+    /// "122 commits behind origin/main". Surfaces in the status banner
+    /// when a version comparison isn't available.
+    public let detail: String?
 
-    public init(current: HermesVersion, latest: HermesVersion?, available: Bool) {
+    public init(current: HermesVersion?, latest: HermesVersion?, available: Bool, detail: String? = nil) {
         self.current = current
         self.latest = latest
         self.available = available
+        self.detail = detail
     }
 }
 
@@ -35,7 +44,12 @@ public enum HermesUpdates {
         let result = try await runner.run(HermesAdminCommand(arguments: ["update", "--check"]))
         if result.exitCode != 0 {
             let stderr = result.stderr.lowercased()
-            if stderr.contains("unknown command") || stderr.contains("no such") {
+            // Tightened from a bare `"no such"` so a PATH miss like `env:
+            // hermes: No such file or directory` is reported as the runtime
+            // failure it is, not as "this hermes version doesn't support it".
+            if stderr.contains("unknown command")
+                || stderr.contains("no such command")
+                || stderr.contains("no such subcommand") {
                 throw HermesUpdatesError.commandUnavailable(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
             }
             // Some installers exit non-zero only on "update available". Try to
@@ -57,6 +71,9 @@ public enum HermesUpdates {
     ///   * `current: 1.2.3\nlatest: 1.3.0`
     ///   * `Up to date (1.2.3)`
     ///   * `Update available: 1.2.3 → 1.3.0`
+    ///   * `Update available: N commits behind origin/main.` — what
+    ///     source-installed hermes builds actually emit. No semver is
+    ///     present; the status carries a `detail` string instead.
     public static func parse(_ text: String) -> UpdateStatus? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -66,13 +83,25 @@ public enum HermesUpdates {
         let versions = findVersions(in: trimmed)
 
         if lower.contains("up to date") || lower.contains("up-to-date") {
-            guard let current = versions.first else { return nil }
-            return UpdateStatus(current: current, latest: current, available: false)
+            // Allow the source-install up-to-date message too: it has no
+            // version number but the freshness verdict is still meaningful.
+            // For the descriptor we want the *complement* to the headline
+            // ("Up to date"), not a repeat of it — `with origin/main` etc.
+            let current = versions.first
+            let detail: String? = current == nil ? extractUpToDateQualifier(in: trimmed) : nil
+            return UpdateStatus(current: current, latest: current, available: false, detail: detail)
         }
 
         if lower.contains("update available") || lower.contains("→") || lower.contains("->") {
-            guard versions.count >= 2 else { return nil }
-            return UpdateStatus(current: versions[0], latest: versions[1], available: true)
+            if versions.count >= 2 {
+                return UpdateStatus(current: versions[0], latest: versions[1], available: true)
+            }
+            // No semver in the "update available" notice — fall back to the
+            // commits-behind phrasing. Extract the most informative line so
+            // the banner doesn't show the "Run 'hermes update' to install"
+            // footer or unrelated chatter.
+            let detail = primaryAvailabilityLine(in: trimmed) ?? trimmed
+            return UpdateStatus(current: nil, latest: nil, available: true, detail: detail)
         }
 
         // Generic "current X, latest Y" form
@@ -87,6 +116,45 @@ public enum HermesUpdates {
             return UpdateStatus(current: versions[0], latest: versions[0], available: false)
         }
         return nil
+    }
+
+    /// For an "up to date" notice, returns the part of the line *after* the
+    /// "up to date"/"up-to-date" verdict — e.g. given
+    /// `"⚕ Up to date with origin/main."` we return `"with origin/main"`.
+    /// Returns nil when the parse can't isolate a meaningful descriptor;
+    /// the caller then leaves `detail` unset so the banner doesn't echo
+    /// the headline back to itself.
+    private static func extractUpToDateQualifier(in text: String) -> String? {
+        let line = (text.split(separator: "\n").map(String.init)
+            .first(where: { $0.localizedCaseInsensitiveContains("up to date") || $0.localizedCaseInsensitiveContains("up-to-date") })
+            ?? text)
+            .trimmingCharacters(in: .whitespaces)
+        let trailingTrim = CharacterSet(charactersIn: ".!\t ")
+        for phrase in ["up to date", "up-to-date"] {
+            guard let range = line.range(of: phrase, options: .caseInsensitive) else { continue }
+            let tail = line[range.upperBound...].trimmingCharacters(in: trailingTrim)
+            if !tail.isEmpty {
+                return tail
+            }
+        }
+        return nil
+    }
+
+    /// Pick the shortest line that contains "update available" (case-
+    /// insensitive). Hermes' source-install notice is multi-line with a
+    /// "Run 'hermes update' to install." footer; we want only the headline.
+    /// Strip a leading Rich glyph like `⚕`/`→` for a cleaner UI string.
+    private static func primaryAvailabilityLine(in text: String) -> String? {
+        let candidates = text.split(separator: "\n").map { String($0).trimmingCharacters(in: .whitespaces) }
+        guard let line = candidates.first(where: { $0.lowercased().contains("update available") }) else {
+            return nil
+        }
+        guard let first = line.unicodeScalars.first else { return line }
+        let isGlyph = !CharacterSet.letters.contains(first) && !CharacterSet.decimalDigits.contains(first)
+        if isGlyph {
+            return String(line.unicodeScalars.dropFirst()).trimmingCharacters(in: .whitespaces)
+        }
+        return line
     }
 
     private static func findVersions(in text: String) -> [HermesVersion] {

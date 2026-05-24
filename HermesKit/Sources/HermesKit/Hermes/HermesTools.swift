@@ -47,6 +47,10 @@ public enum HermesTools {
     }
 
     /// Tolerant parser. Supported row shapes (per line):
+    ///   * `  ✓ enabled  name  emoji description` — real hermes output;
+    ///     ✓/✗ is the canonical toggle, the word "enabled"/"disabled" that
+    ///     follows it is redundant and dropped to avoid being mistaken for
+    ///     the name.
     ///   * `[x] name platform`
     ///   * `name platform enabled`
     ///   * `name enabled`
@@ -57,12 +61,44 @@ public enum HermesTools {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.isEmpty { continue }
             if isHeaderLine(line) { continue }
+            if isCategoryHeader(line) { continue }
             if let row = parseLine(line) { rows.append(row) }
         }
         return rows
     }
 
+    /// `Built-in toolsets (cli):` and similar group banners precede the
+    /// rows. They end in a colon and don't contain the ✓/✗ bullet, so
+    /// distinguishing them from data rows is cheap.
+    private static func isCategoryHeader(_ line: String) -> Bool {
+        guard line.hasSuffix(":") else { return false }
+        return !line.contains("✓") && !line.contains("✗")
+    }
+
     private static func parseLine(_ line: String) -> ToolRow? {
+        // Bullet form: `✓ enabled  name  emoji description` (real hermes).
+        if let bulletChar = line.unicodeScalars.first,
+           bulletChar == "\u{2713}" || bulletChar == "\u{2717}" {
+            let enabled = bulletChar == "\u{2713}"
+            let remainder = String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
+            // Split on runs of 2+ spaces so the trailing "🔍 Web Search &
+            // Scraping" stays a single field — `HermesCron.splitFields` does
+            // exactly this rather than the whitespace-greedy split that the
+            // existing `HermesSkills.splitFields` performs.
+            var fields = HermesCron.splitFields(remainder)
+            // Drop the redundant "enabled"/"disabled" word. Hermes always
+            // emits it after the bullet, so without this the name column
+            // would consistently read "enabled" for every row.
+            if let head = fields.first?.lowercased(),
+               head == "enabled" || head == "disabled" {
+                fields.removeFirst()
+            }
+            guard let name = fields.first, !name.isEmpty else { return nil }
+            let platform: String? = fields.count >= 2
+                ? fields[1...].joined(separator: " ")
+                : nil
+            return ToolRow(name: name, platform: platform, enabled: enabled)
+        }
         if line.hasPrefix("[") {
             let scanner = Scanner(string: line)
             scanner.charactersToBeSkipped = nil
@@ -112,7 +148,12 @@ public enum HermesTools {
     static func ensureSuccess(_ result: HermesAdminResult) throws {
         guard result.exitCode != 0 else { return }
         let stderr = result.stderr.lowercased()
-        if stderr.contains("unknown command") || stderr.contains("no such") {
+        // Match argparse/Click-style "command not in this hermes" phrasings but
+        // not `env: hermes: No such file or directory` — the bare `"no such"`
+        // substring used to swallow that, surfacing it as "version too old".
+        if stderr.contains("unknown command")
+            || stderr.contains("no such command")
+            || stderr.contains("no such subcommand") {
             throw HermesToolsError.commandUnavailable(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         throw HermesToolsError.commandFailed(exitCode: result.exitCode, stderr: result.stderr)

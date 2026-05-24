@@ -37,6 +37,53 @@ struct SessionManagerTests {
     }
 
     @Test
+    func notificationsBufferedBeforeSubscriberAttachedAreReplayed() async throws {
+        // Regression: when SessionsStore resumes a session, hermes streams
+        // the historical transcript as `session/update` notifications during
+        // `session/load`. The chat view model subscribes only *after* the
+        // load completes, so without a replay buffer those notifications
+        // were fanned out to zero subscribers and dropped — the resumed
+        // session showed up empty.
+        let scripter = TransportScripter()
+        let manager = SessionManager { await scripter.next() }
+
+        let openTask = Task { try await manager.openExisting(id: "sess", cwd: "/tmp") }
+        try await scripter.respondToInitialize()
+        try await scripter.respondToLoadSession()
+        let state = try await openTask.value
+
+        // Push two historical updates before any subscriber attaches.
+        let first = SessionNotification(
+            sessionId: state.id,
+            update: .userMessageChunk(Content(content: .text("hi from past")))
+        )
+        let second = SessionNotification(
+            sessionId: state.id,
+            update: .agentMessageChunk(Content(content: .text("hello from past")))
+        )
+        let transports = await scripter.transports
+        let transport = try #require(transports.first)
+        transport.pushInbound(try JSONRPCFramer.encode(
+            JSONRPCNotification(method: ACPMethod.sessionUpdate, params: first)
+        ))
+        transport.pushInbound(try JSONRPCFramer.encode(
+            JSONRPCNotification(method: ACPMethod.sessionUpdate, params: second)
+        ))
+        // Let the pump deliver them to the (empty) subscriber set.
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        // Attach a late subscriber and expect both buffered notifications
+        // in send order.
+        let stream = await manager.notifications(for: state.id)
+        var iterator = stream.makeAsyncIterator()
+        let receivedFirst = await iterator.next()
+        let receivedSecond = await iterator.next()
+
+        #expect(receivedFirst == .sessionUpdate(first))
+        #expect(receivedSecond == .sessionUpdate(second))
+    }
+
+    @Test
     func notificationsFanOutToMultipleSubscribers() async throws {
         let scripter = TransportScripter()
         let manager = SessionManager { await scripter.next() }

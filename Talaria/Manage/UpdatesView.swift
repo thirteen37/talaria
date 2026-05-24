@@ -55,6 +55,7 @@ final class UpdatesHarness {
         applyTask = Task { [weak self] in
             defer { Task { @MainActor in self?.isApplying = false } }
             do {
+                var exit: Int32?
                 for try await event in stream {
                     guard let self else { return }
                     switch event {
@@ -62,7 +63,16 @@ final class UpdatesHarness {
                         self.appendLog(line)
                     case .exit(let code):
                         self.applyExitCode = code
+                        exit = code
                     }
+                }
+                // Refresh the status banner once the update applies cleanly
+                // so the "Install update" button disables itself and the
+                // "X commits behind"/version subtitle reflects post-update
+                // reality. On non-zero exits the previous status is still
+                // accurate, so leave it alone.
+                if exit == 0 {
+                    await self?.check()
                 }
             } catch is CancellationError {
                 // User tapped Cancel — normal exit path, no banner.
@@ -160,16 +170,10 @@ struct UpdatesView: View {
                 Image(systemName: status.available ? "arrow.down.circle.fill" : "checkmark.circle.fill")
                     .foregroundStyle(status.available ? Color.accentColor : .green)
                 VStack(alignment: .leading, spacing: 2) {
-                    if status.available, let latest = status.latest {
-                        Text("Update available")
-                            .font(.headline)
-                        Text("\(formatVersion(status.current)) → \(formatVersion(latest))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Up to date")
-                            .font(.headline)
-                        Text("Current \(formatVersion(status.current))")
+                    Text(status.available ? "Update available" : "Up to date")
+                        .font(.headline)
+                    if let subtitle = subtitle(for: status) {
+                        Text(subtitle)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -180,6 +184,19 @@ struct UpdatesView: View {
             .padding(.vertical, 8)
             .background((status.available ? Color.accentColor : Color.green).opacity(0.12))
         }
+    }
+
+    /// Prefer the semver delta when both versions are known; otherwise
+    /// surface the human-readable detail string (e.g. "122 commits behind
+    /// origin/main") that the source-install update notice provides.
+    private func subtitle(for status: UpdateStatus) -> String? {
+        if status.available, let current = status.current, let latest = status.latest {
+            return "\(formatVersion(current)) → \(formatVersion(latest))"
+        }
+        if let current = status.current, !status.available {
+            return "Current \(formatVersion(current))"
+        }
+        return status.detail
     }
 
     @ViewBuilder

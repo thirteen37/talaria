@@ -54,6 +54,13 @@ public enum HermesDoctor {
     }
 
     /// Best-effort section splitter. Section heuristics (any of):
+    ///   * `◆ Title` — the Rich diamond used by real `hermes doctor`. We
+    ///     deliberately don't accept `+`/`*` as alternative bullets: any
+    ///     future doctor output that includes a markdown bullet list inside
+    ///     a section body (`* config-key: value`) would otherwise be
+    ///     mis-split into one section per item. If a future hermes build
+    ///     emits a different bullet for headers, add it here under the same
+    ///     "leading glyph is structurally a header, never a list item" rule.
     ///   * `== Title ==` markdown-style headers
     ///   * `--- Title ---` separators
     ///   * Blank line followed by an `ALL CAPS:` or `Title-Cased:` line
@@ -78,6 +85,11 @@ public enum HermesDoctor {
 
         for (index, line) in lines.enumerated() {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+            // Drop the box-drawing banner Hermes prints at the top
+            // (`┌──┐`, `│ 🩺 Hermes Doctor │`, `└──┘`). It looks like a
+            // section but contains no content — keeping it would surface as
+            // a confusing single-line "🩺 Hermes Doctor" section.
+            if isBoxDrawingNoise(trimmed) { continue }
             if let header = matchHeader(trimmed) {
                 flush()
                 currentTitle = header
@@ -101,10 +113,55 @@ public enum HermesDoctor {
         if !sawAnyHeader, sections.count == 1 {
             return [DoctorReport.Section(id: 0, title: "Report", body: sections[0].body)]
         }
+        // Strip the synthetic pre-header "Summary" *only* when its body
+        // looks like banner chrome (no alphanumeric content survives once
+        // box-drawing and decorative glyphs are stripped). Legitimate
+        // preamble like "Some preamble" before the first real header
+        // should still surface — see HermesDoctorTests.
+        if sawAnyHeader,
+           let first = sections.first,
+           first.title == "Summary",
+           isDecorativeBody(first.body) {
+            sections.removeFirst()
+            sections = sections.enumerated().map { idx, s in
+                DoctorReport.Section(id: idx, title: s.title, body: s.body)
+            }
+        }
         return sections
     }
 
+    /// A body is considered decorative if removing box-drawing glyphs and
+    /// whitespace leaves only the banner phrase (or nothing). Used to
+    /// distinguish "🩺 Hermes Doctor" banner pre-header garbage from real
+    /// pre-header content the user might still want to see.
+    private static func isDecorativeBody(_ body: String) -> Bool {
+        let stripped = body.unicodeScalars.filter { scalar in
+            // Strip box-drawing range.
+            if scalar.value >= 0x2500 && scalar.value <= 0x257F { return false }
+            // Strip whitespace.
+            if CharacterSet.whitespacesAndNewlines.contains(scalar) { return false }
+            return true
+        }
+        let text = String(String.UnicodeScalarView(stripped))
+        if text.isEmpty { return true }
+        // Tolerate the standard banner phrase plus its emoji.
+        let normalized = text
+            .replacingOccurrences(of: "🩺", with: "")
+            .lowercased()
+        return normalized == "hermesdoctor"
+    }
+
     private static func matchHeader(_ line: String) -> String? {
+        // ◆ Title — Rich's diamond bullet, what real hermes uses. Restricted
+        // to this single glyph on purpose; see the `parseSections` doc
+        // comment for the false-positive trap with `+`/`*`.
+        if let first = line.unicodeScalars.first, first == "\u{25C6}" {
+            let rest = String(line.unicodeScalars.dropFirst())
+            let title = rest.trimmingCharacters(in: .whitespaces)
+            if !title.isEmpty, title.count <= 80 {
+                return title
+            }
+        }
         // == Title == or === Title ===
         if line.hasPrefix("=="), line.hasSuffix("==") {
             let inner = line.drop(while: { $0 == "=" }).reversed().drop(while: { $0 == "=" }).reversed()
@@ -118,6 +175,26 @@ public enum HermesDoctor {
             if !title.isEmpty { return title }
         }
         return nil
+    }
+
+    /// Lines made entirely of Rich box-drawing chars (and whitespace) are
+    /// decorative chrome around the banner — `┌─┐`, `└─┘`, the long
+    /// `────` summary divider. Strip them so they don't clutter a section
+    /// body or get mistaken for content.
+    private static func isBoxDrawingNoise(_ line: String) -> Bool {
+        if line.isEmpty { return false }
+        return line.unicodeScalars.allSatisfy { scalar in
+            // U+2500..U+257F is the Box Drawing block; the `│` content rows
+            // would normally trip this but the banner only contains `─` and
+            // corners, no text. Banner lines that contain text like
+            // `│ 🩺 Hermes Doctor │` fail this all-satisfy check because of
+            // the emoji + letters, so they fall through and get treated as
+            // regular body content — which is fine since they sit before
+            // the first `◆` header and merge into the (eventually-flushed)
+            // pre-header buffer that the "Summary" fallback discards.
+            (scalar.value >= 0x2500 && scalar.value <= 0x257F) ||
+                scalar == " " || scalar == "\t"
+        }
     }
 
     private static func isStandaloneCapsHeader(_ line: String, previous: String?) -> Bool {

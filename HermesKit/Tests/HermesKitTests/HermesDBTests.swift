@@ -142,6 +142,49 @@ struct HermesDBTests {
     }
 
     @Test
+    func uriEscapedPathEscapesPercentFirst() {
+        // SQLite percent-decodes the URI path with SQLITE_OPEN_URI; a literal
+        // `%` in the directory name (e.g. `/Users/foo/100%off/.hermes`) must
+        // be percent-encoded itself or SQLite reads `%of` as a malformed
+        // escape and fails to open the file.
+        let escaped = HermesDB.uriEscapedPath("/Users/foo/100%off/data.db")
+        #expect(escaped == "/Users/foo/100%25off/data.db")
+        // And the encoding must not double-escape: a path with a `?` shows
+        // its `%3F` escape with the `%` itself intact, not `%253F`.
+        let withQuestion = HermesDB.uriEscapedPath("/tmp/why?.db")
+        #expect(withQuestion == "/tmp/why%3F.db")
+        let withSpace = HermesDB.uriEscapedPath("/tmp/has space.db")
+        #expect(withSpace == "/tmp/has%20space.db")
+    }
+
+    @Test
+    func openSucceedsForPathContainingPercent() async throws {
+        // End-to-end: a percent in the parent directory must survive both
+        // our escaping and SQLite's URI decoding round-trip.
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("hermes-uri-\(UUID().uuidString)-100%off", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let dbURL = dir.appendingPathComponent("state.db")
+        // Create a real (if minimal) SQLite file at the % path so the
+        // read-only open has something valid to attach to.
+        var seed: OpaquePointer?
+        let seedRc = sqlite3_open_v2(dbURL.path, &seed, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil)
+        #expect(seedRc == SQLITE_OK)
+        if let seed {
+            _ = sqlite3_exec(seed, "CREATE TABLE sessions (id TEXT, title TEXT, started_at REAL NOT NULL, ended_at REAL);", nil, nil, nil)
+            sqlite3_close_v2(seed)
+        }
+
+        let db = HermesDB(configuration: HermesDBConfiguration(databaseURL: dbURL))
+        defer { Task { await db.close() } }
+        // Reaching the empty-result path proves the URI form opened the
+        // file under the `%`-containing directory.
+        let rows = try await db.listSessions()
+        #expect(rows.isEmpty)
+    }
+
+    @Test
     func openFailsForMissingFile() async throws {
         let missing = FileManager.default.temporaryDirectory
             .appendingPathComponent("hermes-missing-\(UUID().uuidString).db")

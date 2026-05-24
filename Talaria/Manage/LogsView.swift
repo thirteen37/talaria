@@ -85,6 +85,11 @@ final class LogsHarness {
 struct LogsView: View {
     let runner: HermesAdminRunning?
     let profile: ServerProfile
+    /// Owns the live tailer at window scope so the buffered ring of log
+    /// lines survives sidebar navigation. Without this, switching tabs and
+    /// coming back would create a fresh @State-owned harness and the user
+    /// would see an empty view until new lines streamed in.
+    let provider: () -> LogsHarness?
 
     @State private var harness: LogsHarness?
     @State private var autoScroll: Bool = true
@@ -93,7 +98,7 @@ struct LogsView: View {
         Group {
             if let harness {
                 content(harness: harness)
-            } else if profile.hermesHome == nil {
+            } else if resolvedHermesHome == nil {
                 ContentUnavailableView(
                     "Logs path unknown",
                     systemImage: "doc.text.magnifyingglass",
@@ -105,22 +110,41 @@ struct LogsView: View {
         }
         .navigationTitle("Logs")
         .task {
-            if harness == nil, let tailing = makeTailing() {
-                harness = LogsHarness(tailing: tailing)
+            // Pull the persistent harness from the window. Calling on every
+            // appear is cheap — `ensureLogsHarness` returns the existing
+            // instance after the first construction and only kicks off a
+            // tailer task once. We deliberately don't `stop()` on disappear:
+            // letting the tailer keep filling the ring buffer is the whole
+            // point of the move out of @State.
+            if harness == nil {
+                harness = provider()
             }
-            // start() is idempotent — calling it on every appear restarts the
-            // tailer after a backgrounded window / sheet teardown closed it
-            // via onDisappear. Without this the view shows the buffered lines
-            // forever without picking up new ones.
-            harness?.start()
-        }
-        .onDisappear {
-            harness?.stop()
         }
     }
 
-    private func makeTailing() -> HermesLogTailing? {
-        guard let hermesHome = profile.hermesHome, !hermesHome.isEmpty else { return nil }
+    /// Logs root, with sensible defaults so the user doesn't have to set
+    /// `HERMES_HOME` on a vanilla local profile. Hermes itself defaults to
+    /// `~/.hermes` when the env var is unset, so the log tailer should
+    /// follow the same convention; SSH profiles can't be defaulted (the
+    /// remote home directory is unknown) and remain explicit.
+    private var resolvedHermesHome: String? {
+        Self.resolvedHermesHome(profile: profile)
+    }
+
+    static func resolvedHermesHome(profile: ServerProfile) -> String? {
+        if let value = profile.hermesHome, !value.isEmpty { return value }
+        if profile.kind == .local {
+            return (NSHomeDirectory() as NSString).appendingPathComponent(".hermes")
+        }
+        return nil
+    }
+
+    /// Built at window scope so the lazily-created `LogsHarness` outlives
+    /// LogsView instances. Returns nil when the profile has no resolvable
+    /// `HERMES_HOME` — the caller surfaces the "Logs path unknown" empty
+    /// state in that case.
+    static func makeTailing(profile: ServerProfile) -> HermesLogTailing? {
+        guard let hermesHome = resolvedHermesHome(profile: profile) else { return nil }
         #if os(macOS)
         switch profile.kind {
         case .local:

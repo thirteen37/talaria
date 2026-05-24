@@ -95,10 +95,17 @@ public struct RemoteHermesAdminRunner: HermesAdminRunning {
         let destination = profile.user.map { "\($0)@\(host)" } ?? host
         sshArgs += ["--", destination]
 
-        var remoteParts: [String] = []
+        // Always start with `env COLUMNS=400 …`. Rich on the remote falls back
+        // to an 80-col layout under non-interactive ssh, which truncates table
+        // cells (skill names, tool descriptions) into ellipsis-suffixed strings
+        // the parsers can't recover from. Folding COLUMNS into the same env
+        // prefix HERMES_HOME uses keeps the quoting logic in one place.
+        var envAssignments: [String] = ["COLUMNS=400"]
         if let hermesHome = profile.hermesHome, !hermesHome.isEmpty {
-            remoteParts += ["env", SSHTransport.shellQuote("HERMES_HOME=\(hermesHome)")]
+            envAssignments.append("HERMES_HOME=\(hermesHome)")
         }
+        var remoteParts: [String] = ["env"]
+        remoteParts += envAssignments.map { SSHTransport.shellQuote($0) }
         remoteParts.append(SSHTransport.shellQuote(profile.hermesPath))
         remoteParts += command.arguments.map { SSHTransport.shellQuote($0) }
         let inner = remoteParts.joined(separator: " ")
