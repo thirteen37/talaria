@@ -165,9 +165,13 @@ else
 fi
 
 # 8. sign + staple the DMG ----------------------------------------------------
-codesign --sign "Developer ID Application" --timestamp --options=runtime "${DMG_PATH}" || true
-
+# Only sign when we'll notarise — the DMG signature is what notarytool
+# validates. For `--skip-notarize` local dev builds, the unsigned DMG is
+# fine. `set -euo pipefail` is on, so this codesign must succeed when
+# attempted (no `|| true` masking real signing failures).
 if [[ $SKIP_NOTARIZE -eq 0 ]]; then
+    codesign --sign "Developer ID Application" --timestamp --options=runtime "${DMG_PATH}"
+
     log "notarytool submit (DMG)"
     xcrun notarytool submit "${DMG_PATH}" \
         --keychain-profile "${NOTARY_PROFILE}" \

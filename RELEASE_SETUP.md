@@ -52,41 +52,33 @@ For CI (GitHub Actions), the same `.p8`, Key ID, and Issuer ID still need
 to be added as `ASC_API_KEY_BASE64`, `ASC_API_KEY_ID`, `ASC_API_ISSUER_ID`
 secrets — see §4.
 
-## 3. Sparkle ed25519 key pair
+## 3. Sparkle ed25519 key pair — DONE
 
-`Talaria/Info.plist` has `SUPublicEDKey` set to a placeholder. Generate the
-real keypair and replace it.
+The keypair was generated during Sprint 6:
+- **Public key** (`GIBPobenQOcE7P0JhqYaCCObUnscomo3On/yfONLHeU=`) committed
+  to `Talaria/Info.plist:SUPublicEDKey`.
+- **Private key** stored in the login Keychain (item
+  `https://sparkle-project.org`).
 
-1. Build the project once in Xcode so SPM resolves Sparkle.
-2. Locate `generate_keys`:
-   ```sh
-   find ~/Library/Developer/Xcode/DerivedData -name generate_keys -type f
-   ```
-3. Run it:
-   ```sh
-   /path/to/generate_keys
-   ```
-   The first invocation stores the **private key** in your login Keychain
-   (item: `https://sparkle-project.org`) and prints the **public key**
-   as a base64 string.
-4. Paste the public key into `Talaria/Info.plist` under `SUPublicEDKey`,
-   replacing `REPLACE_WITH_SPARKLE_ED25519_PUBLIC_KEY`.
-
-For CI, export the private key once to a file (the `-x` flag writes the
-key out as base64; `-p` would print the **public** key, which is the
-wrong direction):
+To export the private key for the GitHub `SPARKLE_ED25519_PRIVATE_KEY`
+secret (the `-x` flag writes the key as base64 to the path you specify;
+`-p` would print the **public** key, which is the wrong direction):
 
 ```sh
-/path/to/generate_keys -x /tmp/sparkle_priv.key
+SPARKLE_BIN=~/Library/Developer/Xcode/DerivedData/Talaria-*/SourcePackages/artifacts/sparkle/Sparkle/bin
+$SPARKLE_BIN/generate_keys -x /tmp/sparkle_priv.key
 pbcopy < /tmp/sparkle_priv.key
-shred -u /tmp/sparkle_priv.key   # or `rm -P` on macOS
+rm -P /tmp/sparkle_priv.key
 ```
 
-Paste the contents into the `SPARKLE_ED25519_PRIVATE_KEY` GitHub secret
-(in the `release` environment — see §4).
 **This is a long-lived signing key.** If it leaks, attackers can publish
 updates that the app will trust; rotate immediately by generating a new
 pair and shipping an update with the new public key.
+
+If you ever need to regenerate from scratch (lost keychain entry, key
+compromise), `generate_keys` with no args creates a fresh pair and
+prints the new public key — paste that into `SUPublicEDKey` and ship a
+release before the old key is considered trusted by any installed copies.
 
 ## 4. GitHub repo secrets (for `.github/workflows/release.yml`)
 
@@ -100,7 +92,7 @@ Set these in **Settings → Secrets and variables → Actions**:
 | `ASC_API_KEY_BASE64` | `base64 -i ~/.private/AuthKey_<KEYID>.p8 \| pbcopy` |
 | `ASC_API_KEY_ID` | Same Key ID as step 2 |
 | `ASC_API_ISSUER_ID` | Same Issuer ID as step 2 |
-| `SPARKLE_ED25519_PRIVATE_KEY` | Output of `generate_keys -p` |
+| `SPARKLE_ED25519_PRIVATE_KEY` | Output of `generate_keys -x <file>` (the **private** key — `-p` prints the public key, which is wrong here) |
 
 ## 5. GitHub Pages (Sparkle appcast hosting)
 

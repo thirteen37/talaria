@@ -25,6 +25,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history required: scripts/release.sh derives
+          # CURRENT_PROJECT_VERSION from `git rev-list --count HEAD`. With the
+          # default fetch-depth=1 every CI build pins CFBundleVersion=1, which
+          # Sparkle's SUStandardVersionComparator falls back to when short
+          # versions tie — preventing users on older releases from seeing the
+          # update as an upgrade.
+          fetch-depth: 0
 
       - name: Resolve version string
         run: |
