@@ -42,4 +42,18 @@ The six `Talaria/Manage/*View.swift` placeholders are now backed by a real `Herm
 - **Logs** (`HermesLogs`, `LocalLogTailing`, `RemoteLogTailing`): live tail with a tolerant `[ISO] [LEVEL] component: message` parser plus unstructured-line fallback. Local tailer polls `<hermesHome>/logs/*.log` for appended bytes (handles rotation); remote tailer spawns `ssh … tail -F` directly and reuses `AdminLineReader`. The view ring-buffers at 5,000 lines, filters by level + component, supports pause/resume and "Copy visible".
 - **Doctor** (`HermesDoctor`): one-shot `hermes doctor`, with a section splitter that recognises `== Title ==`, `--- Title ---`, and ALL-CAPS standalone headers. "Copy diagnostic bundle" puts the raw report + Talaria version + profile summary on the clipboard.
 - **Updates** (`HermesUpdates`): `update --check` parser tolerates `current X, latest Y`, `Up to date (X)`, `Update available: X → Y`, and `X -> Y`. "Install update" streams `update` apply via `runStream` into a scrolling log view with exit-code summary.
-- **Capability gating**: `CapabilityTable.has(_:in:)` reads more fluently at view call sites — minimum versions are still `0.0.0` placeholders pending Sprint 6's real pinning, so Sprint 5 surfaces feature absence as a banner rather than a crash.
+- **Capability gating**: `CapabilityTable.has(_:in:)` reads more fluently at view call sites. Sprint 5 surfaces feature absence as a banner rather than a crash.
+
+## Sprint 6 — Capability minimums
+
+Sprint 6 added `skillsToggle` and `toolsEnablePerPlatform` to `HermesCapability` and replaced the `0.0.0` placeholders with pins resolved from the Hermes git history:
+
+| Capability | Min Hermes | First tag |
+| --- | --- | --- |
+| `acp` / `permissions` / `diffs` | `0.3.0` | `v2026.3.17` |
+| `cronCRUD` | `0.3.0` | `v2026.3.17` |
+| `skillsToggle` | `0.2.0` | `v2026.3.12` |
+| `toolsEnablePerPlatform` | `0.4.0` | `v2026.3.23` |
+| `updateCheck` | `0.12.0` | `v2026.4.30` |
+
+The Manage views currently do not consume `CapabilityTable.has(_:in:)`; wiring banners into Skills / Tools / Cron / Updates remains open and is tracked in `RELEASE_SETUP.md` §7.

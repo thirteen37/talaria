@@ -35,3 +35,23 @@ Run this script before a v1 release candidate.
     - Button is disabled when no update is available.
 14. **Snapshot invalidation**: with a remote profile open, toggle a skill/tool (admin write) and confirm the SSH snapshot age badge does **not** refresh (skills/tools writes don't touch `state.db`); rename or delete a session and confirm the badge resets.
 15. Open an SSH profile, refresh the remote SQLite snapshot, and confirm the snapshot age badge updates. Repeat steps 8–13 against the remote profile and confirm `SSHTransport.classifyStderr` surfaces "Permission denied" / "Connection timed out" correctly when the host is misconfigured.
+
+## Release artifact verification
+
+Run these against the signed, notarised, stapled build produced by `scripts/release.sh` — **not** a `CODE_SIGNING_ALLOWED=NO` dev build.
+
+16. **Signing assertions** (in a shell):
+    - `codesign --verify --deep --strict --verbose=2 build/export/Talaria.app` exits 0.
+    - `xcrun stapler validate build/export/Talaria.app` reports `The validate action worked!`.
+    - `xcrun stapler validate build/Talaria-<VERSION>.dmg` reports the same.
+    - `spctl -a -vvv -t install build/export/Talaria.app` reports `accepted source=Notarized Developer ID`.
+17. **Gatekeeper first-launch** (on a fresh Mac or a fresh user account):
+    - Download the DMG from the GitHub Release page **via the browser** (not `curl` — Gatekeeper relies on the download quarantine xattr).
+    - Drag `Talaria.app` to `/Applications`.
+    - Launch from Finder (double-click). Confirm no quarantine warning appears.
+18. **Sparkle in-app update** (only if the previous signed build is available):
+    - Install the previous signed build, launch it once so Sparkle stores its profile.
+    - Replace `docs/appcast.xml` to point at the new version.
+    - Re-launch the older build. Confirm Sparkle finds the new release, downloads it, validates the ed25519 signature, and relaunches into the new build.
+    - Trigger manually via **Talaria → Check for Updates…** and confirm the menu item is reachable.
+19. **Version display**: the macOS About panel shows the `MARKETING_VERSION` and build number from `Info.plist`.

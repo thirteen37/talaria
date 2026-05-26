@@ -112,8 +112,14 @@ final class CronHarness {
 
 struct CronView: View {
     let runner: HermesAdminRunning?
+    let hermesVersion: HermesVersion?
 
     @State private var harness: CronHarness?
+
+    init(runner: HermesAdminRunning?, hermesVersion: HermesVersion? = nil) {
+        self.runner = runner
+        self.hermesVersion = hermesVersion
+    }
 
     var body: some View {
         Group {
@@ -149,10 +155,21 @@ struct CronView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar { toolbar(harness: harness) }
-        .manageBanner(
-            harness.cronUnavailable ? "Cron CRUD unavailable in this Hermes version." : harness.lastError,
-            severity: harness.cronUnavailable ? .warning : .error
-        )
+        .manageBanner(bannerMessage(harness: harness), severity: bannerSeverity(harness: harness))
+    }
+
+    /// Banner precedence:
+    /// 1. Hard runtime error from a failed admin call (red).
+    /// 2. Reactive "command unavailable" caught at call time (orange).
+    /// 3. Pre-emptive capability gate from the probed Hermes version (orange).
+    private func bannerMessage(harness: CronHarness) -> String? {
+        if let error = harness.lastError { return error }
+        if harness.cronUnavailable { return "Cron CRUD unavailable in this Hermes version." }
+        return capabilityBanner(.cronCRUD, feature: "Cron CRUD", version: hermesVersion)
+    }
+
+    private func bannerSeverity(harness: CronHarness) -> ManageBanner.Severity {
+        harness.lastError != nil ? .error : .warning
     }
 
     @ViewBuilder

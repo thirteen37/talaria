@@ -6,6 +6,8 @@ public enum HermesCapability: String, CaseIterable, Codable, Sendable {
     case diffs
     case cronCRUD
     case updateCheck
+    case skillsToggle
+    case toolsEnablePerPlatform
 }
 
 public struct CapabilityTable: Sendable {
@@ -29,11 +31,23 @@ public struct CapabilityTable: Sendable {
         supports(capability, version: version)
     }
 
+    /// Default minimum Hermes versions per capability.
+    ///
+    /// Pins are sourced from the Hermes repo's git history mapped against
+    /// the semver in `pyproject.toml` at each calver release tag.
+    /// See `RELEASE_SETUP.md` §6 for the resolution method.
     public static let defaults: [HermesCapability: HermesVersion] = [
-        .acp: HermesVersion(major: 0, minor: 0, patch: 0),
-        .permissions: HermesVersion(major: 0, minor: 0, patch: 0),
-        .diffs: HermesVersion(major: 0, minor: 0, patch: 0),
-        .cronCRUD: HermesVersion(major: 0, minor: 0, patch: 0),
-        .updateCheck: HermesVersion(major: 0, minor: 0, patch: 0),
+        // ACP adapter introduced in PR #1254, first shipped in v2026.3.17.
+        .acp: HermesVersion(major: 0, minor: 3, patch: 0),
+        .permissions: HermesVersion(major: 0, minor: 3, patch: 0),
+        .diffs: HermesVersion(major: 0, minor: 3, patch: 0),
+        // `hermes cron add/update/delete/...` CRUD verbs, first in v2026.3.17.
+        .cronCRUD: HermesVersion(major: 0, minor: 3, patch: 0),
+        // `hermes update --check` flag added by #10318, first in v2026.4.30.
+        .updateCheck: HermesVersion(major: 0, minor: 12, patch: 0),
+        // `hermes skills enable/disable` shipped via #642, first in v2026.3.12.
+        .skillsToggle: HermesVersion(major: 0, minor: 2, patch: 0),
+        // `hermes tools enable/disable/list` shipped via #1652, first in v2026.3.23.
+        .toolsEnablePerPlatform: HermesVersion(major: 0, minor: 4, patch: 0),
     ]
 }

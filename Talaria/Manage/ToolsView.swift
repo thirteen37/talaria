@@ -3,8 +3,14 @@ import SwiftUI
 
 struct ToolsView: View {
     let runner: HermesAdminRunning?
+    let hermesVersion: HermesVersion?
 
     @State private var harness: ManageListHarness<ToolRow>?
+
+    init(runner: HermesAdminRunning?, hermesVersion: HermesVersion? = nil) {
+        self.runner = runner
+        self.hermesVersion = hermesVersion
+    }
 
     var body: some View {
         Group {
@@ -81,6 +87,13 @@ struct ToolsView: View {
                 .disabled(harness.isLoading)
             }
         }
-        .manageBanner(harness.lastError)
+        .manageBanner(
+            harness.lastError ?? capabilityBanner(
+                .toolsEnablePerPlatform,
+                feature: "Per-platform tools enable/disable",
+                version: hermesVersion
+            ),
+            severity: harness.lastError != nil ? .error : .warning
+        )
     }
 }

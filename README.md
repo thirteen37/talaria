@@ -2,11 +2,17 @@
 
 Talaria is a native macOS front-end for Hermes Agent. The app is built with SwiftUI, with shared protocol and transport code in the `HermesKit` Swift package so the core can stay portable for a future iOS companion.
 
+## Install
+
+Download the latest signed DMG from the [Releases page](https://github.com/thirteen37/talaria/releases), drag `Talaria.app` to `/Applications`, and launch it from Finder. Updates land via in-app **Talaria → Check for Updates…** (Sparkle).
+
+Talaria drives the [Hermes Agent](https://github.com/NousResearch/hermes-agent) CLI — install `hermes` separately and point Talaria at it via the local profile.
+
 ## Current Status
 
-This repository currently contains the Sprint 0 scaffold:
+This repository contains the Sprint 6 (v1.0) build:
 
-- `Talaria`: macOS SwiftUI app shell.
+- `Talaria`: macOS SwiftUI app — chat, sessions, profiles, six Manage surfaces (Skills / Tools / Cron / Logs / Doctor / Updates), Sparkle auto-update.
 - `HermesKit`: Swift package for ACP/JSON-RPC, transports, client/admin scaffolding, profile models, and capability gates.
 - `docs`: architecture, security, release, ACP coverage, roadmap, and manual test-plan notes.
 

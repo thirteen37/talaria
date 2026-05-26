@@ -60,6 +60,24 @@ extension View {
     }
 }
 
+/// Returns a banner string when the profile's Hermes version is known and is
+/// below the capability's pin. Returns `nil` when the version is unknown
+/// (the user hasn't probed yet — don't preemptively warn) or when the
+/// capability is supported.
+func capabilityBanner(
+    _ capability: HermesCapability,
+    feature: String,
+    version: HermesVersion?,
+    table: CapabilityTable = CapabilityTable()
+) -> String? {
+    guard let version else { return nil }
+    if table.has(capability, in: version) { return nil }
+    guard let minimum = table.minimumVersions[capability] else { return nil }
+    let pin = "\(minimum.major).\(minimum.minor).\(minimum.patch)"
+    let current = "\(version.major).\(version.minor).\(version.patch)"
+    return "\(feature) requires Hermes \(pin) or later (this profile is at \(current))."
+}
+
 /// View-model for "list + toggle" Manage surfaces (Skills, Tools). Holds the
 /// admin runner, the current rows, and an error string for the banner.
 /// Generic over `Row` so both Skills and Tools reuse the same refresh/toggle

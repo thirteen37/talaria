@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 1.0.0). Required."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, sign, notarise, publish
+    runs-on: macos-15
+    env:
+      VERSION: ${{ github.event.inputs.version || github.ref_name }}
+      KEYCHAIN_PATH: ${{ github.workspace }}/build.keychain-db
+      NOTARY_PROFILE: TalariaNotary
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version string
+        run: |
+          # Strip leading "v" from tag refs (v1.0 -> 1.0).
+          VERSION="${VERSION#v}"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "${VERSION}" > VERSION
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Import Developer ID certificate
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          if [[ -z "$DEVELOPER_ID_P12_BASE64" ]]; then
+            echo "::error::DEVELOPER_ID_P12_BASE64 secret not configured"
+            exit 1
+          fi
+          echo "$DEVELOPER_ID_P12_BASE64" | base64 --decode > /tmp/cert.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 7200 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import /tmp/cert.p12 \
+            -k "$KEYCHAIN_PATH" \
+            -P "$DEVELOPER_ID_P12_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          rm -f /tmp/cert.p12
+
+      - name: Register notarytool keychain profile
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+        run: |
+          if [[ -z "$ASC_API_KEY_BASE64" ]]; then
+            echo "::error::ASC_API_KEY_BASE64 secret not configured"
+            exit 1
+          fi
+          mkdir -p "$HOME/.private"
+          echo "$ASC_API_KEY_BASE64" | base64 --decode > "$HOME/.private/AuthKey.p8"
+          xcrun notarytool store-credentials "$NOTARY_PROFILE" \
+            --key "$HOME/.private/AuthKey.p8" \
+            --key-id "$ASC_API_KEY_ID" \
+            --issuer "$ASC_API_ISSUER_ID"
+
+      - name: Install Sparkle ed25519 private key
+        env:
+          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$SPARKLE_ED25519_PRIVATE_KEY" ]]; then
+            echo "::warning::SPARKLE_ED25519_PRIVATE_KEY not set; release script will run with --skip-sign-update"
+            echo "SKIP_SIGN_UPDATE=1" >> "$GITHUB_ENV"
+          else
+            # sign_update reads the key from the "https://sparkle-project.org"
+            # generic-password item in the default keychain.
+            security add-generic-password \
+              -a ed25519 \
+              -s "https://sparkle-project.org" \
+              -w "$SPARKLE_ED25519_PRIVATE_KEY" \
+              "$KEYCHAIN_PATH"
+          fi
+
+      - name: Run release script
+        env:
+          TALARIA_NOTARY_PROFILE: TalariaNotary
+        run: |
+          ARGS=()
+          if [[ "${SKIP_SIGN_UPDATE:-0}" == "1" ]]; then
+            ARGS+=("--skip-sign-update")
+          fi
+          scripts/release.sh "$VERSION" "${ARGS[@]}"
+
+      - name: Verify codesign + stapler
+        run: |
+          codesign --verify --deep --strict --verbose=2 "build/export/Talaria.app"
+          xcrun stapler validate "build/export/Talaria.app"
+          xcrun stapler validate "build/Talaria-${VERSION}.dmg"
+
+      - name: Upload DMG to GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/Talaria-${{ env.VERSION }}.dmg
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      - name: Update appcast.xml
+        if: github.event_name == 'push'
+        run: |
+          # generate_appcast walks a directory of signed DMGs and writes a
+          # complete appcast.xml. It reads the ed25519 private key from the
+          # keychain item we created above.
+          GEN_BIN="$(find ~/Library/Developer/Xcode/DerivedData -name generate_appcast -type f | head -n 1)"
+          if [[ -z "$GEN_BIN" ]]; then
+            echo "::warning::generate_appcast not found; skipping appcast update"
+            exit 0
+          fi
+          mkdir -p build/appcast-input
+          cp "build/Talaria-${VERSION}.dmg" build/appcast-input/
+          "$GEN_BIN" build/appcast-input/
+          mv build/appcast-input/appcast.xml docs/appcast.xml
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "appcast/${VERSION}"
+          git add docs/appcast.xml
+          git commit -m "release: update appcast for v${VERSION}"
+          git push -f origin "appcast/${VERSION}"
+          # Open a PR so the appcast change is reviewable before it goes live.
+          gh pr create \
+            --base main \
+            --head "appcast/${VERSION}" \
+            --title "release: appcast for v${VERSION}" \
+            --body "Auto-generated by .github/workflows/release.yml"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

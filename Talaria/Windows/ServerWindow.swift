@@ -135,8 +135,8 @@ struct ServerWindow: View {
             case .sessions:
                 SessionsBrowser(store: harness.store, db: harness.db)
             case .skills: SkillsView(runner: harness.store.adminRunner)
-            case .tools: ToolsView(runner: harness.store.adminRunner)
-            case .cron: CronView(runner: harness.store.adminRunner)
+            case .tools: ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
+            case .cron: CronView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
             case .logs:
                 LogsView(
                     runner: harness.store.adminRunner,
@@ -153,7 +153,7 @@ struct ServerWindow: View {
                     }
                 )
             case .doctor: DoctorView(runner: harness.store.adminRunner, profile: harness.profile)
-            case .updates: UpdatesView(runner: harness.store.adminRunner)
+            case .updates: UpdatesView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
             }
         }
     }
