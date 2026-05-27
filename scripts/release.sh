@@ -184,7 +184,12 @@ fi
 
 # 9. Sparkle ed25519 signature + appcast entry --------------------------------
 if [[ $SKIP_SIGN_UPDATE -eq 0 ]]; then
-    SIGN_UPDATE_BIN="$(find ~/Library/Developer/Xcode/DerivedData -name sign_update -type f 2>/dev/null | head -n 1 || true)"
+    # Scope the lookup to Talaria's DerivedData so a developer working on
+    # multiple Sparkle-using projects can't accidentally pick up another
+    # project's (possibly out-of-version) sign_update binary, which would
+    # produce a signature that fails ed25519 validation against the public
+    # key shipped in Info.plist.
+    SIGN_UPDATE_BIN="$(find ~/Library/Developer/Xcode/DerivedData/Talaria-* -name sign_update -type f 2>/dev/null | head -n 1 || true)"
     if [[ -n "${SIGN_UPDATE_BIN}" ]]; then
         log "sign_update (Sparkle ed25519)"
         SIGN_OUTPUT="$("${SIGN_UPDATE_BIN}" "${DMG_PATH}")"
