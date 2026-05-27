@@ -25,10 +25,16 @@ final class UpdateController: ObservableObject {
 /// it can observe `canCheckForUpdates` and stay disabled while Sparkle is
 /// already running a check.
 struct CheckForUpdatesView: View {
-    @ObservedObject private var checker: UpdaterChecker
+    // `@StateObject` ties the checker's lifetime to this view's identity, so
+    // SwiftUI does not rebuild a fresh `UpdaterChecker` (with its Combine
+    // subscription resetting `canCheckForUpdates` to false until the first
+    // tick) every time the parent body re-evaluates. Using `@ObservedObject`
+    // here previously caused the menu item to flicker disabled across
+    // re-renders.
+    @StateObject private var checker: UpdaterChecker
 
     init(updater: SPUUpdater) {
-        checker = UpdaterChecker(updater: updater)
+        _checker = StateObject(wrappedValue: UpdaterChecker(updater: updater))
     }
 
     var body: some View {
