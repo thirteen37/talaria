@@ -10,7 +10,7 @@ Talaria must spawn `hermes`, `ssh`, `sqlite3`, `sftp`, and log-tail commands, so
 
 `Talaria/PrivacyInfo.xcprivacy` declares the two reportable API categories the app actually touches:
 
-- `NSPrivacyAccessedAPICategoryFileTimestamp` (reason `C617.1`) — reading `state.db` mtime for snapshot age display.
+- `NSPrivacyAccessedAPICategoryFileTimestamp` (reason `0A2A.1`, "display to person, with active intent") — reading `state.db` mtime for the Sessions sidebar snapshot-age badge. The path is the user-configured `hermesHome` rather than the app container, so the in-container reason (`C617.1`) would be inaccurate.
 - `NSPrivacyAccessedAPICategoryUserDefaults` (reason `CA92.1`) — `RecentServers` persists open-profile history.
 
 No tracking, no third-party SDKs, no data collected from the user.
