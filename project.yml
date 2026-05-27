@@ -1,9 +1,15 @@
 name: Talaria
 options:
   minimumXcodeGenVersion: 2.42.0
+configs:
+  Debug: debug
+  Release: release
 packages:
   HermesKit:
     path: HermesKit
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    from: "2.6.0"
 targets:
   Talaria:
     type: application
@@ -13,13 +19,25 @@ targets:
       - path: Talaria
     dependencies:
       - package: HermesKit
+      - package: Sparkle
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.talaria.Talaria
-        GENERATE_INFOPLIST_FILE: YES
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Talaria/Info.plist
         MARKETING_VERSION: 1.0
         CURRENT_PROJECT_VERSION: 1
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: YES
         SWIFT_VERSION: 6.0
-        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: Talaria/Talaria.entitlements
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: "-"
+          DEVELOPMENT_TEAM: ""
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Developer ID Application"
+          DEVELOPMENT_TEAM: "9URLHJ84PY"
+          OTHER_CODE_SIGN_FLAGS: "--timestamp --options=runtime"

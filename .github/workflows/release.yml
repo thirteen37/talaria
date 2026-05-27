@@ -1,0 +1,251 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 1.0.0). Required."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  # `gh pr create` in the Update appcast.xml step needs PR write; the default
+  # GITHUB_TOKEN honors this job-level block and contents:write alone returns
+  # 403 from the PR creation API.
+  pull-requests: write
+
+jobs:
+  release:
+    name: Build, sign, notarise, publish
+    runs-on: macos-15
+    env:
+      VERSION: ${{ github.event.inputs.version || github.ref_name }}
+      KEYCHAIN_PATH: ${{ github.workspace }}/build.keychain-db
+      NOTARY_PROFILE: TalariaNotary
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history required: scripts/release.sh derives
+          # CURRENT_PROJECT_VERSION from `git rev-list --count HEAD`. With the
+          # default fetch-depth=1 every CI build pins CFBundleVersion=1, which
+          # Sparkle's SUStandardVersionComparator falls back to when short
+          # versions tie — preventing users on older releases from seeing the
+          # update as an upgrade.
+          fetch-depth: 0
+
+      - name: Resolve version string
+        run: |
+          # Strip leading "v" from tag refs (v1.0 -> 1.0).
+          VERSION="${VERSION#v}"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "${VERSION}" > VERSION
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Import Developer ID certificate
+        env:
+          DEVELOPER_ID_P12_BASE64: ${{ secrets.DEVELOPER_ID_P12_BASE64 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          if [[ -z "$DEVELOPER_ID_P12_BASE64" ]]; then
+            echo "::error::DEVELOPER_ID_P12_BASE64 secret not configured"
+            exit 1
+          fi
+          echo "$DEVELOPER_ID_P12_BASE64" | base64 --decode > /tmp/cert.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 7200 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import /tmp/cert.p12 \
+            -k "$KEYCHAIN_PATH" \
+            -P "$DEVELOPER_ID_P12_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          rm -f /tmp/cert.p12
+
+      - name: Register notarytool keychain profile
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_API_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
+          ASC_API_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}
+        run: |
+          if [[ -z "$ASC_API_KEY_BASE64" ]]; then
+            echo "::error::ASC_API_KEY_BASE64 secret not configured"
+            exit 1
+          fi
+          mkdir -p "$HOME/.private"
+          echo "$ASC_API_KEY_BASE64" | base64 --decode > "$HOME/.private/AuthKey.p8"
+          xcrun notarytool store-credentials "$NOTARY_PROFILE" \
+            --key "$HOME/.private/AuthKey.p8" \
+            --key-id "$ASC_API_KEY_ID" \
+            --issuer "$ASC_API_ISSUER_ID"
+
+      - name: Install Sparkle ed25519 private key
+        env:
+          SPARKLE_ED25519_PRIVATE_KEY: ${{ secrets.SPARKLE_ED25519_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$SPARKLE_ED25519_PRIVATE_KEY" ]]; then
+            echo "::warning::SPARKLE_ED25519_PRIVATE_KEY not set; release script will run with --skip-sign-update"
+            echo "SKIP_SIGN_UPDATE=1" >> "$GITHUB_ENV"
+          else
+            # sign_update reads the key from the "https://sparkle-project.org"
+            # generic-password item in the default keychain. -A makes the
+            # item readable by any application without a UI prompt — required
+            # in non-interactive CI because the default ACL only trusts the
+            # `security` binary, which would block sign_update at release
+            # time. The keychain is ephemeral (destroyed when the runner
+            # tears down), so the wider ACL has no lasting blast radius.
+            security add-generic-password \
+              -a ed25519 \
+              -s "https://sparkle-project.org" \
+              -w "$SPARKLE_ED25519_PRIVATE_KEY" \
+              -A \
+              "$KEYCHAIN_PATH"
+          fi
+
+      - name: Run release script
+        env:
+          TALARIA_NOTARY_PROFILE: TalariaNotary
+        run: |
+          ARGS=()
+          if [[ "${SKIP_SIGN_UPDATE:-0}" == "1" ]]; then
+            ARGS+=("--skip-sign-update")
+          fi
+          scripts/release.sh "$VERSION" "${ARGS[@]}"
+
+      - name: Verify codesign + stapler
+        run: |
+          codesign --verify --deep --strict --verbose=2 "build/export/Talaria.app"
+          xcrun stapler validate "build/export/Talaria.app"
+          xcrun stapler validate "build/Talaria-${VERSION}.dmg"
+
+      - name: Upload DMG to GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/Talaria-${{ env.VERSION }}.dmg
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      - name: Update appcast.xml
+        # Skip when the Sparkle key wasn't installed — generate_appcast reads
+        # the ed25519 key from the keychain and fails without it. Also skip on
+        # workflow_dispatch (manual reruns) since there's no associated tag /
+        # release to wire the appcast entry to.
+        if: github.event_name == 'push' && env.SKIP_SIGN_UPDATE != '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # generate_appcast walks a directory of signed DMGs and writes a
+          # complete appcast.xml. It reads the ed25519 private key from the
+          # keychain item we created above.
+          #
+          # Critical: pre-seed the input directory with every previously
+          # released DMG. generate_appcast rebuilds the feed from scratch on
+          # each run, so a directory containing only the new DMG would
+          # overwrite docs/appcast.xml with a one-item feed — wiping release
+          # notes and minimum-system pins for every prior version.
+          # Scope to Talaria's DerivedData so a runner with prior Sparkle
+          # caches (other projects on a self-hosted runner, or future shared
+          # ones) can't pick up a stale generate_appcast.
+          GEN_BIN="$(find ~/Library/Developer/Xcode/DerivedData/Talaria-* -name generate_appcast -type f 2>/dev/null | head -n 1)"
+          if [[ -z "$GEN_BIN" ]]; then
+            echo "::warning::generate_appcast not found; skipping appcast update"
+            exit 0
+          fi
+          mkdir -p build/appcast-input
+          # Pull every previously published DMG so generate_appcast can preserve
+          # the back catalogue. Pre-filter via the API to only tags that
+          # actually have a DMG asset — that lets us treat any failure inside
+          # the loop body as a real error (network blip, asset removed,
+          # permissions) instead of silently dropping a release from the feed
+          # because `gh release download` exited non-zero. `gh release list
+          # --limit N` would also cap the catalogue at N entries; --paginate
+          # over the REST API keeps it unbounded.
+          tags_with_dmg=$(gh api --paginate \
+            "/repos/${{ github.repository }}/releases" \
+            --jq '.[] | select(.draft == false) | select(.tag_name != null)
+                     | select((.assets // []) | map(.name | endswith(".dmg")) | any)
+                     | .tag_name')
+          for tag in $tags_with_dmg; do
+            if [[ "$tag" == "v${VERSION}" ]]; then continue; fi
+            gh release download "$tag" --dir build/appcast-input \
+              --pattern "*.dmg" --skip-existing
+          done
+          cp "build/Talaria-${VERSION}.dmg" build/appcast-input/
+          "$GEN_BIN" build/appcast-input/
+          mv build/appcast-input/appcast.xml docs/appcast.xml
+
+          # generate_appcast emits bare-filename enclosure URLs (e.g.
+          # `url="Talaria-1.0.0.dmg"`). Sparkle resolves those relative to
+          # the appcast URL (https://thirteen37.github.io/talaria/appcast.xml),
+          # but the DMGs actually live on GitHub Releases at
+          # https://github.com/<repo>/releases/download/v<VERSION>/...
+          # Rewrite each entry to its matching release-download URL so
+          # Sparkle clients don't 404 the download. Per-entry substitution
+          # (not a global prefix) is required because each release lives
+          # under its own v<VERSION>/ path.
+          python3 - <<'PY'
+          import re, pathlib
+          repo = "${{ github.repository }}"
+          path = pathlib.Path("docs/appcast.xml")
+          text = path.read_text()
+          def rewrite(match):
+              ver = match.group(1)
+              return f'url="https://github.com/{repo}/releases/download/v{ver}/Talaria-{ver}.dmg"'
+          new = re.sub(r'url="Talaria-(\d+\.\d+\.\d+(?:-[A-Za-z0-9.\-]+)?)\.dmg"', rewrite, text)
+          if new == text:
+              raise SystemExit("appcast had no Talaria-<VER>.dmg enclosure URLs to rewrite — refusing to ship a feed with relative URLs.")
+          path.write_text(new)
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "appcast/${VERSION}"
+          git add docs/appcast.xml
+          # Re-runs of the workflow on the same tag will regenerate a
+          # byte-identical appcast; skip the commit when the working tree is
+          # clean so `set -e` doesn't abort the step.
+          if git diff --cached --quiet -- docs/appcast.xml; then
+            echo "appcast unchanged — skipping commit + PR"
+          else
+            git commit -m "release: update appcast for v${VERSION}"
+            # Try a plain push first so reviewer commits to appcast/<VER>
+            # are preserved when the workflow re-runs (e.g. to retry the
+            # appcast step). Fall back to --force-with-lease only when the
+            # remote has diverged for a real reason; this still rejects if
+            # someone else has pushed to the branch since we last fetched,
+            # so we won't silently nuke commits we didn't see.
+            git push origin "appcast/${VERSION}" \
+              || git push --force-with-lease origin "appcast/${VERSION}"
+            # Open a PR so the appcast change is reviewable before it goes
+            # live. Idempotent: if an *open* PR for this branch already
+            # exists from a prior run on the same tag, skip the create
+            # call. `gh pr view` matches PRs in any state, so a previous
+            # merged-and-deleted appcast PR for a re-tagged release would
+            # cause the create call to be skipped and the new commits
+            # would sit on a branch without a PR — `--state open` filters
+            # only the case we actually want to deduplicate.
+            existing=$(gh pr list --head "appcast/${VERSION}" --state open --json number --jq '.[0].number // empty')
+            if [[ -z "$existing" ]]; then
+              gh pr create \
+                --base main \
+                --head "appcast/${VERSION}" \
+                --title "release: appcast for v${VERSION}" \
+                --body "Auto-generated by .github/workflows/release.yml"
+            else
+              echo "Open PR #${existing} for appcast/${VERSION} already exists — reusing"
+            fi
+          fi

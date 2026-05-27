@@ -60,6 +60,34 @@ extension View {
     }
 }
 
+/// Returns a banner string when the profile's Hermes version is known and is
+/// below the capability's pin. Returns `nil` when the version is unknown
+/// (the user hasn't probed yet — don't preemptively warn) or when the
+/// capability is supported.
+func capabilityBanner(
+    _ capability: HermesCapability,
+    feature: String,
+    version: HermesVersion?,
+    table: CapabilityTable = CapabilityTable()
+) -> String? {
+    guard let version else { return nil }
+    if table.has(capability, in: version) { return nil }
+    guard let minimum = table.minimumVersions[capability] else { return nil }
+    return "\(feature) requires Hermes \(format(minimum)) or later (this profile is at \(format(version)))."
+}
+
+/// Renders a `HermesVersion` for user-facing messages, including any
+/// `-prerelease` suffix. Without the suffix a user on `1.0.0-rc.1` against a
+/// pin of `1.0.0` would see "requires 1.0.0 or later (this profile is at
+/// 1.0.0)" — correct semver semantics but visually contradictory.
+private func format(_ version: HermesVersion) -> String {
+    var rendered = "\(version.major).\(version.minor).\(version.patch)"
+    if let prerelease = version.prerelease {
+        rendered += "-\(prerelease)"
+    }
+    return rendered
+}
+
 /// View-model for "list + toggle" Manage surfaces (Skills, Tools). Holds the
 /// admin runner, the current rows, and an error string for the banner.
 /// Generic over `Row` so both Skills and Tools reuse the same refresh/toggle

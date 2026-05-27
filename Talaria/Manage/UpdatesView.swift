@@ -91,8 +91,14 @@ final class UpdatesHarness {
 
 struct UpdatesView: View {
     let runner: HermesAdminRunning?
+    let hermesVersion: HermesVersion?
 
     @State private var harness: UpdatesHarness?
+
+    init(runner: HermesAdminRunning?, hermesVersion: HermesVersion? = nil) {
+        self.runner = runner
+        self.hermesVersion = hermesVersion
+    }
 
     var body: some View {
         Group {
@@ -160,7 +166,14 @@ struct UpdatesView: View {
             applyLogView(harness: harness)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .manageBanner(harness.lastError)
+        .manageBanner(
+            harness.lastError ?? capabilityBanner(
+                .updateCheck,
+                feature: "`hermes update --check`",
+                version: hermesVersion
+            ),
+            severity: harness.lastError != nil ? .error : .warning
+        )
     }
 
     @ViewBuilder
