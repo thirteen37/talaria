@@ -4,22 +4,44 @@ import SwiftUI
 struct SessionsSidebar: View {
     @Bindable var store: SessionsStore
     let snapshot: RemoteSnapshot?
+    let profile: ServerProfile
+    let profiles: [ServerProfile]
+    let onSwitchProfile: (UUID) -> Void
+    let notifications: WindowNotificationCenter
+    let onOpenNotifications: () -> Void
 
     @State private var renameTarget: SessionsStore.OpenSession?
     @State private var renameText: String = ""
-    @State private var snapshotState: SnapshotState = .missing
-    @State private var snapshotTask: Task<Void, Never>?
+    @State private var hoveredSessionId: SessionId?
 
-    init(store: SessionsStore, snapshot: RemoteSnapshot? = nil) {
+    init(
+        store: SessionsStore,
+        snapshot: RemoteSnapshot? = nil,
+        profile: ServerProfile,
+        profiles: [ServerProfile] = [],
+        onSwitchProfile: @escaping (UUID) -> Void = { _ in },
+        notifications: WindowNotificationCenter,
+        onOpenNotifications: @escaping () -> Void = {}
+    ) {
         self.store = store
         self.snapshot = snapshot
+        self.profile = profile
+        self.profiles = profiles
+        self.onSwitchProfile = onSwitchProfile
+        self.notifications = notifications
+        self.onOpenNotifications = onOpenNotifications
     }
 
     var body: some View {
         Group {
-            if snapshot != nil {
-                Section {
-                    SnapshotBadge(state: snapshotState, refresh: { refreshSnapshot() })
+            Section {
+                HStack(spacing: 6) {
+                    ProfileHeader(
+                        current: profile,
+                        profiles: profiles,
+                        onSelect: onSwitchProfile
+                    )
+                    NotificationBell(center: notifications, onOpen: onOpenNotifications)
                 }
             }
 
@@ -37,42 +59,6 @@ struct SessionsSidebar: View {
         }
         .sheet(item: $renameTarget) { target in
             renameSheet(for: target)
-        }
-        .task(id: snapshot?.profile.id) {
-            guard let snapshot else { return }
-            snapshotState = await snapshot.currentState()
-            snapshotTask?.cancel()
-            snapshotTask = Task { @MainActor [weak store] in
-                for await state in await snapshot.subscribe() {
-                    snapshotState = state
-                    if case .fresh = state {
-                        store?.browserRefreshToken &+= 1
-                    }
-                }
-            }
-            // First time we open a remote window with no cached snapshot,
-            // kick off a fetch so the sidebar isn't empty.
-            if case .missing = snapshotState {
-                await fetchSnapshot()
-            }
-        }
-        .onDisappear {
-            snapshotTask?.cancel()
-            snapshotTask = nil
-        }
-    }
-
-    private func refreshSnapshot() {
-        Task { await fetchSnapshot() }
-    }
-
-    private func fetchSnapshot() async {
-        guard let snapshot else { return }
-        do {
-            try await snapshot.refresh()
-            store.browserRefreshToken &+= 1
-        } catch {
-            store.lastError = error.localizedDescription
         }
     }
 
@@ -92,11 +78,19 @@ struct SessionsSidebar: View {
                         .lineLimit(1)
                 }
                 Spacer()
+                closeButton(for: session)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .listRowBackground(store.selection == session.id ? Color.accentColor.opacity(0.15) : Color.clear)
+        .onHover { hovering in
+            if hovering {
+                hoveredSessionId = session.id
+            } else if hoveredSessionId == session.id {
+                hoveredSessionId = nil
+            }
+        }
         .contextMenu {
             Button("Rename…") {
                 renameTarget = session
@@ -110,6 +104,19 @@ struct SessionsSidebar: View {
                 Task { await store.deleteSession(session.id) }
             }
         }
+    }
+
+    @ViewBuilder
+    private func closeButton(for session: SessionsStore.OpenSession) -> some View {
+        Button {
+            Task { await store.closeTab(session.id) }
+        } label: {
+            Image(systemName: "xmark.circle.fill")
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .opacity(hoveredSessionId == session.id ? 1 : 0)
+        .help("Close session")
     }
 
     private func statusDot(for id: SessionId) -> some View {
@@ -129,60 +136,46 @@ struct SessionsSidebar: View {
         SessionIdFormatter.short(id)
     }
 
-    private struct SnapshotBadge: View {
-        let state: SnapshotState
-        let refresh: () -> Void
+    /// Sidebar row showing the active profile's name with a menu that
+    /// lists every known profile. Selecting one swaps the window's harness
+    /// in-place via the closure passed in from `ServerWindow`.
+    private struct ProfileHeader: View {
+        let current: ServerProfile
+        let profiles: [ServerProfile]
+        let onSelect: (UUID) -> Void
 
         var body: some View {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(color)
-                    .frame(width: 8, height: 8)
-                Text(label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                    refresh()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
+            Menu {
+                ForEach(profiles) { p in
+                    Button {
+                        if p.id != current.id {
+                            onSelect(p.id)
+                        }
+                    } label: {
+                        if p.id == current.id {
+                            Label(p.name, systemImage: "checkmark")
+                        } else {
+                            Text(p.name)
+                        }
+                    }
                 }
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .disabled(isRefreshing)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: current.kind == .ssh ? "network" : "desktopcomputer")
+                        .foregroundStyle(.secondary)
+                    Text(current.name)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
             }
-        }
-
-        private var label: String {
-            switch state {
-            case .missing: return "No snapshot"
-            case .refreshing: return "Refreshing…"
-            case let .fresh(age): return "Snapshot \(formatAge(age))"
-            case let .stale(age): return "Stale \(formatAge(age))"
-            case let .error(message): return message
-            }
-        }
-
-        private var color: Color {
-            switch state {
-            case .missing: return .gray
-            case .refreshing: return .blue
-            case let .fresh(age) where age < 60: return .green
-            case .fresh: return .gray
-            case .stale: return .yellow
-            case .error: return .red
-            }
-        }
-
-        private var isRefreshing: Bool {
-            if case .refreshing = state { return true }
-            return false
-        }
-
-        private func formatAge(_ seconds: Int) -> String {
-            if seconds < 60 { return "\(seconds)s ago" }
-            if seconds < 3600 { return "\(seconds / 60)m ago" }
-            return "\(seconds / 3600)h ago"
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
