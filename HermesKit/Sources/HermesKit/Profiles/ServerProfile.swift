@@ -95,6 +95,16 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
     public var version: HermesVersion?
     public var remoteShellMode: RemoteShellMode
     public var remoteShellPrefix: String?
+    /// Keychain item identifier for the SSH private key. Wired to the
+    /// (future) iOS app's `KeychainIdentityProvider`. Optional on every
+    /// platform — the macOS host today resolves identities from
+    /// `identityFile` instead.
+    public var keychainKeyReference: String?
+    /// SHA256 fingerprint of the host key the user pinned via the TOFU
+    /// confirm sheet. Stored here so the profile UI can surface "pinned"
+    /// status without re-reading the host-key trust store. The trust store
+    /// itself remains the source of truth for verification.
+    public var pinnedHostKeyFingerprint: String?
 
     public init(
         id: UUID = UUID(),
@@ -109,7 +119,9 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
         env: [String: String] = [:],
         version: HermesVersion? = nil,
         remoteShellMode: RemoteShellMode = .shLogin,
-        remoteShellPrefix: String? = nil
+        remoteShellPrefix: String? = nil,
+        keychainKeyReference: String? = nil,
+        pinnedHostKeyFingerprint: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -124,11 +136,14 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
         self.version = version
         self.remoteShellMode = remoteShellMode
         self.remoteShellPrefix = remoteShellPrefix
+        self.keychainKeyReference = keychainKeyReference
+        self.pinnedHostKeyFingerprint = pinnedHostKeyFingerprint
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, kind, host, user, port, identityFile, hermesPath, hermesHome, env, version
         case remoteShellMode, remoteShellPrefix
+        case keychainKeyReference, pinnedHostKeyFingerprint
     }
 
     public init(from decoder: Decoder) throws {
@@ -153,5 +168,7 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
         // true can still pick `.direct` in the editor.
         self.remoteShellMode = try c.decodeIfPresent(RemoteShellMode.self, forKey: .remoteShellMode) ?? .shLogin
         self.remoteShellPrefix = try c.decodeIfPresent(String.self, forKey: .remoteShellPrefix)
+        self.keychainKeyReference = try c.decodeIfPresent(String.self, forKey: .keychainKeyReference)
+        self.pinnedHostKeyFingerprint = try c.decodeIfPresent(String.self, forKey: .pinnedHostKeyFingerprint)
     }
 }

@@ -229,22 +229,25 @@ final class ServerWindowHarness {
     }
 
     static func make(profile: ServerProfile) -> ServerWindowHarness {
-        #if os(macOS)
         switch profile.kind {
         case .local:
+            #if os(macOS)
             return makeLocal(profile: profile)
+            #else
+            // Per the iOS transport plan, decision #3: iOS is remote-only.
+            // Surface a typed error from the factory so the chat surface
+            // can render an actionable empty state instead of crashing.
+            let manager = SessionManager { throw TransportError.unsupportedPlatform }
+            return ServerWindowHarness(
+                store: SessionsStore(manager: manager, adminRunner: nil),
+                db: nil,
+                snapshot: nil,
+                profile: profile
+            )
+            #endif
         case .ssh:
             return makeRemote(profile: profile)
         }
-        #else
-        let manager = SessionManager { throw TransportError.unsupportedPlatform }
-        return ServerWindowHarness(
-            store: SessionsStore(manager: manager, adminRunner: nil),
-            db: nil,
-            snapshot: nil,
-            profile: profile
-        )
-        #endif
     }
 
     /// Re-checks the snapshot path and (re)opens `HermesDB` against the
@@ -318,23 +321,72 @@ final class ServerWindowHarness {
         return ServerWindowHarness(store: store, db: db, snapshot: nil, profile: profile)
     }
 
+    #endif
+
+    /// `UserDefaults` key honored on macOS to opt the **ACP transport
+    /// and the snapshot fetch** into the pure-Swift NIO-SSH path instead
+    /// of the default system-ssh subprocess. The snapshot **backup**
+    /// (`sqlite3 .backup`) and **remote cleanup** (`rm -f`) steps in
+    /// `RemoteSnapshot` still shell out to `/usr/bin/ssh` even when the
+    /// flag is on — closing that gap requires the future NIO-`exec`
+    /// command runner that lands with the iOS app target. Host-key
+    /// trust therefore consults two verifiers when the flag is enabled:
+    /// system-ssh's `known_hosts` for backup/cleanup, ``HostKeyStore``
+    /// for ACP + fetch. See `docs/security.md`. iOS always uses NIO
+    /// regardless of this flag — system-ssh isn't available there.
+    /// Flip the default in a later release and delete system-ssh one
+    /// release after that.
+    static let useNIOSSHTransportDefaultsKey = "HermesKit.useNIOSSHTransport"
+
     private static func makeRemote(profile: ServerProfile) -> ServerWindowHarness {
-        let manager = SessionManager {
-            let transport = SSHTransport(
-                host: profile.host ?? "",
-                user: profile.user,
-                port: profile.port,
-                identityFile: profile.identityFile,
-                hermesPath: profile.hermesPath,
-                hermesHome: profile.hermesHome,
-                remoteShellMode: profile.remoteShellMode,
-                remoteShellPrefix: profile.remoteShellPrefix
+        let useNIO = preferNIOSSHTransport()
+        let manager: SessionManager
+        let snapshotTransfer: RemoteSnapshotTransfer?
+
+        if useNIO {
+            let credentialProvider: SSHCredentialProvider = FileIdentityProvider()
+            let hostKeyStore = defaultHostKeyStore()
+            manager = SessionManager {
+                let transport = try NIOSSHTransport(
+                    profile: profile,
+                    credentialProvider: credentialProvider,
+                    hostKeyStore: hostKeyStore
+                )
+                try await transport.start()
+                return transport
+            }
+            snapshotTransfer = NIOSSHCatTransfer(
+                profile: profile,
+                credentialProvider: credentialProvider,
+                hostKeyStore: hostKeyStore
             )
-            try transport.start()
-            return transport
+        } else {
+            #if os(macOS)
+            manager = SessionManager {
+                let transport = SSHTransport(
+                    host: profile.host ?? "",
+                    user: profile.user,
+                    port: profile.port,
+                    identityFile: profile.identityFile,
+                    hermesPath: profile.hermesPath,
+                    hermesHome: profile.hermesHome,
+                    remoteShellMode: profile.remoteShellMode,
+                    remoteShellPrefix: profile.remoteShellPrefix
+                )
+                try transport.start()
+                return transport
+            }
+            snapshotTransfer = nil // RemoteSnapshot picks SFTPSubprocessTransfer by default
+            #else
+            // Defensive: iOS never falls into this branch because
+            // `preferNIOSSHTransport()` always returns true off-macOS.
+            manager = SessionManager { throw TransportError.unsupportedPlatform }
+            snapshotTransfer = nil
+            #endif
         }
-        let admin = RemoteHermesAdminRunner(profile: profile)
-        let snapshot = RemoteSnapshot(profile: profile)
+
+        let admin = remoteAdminRunner(for: profile)
+        let snapshot = RemoteSnapshot(profile: profile, transfer: snapshotTransfer)
         let snapshotPath = snapshot.localPath()
         let store = SessionsStore(manager: manager, adminRunner: admin, snapshot: snapshot)
         // Open the DB only if the snapshot file already exists from a prior
@@ -348,5 +400,49 @@ final class ServerWindowHarness {
         }
         return ServerWindowHarness(store: store, db: db, snapshot: snapshot, profile: profile)
     }
-    #endif
+
+    /// True if we should use the NIO transport for this profile. iOS has
+    /// no system-ssh, so it's always true off-macOS. macOS keeps system-ssh
+    /// as the default until the flag is flipped.
+    private static func preferNIOSSHTransport() -> Bool {
+        #if os(macOS)
+        return UserDefaults.standard.bool(forKey: useNIOSSHTransportDefaultsKey)
+        #else
+        return true
+        #endif
+    }
+
+    /// Process-wide singleton. `PinnedHostKeyStore`'s read-modify-write
+    /// atomicity is enforced by an `NSLock` *on the instance* — handing
+    /// each `ServerWindowHarness` its own instance would re-introduce
+    /// the lost-update window when two windows confirm TOFU pins at the
+    /// same time, since both writers would hold different locks while
+    /// racing the same JSON file. Sharing the instance keeps the lock
+    /// effective across windows.
+    private static let sharedPinnedHostKeyStore = PinnedHostKeyStore()
+
+    /// Builds the trust store the NIO transport consults during the host
+    /// key callback. On macOS we layer the read-only `~/.ssh/known_hosts`
+    /// over our own pinned-store so previously trusted hosts connect
+    /// silently. On iOS only the pinned store exists.
+    private static func defaultHostKeyStore() -> HostKeyStore {
+        let pinned = sharedPinnedHostKeyStore
+        #if os(macOS)
+        return CompositeHostKeyStore(readers: [KnownHostsFileStore(), pinned], writer: pinned)
+        #else
+        return pinned
+        #endif
+    }
+
+    private static func remoteAdminRunner(for profile: ServerProfile) -> (any HermesAdminRunning)? {
+        #if os(macOS)
+        return RemoteHermesAdminRunner(profile: profile)
+        #else
+        // iOS doesn't ship `RemoteHermesAdminRunner` (it depends on
+        // `OneShotProcess`). Returning nil makes the surface views render
+        // empty states instead of crashing — the iOS UI work tracks
+        // bringing up an admin runner backed by NIO `exec` requests.
+        return nil
+        #endif
+    }
 }

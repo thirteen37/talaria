@@ -32,7 +32,7 @@ Scarf is a reference for product shape and information architecture, not an impl
 
 - Native SwiftUI rendering over Hermes ACP instead of TUI embedding as the primary surface.
 - SQLite reads are read-only; writes go through ACP or Hermes CLI commands.
-- Remote support uses system SSH and explicit snapshot refresh semantics.
+- Remote support uses either the system SSH binary (macOS default) or a pure-Swift NIO-SSH transport (opt-in on macOS via the `HermesKit.useNIOSSHTransport` defaults key, mandatory on iOS), with explicit snapshot refresh semantics either way. The flag covers the ACP transport and the snapshot fetch only — backup/cleanup commands still use system-ssh on macOS until the future NIO-`exec` runner lands.
 - Release, signing, sandbox, and Sparkle constraints are documented before packaging work begins.
 
 ## Development

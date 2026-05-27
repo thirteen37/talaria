@@ -14,16 +14,34 @@ let package = Package(
             targets: ["HermesKit"]
         ),
     ],
+    dependencies: [
+        // Pure-Swift SSH client. Required so HermesKit can talk to a remote
+        // Hermes host on platforms (iOS) that have neither `/usr/bin/ssh` nor
+        // `Process`. Snapshot transfer reuses the same SSH channel via an
+        // `exec cat` request — no separate SFTP dependency.
+        .package(url: "https://github.com/apple/swift-nio-ssh.git", from: "0.10.0"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
+    ],
     targets: [
         .target(
             name: "HermesKit",
+            dependencies: [
+                .product(name: "NIOSSH", package: "swift-nio-ssh"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+            ],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
             ]
         ),
         .testTarget(
             name: "HermesKitTests",
-            dependencies: ["HermesKit"],
+            dependencies: [
+                "HermesKit",
+                .product(name: "NIOSSH", package: "swift-nio-ssh"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOEmbedded", package: "swift-nio"),
+            ],
             resources: [
                 .copy("Fixtures"),
             ],

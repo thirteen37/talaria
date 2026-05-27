@@ -1,35 +1,6 @@
 #if os(macOS)
 import Foundation
 
-public enum SSHTransportError: Error, Equatable, Sendable, LocalizedError {
-    case hostUnreachable(String)
-    case authFailed(String)
-    case hostKeyVerification(String)
-    case commandTimeout(String)
-    case other(String)
-
-    public var message: String {
-        switch self {
-        case let .hostUnreachable(message),
-             let .authFailed(message),
-             let .hostKeyVerification(message),
-             let .commandTimeout(message),
-             let .other(message):
-            return message
-        }
-    }
-
-    public var errorDescription: String? {
-        switch self {
-        case let .hostUnreachable(message): return "Host unreachable: \(message)"
-        case let .authFailed(message): return "Authentication failed: \(message)"
-        case let .hostKeyVerification(message): return "Host key verification failed: \(message)"
-        case let .commandTimeout(message): return "SSH timed out: \(message)"
-        case let .other(message): return message
-        }
-    }
-}
-
 public final class SSHTransport: Transport, @unchecked Sendable {
     public var inbound: AsyncThrowingStream<Data, Error> {
         processTransport.inbound
@@ -84,17 +55,19 @@ public final class SSHTransport: Transport, @unchecked Sendable {
 
         let destination = user.map { "\($0)@\(host)" } ?? host
         arguments += ["--", destination]
-        var remoteParts: [String] = []
-        if let hermesHome {
-            remoteParts += ["env", shellQuote("HERMES_HOME=\(hermesHome)")]
-        }
-        remoteParts += [shellQuote(hermesPath), "acp"]
-        let inner = remoteParts.joined(separator: " ")
         // Splitting the wrapped command across multiple argv tokens would
         // break the `<login-shell> -lc '<inner>'` form, since ssh joins
         // post-destination args with spaces before handing them to the
-        // remote shell. Append as a single argv element.
-        arguments.append(remoteShellMode.wrap(command: inner, customPrefix: remoteShellPrefix))
+        // remote shell. Append as a single argv element — the same one the
+        // NIO-SSH transport sends via ExecRequest.
+        arguments.append(
+            buildHermesRemoteCommand(
+                hermesPath: hermesPath,
+                hermesHome: hermesHome,
+                remoteShellMode: remoteShellMode,
+                remoteShellPrefix: remoteShellPrefix
+            )
+        )
         return arguments
     }
 
@@ -121,25 +94,16 @@ public final class SSHTransport: Transport, @unchecked Sendable {
         return arguments
     }
 
+    // Re-exposed on `SSHTransport` so the existing macOS callers
+    // (RemoteSnapshot, RemoteHermesAdmin) keep compiling unchanged. The
+    // canonical implementation lives in `ShellQuoting` so the NIO-SSH
+    // transport can call it without crossing the macOS gate.
     static func shellQuote(_ value: String) -> String {
-        guard !value.isEmpty else {
-            return "''"
-        }
-        return "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+        ShellQuoting.shellQuote(value)
     }
 
-    /// Wraps a value in double quotes, escaping the characters that double
-    /// quotes don't otherwise neutralize (`\`, `"`, `` ` ``) but **leaving
-    /// `$` alone** so that the remote shell still expands `$HOME` and similar
-    /// environment references. Single-quote wrapping (``shellQuote``) is
-    /// preferred for literal values; reach for this only when you intentionally
-    /// want the remote shell to expand variables.
     static func shellDoubleQuoteAllowingExpansion(_ value: String) -> String {
-        let escaped = value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "`", with: "\\`")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return "\"\(escaped)\""
+        ShellQuoting.shellDoubleQuoteAllowingExpansion(value)
     }
 
     public func start() throws {
@@ -162,36 +126,15 @@ public final class SSHTransport: Transport, @unchecked Sendable {
     /// Useful when the ACP transport exits unexpectedly and we want a typed reason
     /// to display in the chat surface.
     public func classifyRecentStderr() -> SSHTransportError {
-        Self.classifyStderr(recentStderr())
+        SSHStderrClassifier.classify(recentStderr())
     }
 
-    /// Best-effort static classifier — no platform calls, safe to unit-test.
+    /// Thin wrapper retained for source-compatibility with existing callers
+    /// (RemoteSnapshot, tests). New code should prefer
+    /// ``SSHStderrClassifier/classify(_:)`` directly so it stays callable on
+    /// platforms where `SSHTransport` itself is unavailable.
     public static func classifyStderr(_ stderr: String) -> SSHTransportError {
-        let trimmed = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return .other("ssh exited without diagnostic output")
-        }
-        let lowered = trimmed.lowercased()
-        if lowered.contains("host key verification failed") {
-            return .hostKeyVerification(trimmed)
-        }
-        if lowered.contains("permission denied")
-            || lowered.contains("publickey")
-            || lowered.contains("no supported authentication methods") {
-            return .authFailed(trimmed)
-        }
-        if lowered.contains("connection timed out")
-            || lowered.contains("operation timed out") {
-            return .commandTimeout(trimmed)
-        }
-        if lowered.contains("could not resolve hostname")
-            || lowered.contains("name or service not known")
-            || lowered.contains("no route to host")
-            || lowered.contains("connection refused")
-            || lowered.contains("network is unreachable") {
-            return .hostUnreachable(trimmed)
-        }
-        return .other(trimmed)
+        SSHStderrClassifier.classify(stderr)
     }
 
     /// Runs a non-interactive `ssh ... printf ok` against the profile to verify
@@ -219,7 +162,7 @@ public final class SSHTransport: Transport, @unchecked Sendable {
             return
         }
         let stderr = result.stderr.isEmpty ? result.stdout : result.stderr
-        throw classifyStderr(stderr)
+        throw SSHStderrClassifier.classify(stderr)
     }
 }
 #endif
