@@ -56,4 +56,4 @@ Sprint 6 added `skillsToggle` and `toolsEnablePerPlatform` to `HermesCapability`
 | `toolsEnablePerPlatform` | `0.4.0` | `v2026.3.23` |
 | `updateCheck` | `0.12.0` | `v2026.4.30` |
 
-The Manage views currently do not consume `CapabilityTable.has(_:in:)`; wiring banners into Skills / Tools / Cron / Updates remains open and is tracked in `RELEASE_SETUP.md` §7.
+Sprint 6 also wired `capabilityBanner(.<cap>, feature:, version:)` (defined in `Talaria/Manage/ManageHarness.swift`) into `CronView`, `ToolsView`, and `UpdatesView`. Each surface checks `CapabilityTable.has(_:in:)` against the profile's probed Hermes version and renders an orange warning banner when the pin isn't met; hard runtime errors still take precedence as red banners. `SkillsView` is intentionally skipped because Talaria 1.0 renders skills read-only.

@@ -101,11 +101,17 @@ jobs:
             echo "SKIP_SIGN_UPDATE=1" >> "$GITHUB_ENV"
           else
             # sign_update reads the key from the "https://sparkle-project.org"
-            # generic-password item in the default keychain.
+            # generic-password item in the default keychain. -A makes the
+            # item readable by any application without a UI prompt — required
+            # in non-interactive CI because the default ACL only trusts the
+            # `security` binary, which would block sign_update at release
+            # time. The keychain is ephemeral (destroyed when the runner
+            # tears down), so the wider ACL has no lasting blast radius.
             security add-generic-password \
               -a ed25519 \
               -s "https://sparkle-project.org" \
               -w "$SPARKLE_ED25519_PRIVATE_KEY" \
+              -A \
               "$KEYCHAIN_PATH"
           fi
 
@@ -158,9 +164,11 @@ jobs:
           fi
           mkdir -p build/appcast-input
           # Pull every previously published DMG so generate_appcast can preserve
-          # the back catalogue. `gh release download --pattern` per-release is
-          # the path that gives us the asset binary (not just the URL).
-          for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName'); do
+          # the back catalogue. `gh release list --limit N` caps at N items, so
+          # use the paginated REST API instead — `--paginate` walks every page
+          # and emits the concatenated JSON array, so the catalogue stays
+          # complete past 100 releases.
+          for tag in $(gh api --paginate /repos/${{ github.repository }}/releases --jq '.[].tag_name'); do
             if [[ "$tag" == "v${VERSION}" ]]; then continue; fi
             gh release download "$tag" --dir build/appcast-input \
               --pattern "*.dmg" --skip-existing 2>/dev/null || true
