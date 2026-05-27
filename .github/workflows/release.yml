@@ -180,6 +180,29 @@ jobs:
           "$GEN_BIN" build/appcast-input/
           mv build/appcast-input/appcast.xml docs/appcast.xml
 
+          # generate_appcast emits bare-filename enclosure URLs (e.g.
+          # `url="Talaria-1.0.0.dmg"`). Sparkle resolves those relative to
+          # the appcast URL (https://thirteen37.github.io/talaria/appcast.xml),
+          # but the DMGs actually live on GitHub Releases at
+          # https://github.com/<repo>/releases/download/v<VERSION>/...
+          # Rewrite each entry to its matching release-download URL so
+          # Sparkle clients don't 404 the download. Per-entry substitution
+          # (not a global prefix) is required because each release lives
+          # under its own v<VERSION>/ path.
+          python3 - <<'PY'
+          import re, pathlib
+          repo = "${{ github.repository }}"
+          path = pathlib.Path("docs/appcast.xml")
+          text = path.read_text()
+          def rewrite(match):
+              ver = match.group(1)
+              return f'url="https://github.com/{repo}/releases/download/v{ver}/Talaria-{ver}.dmg"'
+          new = re.sub(r'url="Talaria-(\d+\.\d+\.\d+(?:-[A-Za-z0-9.\-]+)?)\.dmg"', rewrite, text)
+          if new == text:
+              raise SystemExit("appcast had no Talaria-<VER>.dmg enclosure URLs to rewrite — refusing to ship a feed with relative URLs.")
+          path.write_text(new)
+          PY
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "appcast/${VERSION}"
@@ -191,7 +214,14 @@ jobs:
             echo "appcast unchanged — skipping commit + PR"
           else
             git commit -m "release: update appcast for v${VERSION}"
-            git push -f origin "appcast/${VERSION}"
+            # Try a plain push first so reviewer commits to appcast/<VER>
+            # are preserved when the workflow re-runs (e.g. to retry the
+            # appcast step). Fall back to --force-with-lease only when the
+            # remote has diverged for a real reason; this still rejects if
+            # someone else has pushed to the branch since we last fetched,
+            # so we won't silently nuke commits we didn't see.
+            git push origin "appcast/${VERSION}" \
+              || git push --force-with-lease origin "appcast/${VERSION}"
             # Open a PR so the appcast change is reviewable before it goes
             # live. Idempotent: if a PR for this branch already exists from
             # a prior run on the same tag, skip the create call instead of
