@@ -109,11 +109,17 @@ struct RemoteSnapshotTests {
         #expect(cmd == "rm -f '/tmp/talaria-snapshot-xyz.db'")
     }
 
+    // Tests target `SFTPSubprocessTransfer.sftpGetCommand` — the live
+    // string the production `fetch` path actually feeds to `/usr/bin/sftp`.
+    // The previous helpers on `RemoteSnapshot` were vestigial copies left
+    // behind when the transfer was extracted; covering them let the live
+    // quoting logic drift untested.
+
     @Test
     func sftpGetCommandQuotesBothPaths() {
         // Spaces in either path (e.g. "/Users/John Doe/Library/Caches/...")
         // must not split into separate sftp args.
-        let cmd = RemoteSnapshot.sftpGetCommand(
+        let cmd = SFTPSubprocessTransfer.sftpGetCommand(
             remoteTmp: "/tmp/talaria-snapshot-x.db",
             localPath: "/Users/John Doe/Library/Caches/Talaria/abc/state.db"
         )
@@ -122,7 +128,7 @@ struct RemoteSnapshotTests {
 
     @Test
     func sftpGetCommandEscapesEmbeddedQuotesAndBackslashes() {
-        let cmd = RemoteSnapshot.sftpGetCommand(
+        let cmd = SFTPSubprocessTransfer.sftpGetCommand(
             remoteTmp: "/tmp/a\"b.db",
             localPath: "/Users/x\\y/Library/state.db"
         )

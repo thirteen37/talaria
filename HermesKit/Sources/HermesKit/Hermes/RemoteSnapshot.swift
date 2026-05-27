@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 
 public enum SnapshotState: Sendable, Equatable {
@@ -44,13 +43,19 @@ public actor RemoteSnapshot {
     public nonisolated let profile: ServerProfile
 
     private let cacheRoot: URL
+    private let transfer: RemoteSnapshotTransfer?
     private var subscribers: [UUID: AsyncStream<SnapshotState>.Continuation] = [:]
     private var refreshTask: Task<Void, Error>?
     private var lastState: SnapshotState = .missing
 
-    public init(profile: ServerProfile, cacheRoot: URL? = nil) {
+    /// `transfer == nil` selects the platform default: on macOS, the
+    /// historical `/usr/bin/sftp` subprocess; on iOS, no transfer is
+    /// available without explicit injection (the caller is expected to
+    /// construct a ``NIOSSHCatTransfer`` once the iOS app target lands).
+    public init(profile: ServerProfile, cacheRoot: URL? = nil, transfer: RemoteSnapshotTransfer? = nil) {
         self.profile = profile
         self.cacheRoot = cacheRoot ?? RemoteSnapshot.defaultCacheRoot
+        self.transfer = transfer
     }
 
     public static var defaultCacheRoot: URL {
@@ -149,6 +154,7 @@ public actor RemoteSnapshot {
         try ensureDirectory(localURL.deletingLastPathComponent())
 
         do {
+            #if os(macOS)
             do {
                 try await runBackup(host: host, remoteDB: remoteDB, remoteTmp: remoteTmp)
             } catch {
@@ -159,12 +165,20 @@ public actor RemoteSnapshot {
                 throw error
             }
             do {
-                try await runFetch(host: host, remoteTmp: remoteTmp, localURL: localURL)
+                try await runFetch(remoteTmp: remoteTmp, localURL: localURL)
             } catch {
                 await runRemoteCleanup(host: host, remoteTmp: remoteTmp)
                 throw error
             }
             await runRemoteCleanup(host: host, remoteTmp: remoteTmp)
+            #else
+            // iOS has no `OneShotProcess`. The iOS app target (when it
+            // lands) is expected to drive the backup + cleanup through
+            // a NIO-SSH `exec` command runner; for now we surface a clean
+            // error so callers can show "snapshot refresh unsupported on
+            // this platform" instead of crashing.
+            throw RemoteSnapshotError.sshFailed(.other("snapshot refresh requires the macOS host today"))
+            #endif
             publish(currentObservedState())
         } catch let snapshotError as RemoteSnapshotError {
             publish(.error(snapshotError.errorDescription ?? "snapshot refresh failed"))
@@ -175,6 +189,7 @@ public actor RemoteSnapshot {
         }
     }
 
+    #if os(macOS)
     private func runBackup(host: String, remoteDB: String, remoteTmp: String) async throws {
         let cmd = Self.backupCommand(remoteDB: remoteDB, remoteTmp: remoteTmp)
         // The cmd is a fully-built shell line; ssh concatenates its post-host
@@ -200,66 +215,29 @@ public actor RemoteSnapshot {
         }
     }
 
-    private func runFetch(host: String, remoteTmp: String, localURL: URL) async throws {
-        // sftp `-b -` reads a batched command list from stdin. We only need a
-        // single `get` so this stays one round-trip.
-        var arguments: [String] = []
-        if let port = profile.port {
-            arguments += ["-P", String(port)]
-        }
-        if let identityFile = profile.identityFile {
-            arguments += ["-i", identityFile]
-        }
-        arguments += ["-b", "-"]
-        let destination = profile.user.map { "\($0)@\(host)" } ?? host
-        arguments.append(destination)
-
-        // Download to a sibling tmp file then atomically rename, so any
-        // SessionsBrowser query still holding an open handle to the old
-        // state.db keeps reading the previous inode instead of tripping on
-        // torn pages mid-transfer. The rename is on the same filesystem
-        // (same parent directory) so it's truly atomic.
-        let tmpURL = localURL.appendingPathExtension("downloading-\(UUID().uuidString)")
-        try? FileManager.default.removeItem(at: tmpURL)
-
-        let batch = Self.sftpGetCommand(remoteTmp: remoteTmp, localPath: tmpURL.path) + "\n"
-        let stdin = Data(batch.utf8)
-
-        let result = try await OneShotProcess.run(
-            executableURL: URL(fileURLWithPath: "/usr/bin/sftp"),
-            arguments: arguments,
-            stdin: stdin,
-            timeout: 60
-        )
-        if result.timedOut {
-            try? FileManager.default.removeItem(at: tmpURL)
-            throw RemoteSnapshotError.sshFailed(.commandTimeout("sftp get timed out after 60s"))
-        }
-        if result.exitCode != 0 {
-            try? FileManager.default.removeItem(at: tmpURL)
-            let stderr = result.stderr.isEmpty ? result.stdout : result.stderr
-            throw RemoteSnapshotError.sftpFailed(stderr)
-        }
-        guard FileManager.default.fileExists(atPath: tmpURL.path) else {
-            throw RemoteSnapshotError.sftpFailed("sftp succeeded but local file is missing at \(tmpURL.path)")
-        }
+    private func runFetch(remoteTmp: String, localURL: URL) async throws {
+        // Pick the platform default if the caller didn't inject a transfer.
+        // The default keeps the historical sftp-subprocess path so existing
+        // macOS profiles round-trip byte-identically; opt-in via the
+        // `HermesKit.useNIOSSHTransport` UserDefault swaps **only this**
+        // fetch path (and the ACP transport) — `runBackup` and
+        // `runRemoteCleanup` below still shell out via system-ssh on
+        // macOS. That gap is documented in `docs/security.md`; closing
+        // it requires a NIO-`exec` command runner that lands with the
+        // iOS app target.
+        let active: RemoteSnapshotTransfer = transfer ?? SFTPSubprocessTransfer(profile: profile)
         do {
-            if FileManager.default.fileExists(atPath: localURL.path) {
-                // `replaceItemAt` is atomic on the same filesystem, but it
-                // requires the destination to *already* exist (otherwise it
-                // throws "file doesn't exist"). For the steady-state refresh
-                // path this is what we want — the open SQLite handle keeps
-                // reading the old inode while the swap happens.
-                _ = try FileManager.default.replaceItemAt(localURL, withItemAt: tmpURL)
-            } else {
-                // First refresh for a profile, or after the cache dir was
-                // cleared: there's nothing to replace. A plain rename installs
-                // the snapshot. Same-directory rename is still atomic.
-                try FileManager.default.moveItem(at: tmpURL, to: localURL)
+            try await active.fetch(remotePath: remoteTmp, to: localURL)
+        } catch let transportError as SSHTransportError {
+            switch transportError {
+            case let .transferFailed(message): throw RemoteSnapshotError.sftpFailed(message)
+            case .commandTimeout, .other, .hostUnreachable, .authFailed,
+                 .hostKeyVerification, .needsPassphrase, .hostKeyUnknown,
+                 .hostKeyMismatch, .hostKeyRevoked:
+                throw RemoteSnapshotError.sshFailed(transportError)
             }
         } catch {
-            try? FileManager.default.removeItem(at: tmpURL)
-            throw RemoteSnapshotError.ioFailed("rename \(tmpURL.lastPathComponent) → \(localURL.lastPathComponent) failed: \(error.localizedDescription)")
+            throw RemoteSnapshotError.ioFailed(error.localizedDescription)
         }
     }
 
@@ -275,14 +253,15 @@ public actor RemoteSnapshot {
             timeout: 15
         )
     }
+    #endif
 
     /// Visible for testing. Builds the remote shell line that runs
     /// `sqlite3 <DB> ".backup <TMP>"`. The DB path is double-quoted so
     /// `$HOME` expands on the remote shell; the tmp path is single-quoted
     /// because it's an absolute literal we control.
     static func backupCommand(remoteDB: String, remoteTmp: String) -> String {
-        let quotedRemoteDB = SSHTransport.shellDoubleQuoteAllowingExpansion(remoteDB)
-        let quotedRemoteTmp = SSHTransport.shellQuote(remoteTmp)
+        let quotedRemoteDB = ShellQuoting.shellDoubleQuoteAllowingExpansion(remoteDB)
+        let quotedRemoteTmp = ShellQuoting.shellQuote(remoteTmp)
         return "sqlite3 \(quotedRemoteDB) \".backup \(quotedRemoteTmp)\""
     }
 
@@ -291,25 +270,10 @@ public actor RemoteSnapshot {
     /// command in another `shellQuote` would make the remote shell treat it
     /// as a single literal token and skip the actual `rm`.
     static func cleanupCommand(remoteTmp: String) -> String {
-        "rm -f \(SSHTransport.shellQuote(remoteTmp))"
+        "rm -f \(ShellQuoting.shellQuote(remoteTmp))"
     }
 
-    /// Visible for testing. Builds the single-line sftp batch command that
-    /// pulls the remote temp file to the local cache path. Both paths are
-    /// double-quoted so a space in either (e.g. a Mac user with a space in
-    /// their short name → `/Users/John Doe/...`) doesn't get parsed as two
-    /// sftp arguments. sftp uses backslash to escape inside double quotes.
-    static func sftpGetCommand(remoteTmp: String, localPath: String) -> String {
-        "get \(sftpQuote(remoteTmp)) \(sftpQuote(localPath))"
-    }
-
-    private static func sftpQuote(_ value: String) -> String {
-        let escaped = value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return "\"\(escaped)\""
-    }
-
+    #if os(macOS)
     private func sshBaseArguments(host: String) -> [String] {
         var arguments = [
             "-T",
@@ -326,6 +290,7 @@ public actor RemoteSnapshot {
         arguments += ["--", destination]
         return arguments
     }
+    #endif
 
     private func remoteStateDBPath() -> String {
         Self.remoteStateDBPath(hermesHome: profile.hermesHome)
@@ -393,4 +358,3 @@ private extension String {
         return s
     }
 }
-#endif

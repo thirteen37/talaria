@@ -43,8 +43,8 @@ Talaria v1 is a native macOS front-end for Hermes using ACP for live chat, read-
 ## Deferred Packaging And Distribution
 
 - Mac App Store distribution.
-- iOS companion app.
-- Relay transport for iOS or environments where system `ssh` is unavailable.
+- iOS companion app (no longer blocked on transport — `NIOSSHTransport` lands the iOS-capable transport seam; the remaining work is the iOS UI target, Keychain-backed identity, and a NIO-`exec`-backed admin runner).
+- Relay transport for sshd-less environments (containers without sshd). Plain iOS no longer needs a relay.
 - Import/export tooling for full application state.
 
 ## Scarf Parity Catalogue
