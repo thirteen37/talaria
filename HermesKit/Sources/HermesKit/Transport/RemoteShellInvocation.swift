@@ -61,3 +61,40 @@ public func buildHermesRemoteCommand(profile: ServerProfile) -> String {
         remoteShellPrefix: profile.remoteShellPrefix
     )
 }
+
+/// Returns the shell expression that, when evaluated by the remote shell,
+/// resolves to the Hermes home directory the Logs view should tail. The
+/// returned string is meant to be embedded inside a double-quoted shell
+/// argument so `$HOME` (and the `${HERMES_HOME:-…}` default form) get
+/// expanded at run time on the remote host.
+///
+/// - No explicit value -> `${HERMES_HOME:-$HOME/.hermes}` (matches the
+///   default hermes itself uses when the env var is unset).
+/// - Absolute path -> returned unchanged.
+/// - `~` / `~/…` -> rewritten to `$HOME` / `$HOME/…` so the remote shell
+///   does the expansion; local `~` expansion would use the wrong user's
+///   home for SSH profiles.
+public func remoteHermesHomeExpression(hermesHome: String?) -> String {
+    guard let value = hermesHome?.trimmingCharacters(in: .whitespaces), !value.isEmpty else {
+        return "${HERMES_HOME:-$HOME/.hermes}"
+    }
+    if value == "~" { return "$HOME" }
+    if value.hasPrefix("~/") {
+        return "$HOME/\(String(value.dropFirst(2)))"
+    }
+    return value
+}
+
+/// Builds the wrapped remote command that prints the resolved Hermes home
+/// path to stdout when invoked over SSH. Wrapped through the profile's
+/// `remoteShellMode` so login shells get a chance to seed `HERMES_HOME` from
+/// rc files; output is a single newline-terminated path.
+public func buildRemoteHermesHomeResolveCommand(
+    hermesHome: String?,
+    remoteShellMode: RemoteShellMode,
+    remoteShellPrefix: String?
+) -> String {
+    let expression = remoteHermesHomeExpression(hermesHome: hermesHome)
+    let inner = "printf '%s\\n' \(ShellQuoting.shellDoubleQuoteAllowingExpansion(expression))"
+    return remoteShellMode.wrap(command: inner, customPrefix: remoteShellPrefix)
+}
