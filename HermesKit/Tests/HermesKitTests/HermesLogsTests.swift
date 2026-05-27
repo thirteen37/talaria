@@ -75,6 +75,45 @@ struct HermesLogsTests {
 
 #if os(macOS)
     @Test
+    func remoteLogTailingAcceptsNilHermesHome() {
+        // Pre-change, RemoteLogTailing required a literal hermesHome at
+        // construction. The Logs view now hands it `profile.hermesHome` —
+        // possibly nil — and the tailer is expected to resolve at tail()
+        // time. Locking in that nil construction is supported keeps the
+        // makeTailing factory from regressing to returning nil for SSH
+        // profiles that haven't been configured with HERMES_HOME.
+        let profile = ServerProfile(
+            name: "Box",
+            kind: .ssh,
+            host: "example.com"
+        )
+        let tailing = RemoteLogTailing(profile: profile, hermesHome: nil)
+        #expect(tailing.hermesHome == nil)
+        // Default-argument form must also compile — that's the call site
+        // the LogsView uses.
+        let defaulted = RemoteLogTailing(profile: profile)
+        #expect(defaulted.hermesHome == nil)
+    }
+
+    @Test
+    func resolveHermesHomeShortCircuitsAbsolutePaths() async throws {
+        // Absolute literal paths don't need a remote round trip. The
+        // resolveHermesHome fast path returns them verbatim so the Logs view
+        // can start tailing without paying for an extra ssh probe — and so
+        // tests can exercise the path without a live remote.
+        let profile = ServerProfile(
+            name: "Box",
+            kind: .ssh,
+            host: "example.com"
+        )
+        let resolved = try await RemoteLogTailing.resolveHermesHome(
+            profile: profile,
+            hermesHome: "/var/hermes"
+        )
+        #expect(resolved == "/var/hermes")
+    }
+
+    @Test
     func localLogTailingPicksUpAppends() async throws {
         let temp = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("hermes-logs-test-\(UUID().uuidString)")

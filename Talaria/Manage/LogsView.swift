@@ -98,12 +98,6 @@ struct LogsView: View {
         Group {
             if let harness {
                 content(harness: harness)
-            } else if resolvedHermesHome == nil {
-                ContentUnavailableView(
-                    "Logs path unknown",
-                    systemImage: "doc.text.magnifyingglass",
-                    description: Text("Set HERMES_HOME on the profile to tail logs.")
-                )
             } else {
                 ProgressView()
             }
@@ -122,35 +116,44 @@ struct LogsView: View {
         }
     }
 
-    /// Logs root, with sensible defaults so the user doesn't have to set
-    /// `HERMES_HOME` on a vanilla local profile. Hermes itself defaults to
-    /// `~/.hermes` when the env var is unset, so the log tailer should
-    /// follow the same convention; SSH profiles can't be defaulted (the
-    /// remote home directory is unknown) and remain explicit.
-    private var resolvedHermesHome: String? {
-        Self.resolvedHermesHome(profile: profile)
-    }
-
-    static func resolvedHermesHome(profile: ServerProfile) -> String? {
-        if let value = profile.hermesHome, !value.isEmpty { return value }
-        if profile.kind == .local {
-            return (NSHomeDirectory() as NSString).appendingPathComponent(".hermes")
+    /// Logs root for local profiles, with sensible defaults so the user
+    /// doesn't have to set `HERMES_HOME` on a vanilla local profile. Order
+    /// matches what hermes itself reads: explicit profile override > the
+    /// app's process environment > the user's login-shell HERMES_HOME (cached
+    /// from `LoginShellPATHResolver`) > the `~/.hermes` default. SSH profiles
+    /// are resolved at tail-time on the remote host and return nil here.
+    static func resolvedLocalHermesHome(profile: ServerProfile) -> String? {
+        if let value = profile.hermesHome?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !value.isEmpty {
+            return value
         }
-        return nil
+        guard profile.kind == .local else { return nil }
+        if let env = ProcessInfo.processInfo.environment["HERMES_HOME"], !env.isEmpty {
+            return env
+        }
+        if let cached = LoginShellPATHResolver.cachedHermesHome() {
+            return cached
+        }
+        return (NSHomeDirectory() as NSString).appendingPathComponent(".hermes")
     }
 
     /// Built at window scope so the lazily-created `LogsHarness` outlives
-    /// LogsView instances. Returns nil when the profile has no resolvable
-    /// `HERMES_HOME` — the caller surfaces the "Logs path unknown" empty
-    /// state in that case.
+    /// LogsView instances. For local profiles the path is resolved
+    /// synchronously here; SSH profiles defer resolution to the tailer
+    /// (which runs a short remote command through the profile's shell mode
+    /// when no `profile.hermesHome` was pinned).
     static func makeTailing(profile: ServerProfile) -> HermesLogTailing? {
-        guard let hermesHome = resolvedHermesHome(profile: profile) else { return nil }
         #if os(macOS)
         switch profile.kind {
         case .local:
+            // resolvedLocalHermesHome always returns non-nil for local kind
+            // (worst case: `~/.hermes`). The `?? "~/.hermes"` is just
+            // belt-and-braces — Swift's flow analysis can't see it.
+            let hermesHome = resolvedLocalHermesHome(profile: profile)
+                ?? (NSHomeDirectory() as NSString).appendingPathComponent(".hermes")
             return LocalLogTailing(hermesHome: hermesHome)
         case .ssh:
-            return RemoteLogTailing(profile: profile, hermesHome: hermesHome)
+            return RemoteLogTailing(profile: profile, hermesHome: profile.hermesHome)
         }
         #else
         return nil
