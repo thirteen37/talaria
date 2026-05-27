@@ -279,11 +279,17 @@ public struct LocalLogTailing: HermesLogTailing {
 /// Spawns `ssh ... tail -F <hermesHome>/logs/*.log` as a long-lived process and
 /// emits each parsed line. Cancellation of the AsyncStream terminates the
 /// underlying `ssh` (and the remote `tail`).
+///
+/// `hermesHome` is optional: when nil (or the explicit value uses `~`), the
+/// tailer first runs a short remote command — wrapped in the profile's shell
+/// mode — to resolve `${HERMES_HOME:-$HOME/.hermes}` against the remote
+/// environment, then uses that absolute path for the tail. Resolution errors
+/// flow through the stream like any other tail failure.
 public struct RemoteLogTailing: HermesLogTailing {
     public let profile: ServerProfile
-    public let hermesHome: String
+    public let hermesHome: String?
 
-    public init(profile: ServerProfile, hermesHome: String) {
+    public init(profile: ServerProfile, hermesHome: String? = nil) {
         self.profile = profile
         self.hermesHome = hermesHome
     }
@@ -294,78 +300,192 @@ public struct RemoteLogTailing: HermesLogTailing {
                 continuation.finish(throwing: SSHTransportError.other("profile is not an SSH profile"))
                 return
             }
-            var sshArgs: [String] = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
-            if let port = profile.port {
-                sshArgs += ["-p", String(port)]
-            }
-            if let identityFile = profile.identityFile {
-                sshArgs += ["-i", identityFile]
-            }
-            let destination = profile.user.map { "\($0)@\(host)" } ?? host
-            sshArgs += ["--", destination]
-            sshArgs.append(Self.remoteTailScript(hermesHome: hermesHome))
 
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-            process.arguments = sshArgs
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
-            process.standardOutput = stdoutPipe
-            process.standardError = stderrPipe
-
-            let reader = AdminLineReader(handle: stdoutPipe.fileHandleForReading, label: "remoteLogs.stdout") { rawLine in
-                let parsed = HermesLogs.parse(rawLine)
-                if let comp = component, !comp.isEmpty {
-                    if !parsed.component.localizedCaseInsensitiveContains(comp) { return }
-                }
-                continuation.yield(parsed)
-            }
-            // Buffer ssh's stderr so we can attribute non-zero exits to it.
-            // Without this, an auth failure / unreachable host / missing logs
-            // directory / BatchMode rejection just finishes the stream
-            // silently and the view shows an empty log with no banner.
-            let stderrBuffer = StderrBuffer()
-            let stderrReader = AdminLineReader(handle: stderrPipe.fileHandleForReading, label: "remoteLogs.stderr") { line in
-                stderrBuffer.append(line)
-            }
-
-            process.terminationHandler = { proc in
-                reader.finish()
-                stderrReader.finish()
-                if proc.terminationStatus != 0 {
-                    let stderr = stderrBuffer.snapshot()
-                    let classified = SSHTransport.classifyStderr(stderr)
-                    let detail: String
-                    switch classified {
-                    case .other:
-                        detail = stderr.isEmpty
-                            ? "remote log tail exited \(proc.terminationStatus)"
-                            : stderr
-                    default:
-                        detail = classified.errorDescription ?? "remote log tail failed"
-                    }
-                    continuation.finish(throwing: SSHTransportError.other(detail))
-                } else {
-                    continuation.finish()
-                }
-            }
-
+            let processBox = RemoteTailProcessBox()
             continuation.onTermination = { _ in
-                if process.isRunning {
-                    process.terminate()
+                processBox.cancel()
+            }
+
+            let profileCopy = profile
+            let hermesHomeCopy = hermesHome
+            let comp = component
+            Task {
+                let resolved: String
+                do {
+                    resolved = try await Self.resolveHermesHome(
+                        profile: profileCopy,
+                        hermesHome: hermesHomeCopy
+                    )
+                } catch {
+                    continuation.finish(throwing: error)
+                    return
                 }
+                if processBox.isCancelled {
+                    continuation.finish()
+                    return
+                }
+                Self.startTail(
+                    profile: profileCopy,
+                    hermesHome: resolved,
+                    host: host,
+                    component: comp,
+                    processBox: processBox,
+                    continuation: continuation
+                )
             }
-
-            do {
-                try process.run()
-            } catch {
-                continuation.finish(throwing: error)
-                return
-            }
-
-            reader.start()
-            stderrReader.start()
         }
+    }
+
+    private static func startTail(
+        profile: ServerProfile,
+        hermesHome: String,
+        host: String,
+        component: String?,
+        processBox: RemoteTailProcessBox,
+        continuation: AsyncThrowingStream<LogLine, Error>.Continuation
+    ) {
+        var sshArgs: [String] = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+        if let port = profile.port {
+            sshArgs += ["-p", String(port)]
+        }
+        if let identityFile = profile.identityFile {
+            sshArgs += ["-i", identityFile]
+        }
+        let destination = profile.user.map { "\($0)@\(host)" } ?? host
+        sshArgs += ["--", destination]
+        sshArgs.append(remoteTailScript(hermesHome: hermesHome))
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = sshArgs
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        let reader = AdminLineReader(handle: stdoutPipe.fileHandleForReading, label: "remoteLogs.stdout") { rawLine in
+            let parsed = HermesLogs.parse(rawLine)
+            if let comp = component, !comp.isEmpty {
+                if !parsed.component.localizedCaseInsensitiveContains(comp) { return }
+            }
+            continuation.yield(parsed)
+        }
+        // Buffer ssh's stderr so we can attribute non-zero exits to it.
+        // Without this, an auth failure / unreachable host / missing logs
+        // directory / BatchMode rejection just finishes the stream
+        // silently and the view shows an empty log with no banner.
+        let stderrBuffer = StderrBuffer()
+        let stderrReader = AdminLineReader(handle: stderrPipe.fileHandleForReading, label: "remoteLogs.stderr") { line in
+            stderrBuffer.append(line)
+        }
+
+        process.terminationHandler = { proc in
+            reader.finish()
+            stderrReader.finish()
+            if proc.terminationStatus != 0 {
+                let stderr = stderrBuffer.snapshot()
+                let classified = SSHTransport.classifyStderr(stderr)
+                let detail: String
+                switch classified {
+                case .other:
+                    detail = stderr.isEmpty
+                        ? "remote log tail exited \(proc.terminationStatus)"
+                        : stderr
+                default:
+                    detail = classified.errorDescription ?? "remote log tail failed"
+                }
+                continuation.finish(throwing: SSHTransportError.other(detail))
+            } else {
+                continuation.finish()
+            }
+        }
+
+        // Start the process *before* publishing it to the box. Otherwise
+        // there's a narrow window where attach() registers the process,
+        // cancel() fires (consumer drops the stream just as resolve
+        // returns), snapshots a non-running Process, skips terminate(),
+        // and then run() spawns ssh+tail with nothing watching it — an
+        // orphaned remote `tail -F` until the TCP connection drops.
+        // Attaching after run() flips the ordering: if cancel beat us to
+        // the lock, attach returns false and we terminate the freshly
+        // spawned process ourselves before any readers start.
+        do {
+            try process.run()
+        } catch {
+            continuation.finish(throwing: error)
+            return
+        }
+
+        if !processBox.attach(process) {
+            // Consumer cancelled while ssh was starting. Tear down the
+            // process we just launched; terminationHandler will finish
+            // the continuation.
+            process.terminate()
+            return
+        }
+
+        reader.start()
+        stderrReader.start()
+    }
+
+    /// Resolves the remote Hermes home directory once, before the long-lived
+    /// `tail` is spawned. Absolute literal paths short-circuit without making
+    /// any SSH calls; nil / `~`-containing values run
+    /// `buildRemoteHermesHomeResolveCommand` against the profile and parse
+    /// its stdout. Exposed for tests.
+    static func resolveHermesHome(profile: ServerProfile, hermesHome: String?) async throws -> String {
+        if let value = hermesHome?.trimmingCharacters(in: .whitespaces),
+           !value.isEmpty, value != "~", !value.hasPrefix("~/"), !value.contains("$") {
+            return value
+        }
+        guard let host = profile.host, !host.isEmpty else {
+            throw SSHTransportError.other("profile has no host")
+        }
+        let resolveCommand = buildRemoteHermesHomeResolveCommand(
+            hermesHome: hermesHome,
+            remoteShellMode: profile.remoteShellMode,
+            remoteShellPrefix: profile.remoteShellPrefix
+        )
+        var args: [String] = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+        if let port = profile.port {
+            args += ["-p", String(port)]
+        }
+        if let identityFile = profile.identityFile {
+            args += ["-i", identityFile]
+        }
+        let destination = profile.user.map { "\($0)@\(host)" } ?? host
+        args += ["--", destination, resolveCommand]
+
+        let result: OneShotProcess.Result
+        do {
+            result = try await OneShotProcess.run(
+                executableURL: URL(fileURLWithPath: "/usr/bin/ssh"),
+                arguments: args,
+                timeout: 10
+            )
+        } catch let failure as OneShotProcess.Failure {
+            throw SSHTransportError.other(String(describing: failure))
+        }
+        if result.timedOut {
+            throw SSHTransportError.other("remote home resolve timed out")
+        }
+        if result.exitCode != 0 {
+            let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            let classified = SSHTransport.classifyStderr(stderr)
+            let detail: String
+            switch classified {
+            case .other:
+                detail = stderr.isEmpty ? "remote home resolve exited \(result.exitCode)" : stderr
+            default:
+                detail = classified.errorDescription ?? "remote home resolve failed"
+            }
+            throw SSHTransportError.other(detail)
+        }
+        let path = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if path.isEmpty {
+            throw SSHTransportError.other("remote home resolve returned empty path")
+        }
+        return path
     }
 
     /// Remote tail script. Plain `tail -F <home>/logs/*.log` glob-expands on
@@ -405,6 +525,49 @@ public struct RemoteLogTailing: HermesLogTailing {
           sleep 2; \
         done' _ \(logsPath)
         """
+    }
+}
+
+/// Coordinates lifecycle of the ssh tail process with the AsyncStream's
+/// `onTermination` callback when the home-resolve probe is in flight. The
+/// box can be cancelled before the ssh process is even spawned (consumer
+/// dropped the stream during resolve); once `attach` succeeds, the box owns
+/// the running process and forwards cancellation as SIGTERM.
+private final class RemoteTailProcessBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    /// Returns true if the process was registered. False means the consumer
+    /// already cancelled and the caller should not run the process.
+    func attach(_ p: Process) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if cancelled { return false }
+        process = p
+        return true
+    }
+
+    func cancel() {
+        lock.lock()
+        let runningProcess = process
+        cancelled = true
+        lock.unlock()
+        // No `isRunning` guard: `attach` always happens after `process.run()`
+        // succeeds (see startTail), so a non-nil snapshot here means the
+        // process was launched and `terminate()` is well-defined — either
+        // it delivers SIGTERM or it's a no-op on an already-exited child.
+        // The previous guard would skip the terminate when called before
+        // `run()` returned, leaving an orphaned remote tail.
+        if let p = runningProcess {
+            p.terminate()
+        }
     }
 }
 
