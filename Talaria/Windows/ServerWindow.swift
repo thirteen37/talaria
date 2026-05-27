@@ -36,6 +36,13 @@ struct ServerWindow: View {
             let profile = directory.profile(id: profileId) ?? ProfileDirectory.localProfile
             harness = ServerWindowHarness.make(profile: profile)
         }
+        .onDisappear {
+            // Cancel the window-scoped log tailer (and any future
+            // long-lived per-window tasks) when the window closes. Without
+            // this an SSH profile leaks its `ssh tail -F` subprocess for
+            // every closed window that ever visited the Logs view.
+            harness?.tearDown()
+        }
     }
 
     /// Opens / replaces / closes the `HermesDB` handle as the remote snapshot
@@ -130,7 +137,21 @@ struct ServerWindow: View {
             case .skills: SkillsView(runner: harness.store.adminRunner)
             case .tools: ToolsView(runner: harness.store.adminRunner)
             case .cron: CronView(runner: harness.store.adminRunner)
-            case .logs: LogsView(runner: harness.store.adminRunner, profile: harness.profile)
+            case .logs:
+                LogsView(
+                    runner: harness.store.adminRunner,
+                    profile: harness.profile,
+                    provider: { [weak harness] in
+                        // Lambda captures the window-scoped harness so the
+                        // LogsHarness it returns outlives any single view
+                        // instance. Built lazily — the first sidebar click on
+                        // Logs spawns the tailer; subsequent clicks reuse it.
+                        guard let harness else { return nil }
+                        return harness.ensureLogsHarness(factory: {
+                            LogsView.makeTailing(profile: harness.profile)
+                        })
+                    }
+                )
             case .doctor: DoctorView(runner: harness.store.adminRunner, profile: harness.profile)
             case .updates: UpdatesView(runner: harness.store.adminRunner)
             }
@@ -167,12 +188,44 @@ final class ServerWindowHarness {
     let snapshot: RemoteSnapshot?
     let profile: ServerProfile
     private(set) var db: HermesDB?
+    /// Persistent log tailer. Lives at the window level so the Logs view's
+    /// buffered lines survive sidebar tab switches — when the user navigates
+    /// away from Logs and back, SwiftUI tears down LogsView and recreates it,
+    /// but the underlying ring buffer here continues to accumulate lines.
+    /// Lazily created on first access; nil for windows where the profile
+    /// doesn't expose a resolvable HERMES_HOME.
+    private(set) var logsHarness: LogsHarness?
 
     private init(store: SessionsStore, db: HermesDB?, snapshot: RemoteSnapshot?, profile: ServerProfile) {
         self.store = store
         self.db = db
         self.snapshot = snapshot
         self.profile = profile
+    }
+
+    /// Returns the cached log tailer, or builds one when `factory` produces a
+    /// usable tailing implementation. LogsView calls this on appear; the
+    /// returned harness keeps streaming even after LogsView is dismissed.
+    func ensureLogsHarness(factory: () -> HermesLogTailing?) -> LogsHarness? {
+        if let logsHarness { return logsHarness }
+        guard let tailing = factory() else { return nil }
+        let harness = LogsHarness(tailing: tailing)
+        harness.start()
+        logsHarness = harness
+        return harness
+    }
+
+    /// Cancels long-lived per-window resources when the SwiftUI window
+    /// disappears. Currently this is just the log tailer — for SSH profiles
+    /// it spawns a real `ssh tail -F` subprocess, which would otherwise
+    /// outlive its window if the remote logs are quiet. ServerWindow calls
+    /// this from `.onDisappear`; the explicit hook is preferred over a
+    /// `deinit` because Swift 6 makes MainActor deinits nonisolated, which
+    /// would force us to thread the cleanup through a detached Task with
+    /// no guarantee about ordering relative to window close.
+    func tearDown() {
+        logsHarness?.stop()
+        logsHarness = nil
     }
 
     static func make(profile: ServerProfile) -> ServerWindowHarness {
@@ -242,8 +295,22 @@ final class ServerWindowHarness {
             try transport.start()
             return transport
         }
+        // Mirror the session transport's binary + env so admin commands launch
+        // the same hermes the chat session does. Without `profile.hermesPath`
+        // here, admin always ran `env hermes …` — which works for chat (chat
+        // uses the profile path) but breaks admin when the profile points at
+        // an absolute path or a binary name PATH lookup can't find.
+        // `COLUMNS=400` keeps hermes' Rich tables from truncating skill names
+        // (and other cells) to ellipsis-suffixed strings the parser can't map
+        // back to enable/disable commands. Hermes inherits stdout's tty
+        // semantics from the parent; without a wide hint, Rich falls back to
+        // its 80-col default whenever stdout is a pipe.
+        var adminBaseEnv: [String: String] = ["COLUMNS": "400"]
+        if let hermesHome {
+            adminBaseEnv["HERMES_HOME"] = hermesHome
+        }
         let adminRunner = PathAwareHermesAdminRunner(
-            inner: LocalHermesAdminRunner(),
+            inner: LocalHermesAdminRunner(hermesPath: hermesPath, environment: adminBaseEnv),
             resolver: resolver
         )
         let store = SessionsStore(manager: manager, adminRunner: adminRunner)

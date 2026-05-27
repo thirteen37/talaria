@@ -71,16 +71,25 @@ public enum HermesCron {
         try ensureSuccess(result)
     }
 
-    /// Tolerant parser. Expected per-line shape (tab-separated or 2+ spaces):
-    /// `id  schedule  command  enabled  lastRun?`
-    /// Where `schedule` may contain spaces (cron expressions usually have 5
-    /// fields), so we anchor on tabs first and fall back to a "two or more
-    /// spaces" delimiter — that lets us preserve embedded single-spaces in
-    /// the schedule and command fields.
+    /// Tolerant parser. Supported shapes:
+    ///   * Block form (real hermes output):
+    ///     ```
+    ///     <id> [active|paused]
+    ///         Name:      …
+    ///         Schedule:  …
+    ///         Next run:  …
+    ///         Last run:  …
+    ///     ```
+    ///   * Per-line table form `id  schedule  command  enabled  lastRun?` —
+    ///     kept so older hermes builds (and the synthetic test fixtures)
+    ///     still parse cleanly.
     public static func parse(_ text: String) -> [CronJob] {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        if lines.contains(where: { isBlockHeader($0.trimmingCharacters(in: .whitespaces)) != nil }) {
+            return parseBlocks(lines: lines)
+        }
         var jobs: [CronJob] = []
-        for raw in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let line = String(raw)
+        for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { continue }
             if isHeaderLine(trimmed) { continue }
@@ -89,6 +98,77 @@ public enum HermesCron {
             }
         }
         return jobs
+    }
+
+    private struct BlockBuilder {
+        var id: String
+        var enabled: Bool
+        var name: String = ""
+        var schedule: String = ""
+        var lastRun: String?
+    }
+
+    /// State machine over the indented `<id> [status]` … `Key: Value` blocks.
+    /// A new id line flushes the previous accumulator; non-key lines (gateway
+    /// warnings, the boxed banner, blank separators) are ignored.
+    private static func parseBlocks(lines: [String]) -> [CronJob] {
+        var jobs: [CronJob] = []
+        var current: BlockBuilder?
+
+        func flush() {
+            guard let c = current, !c.id.isEmpty else { return }
+            jobs.append(CronJob(
+                id: c.id,
+                schedule: c.schedule,
+                command: c.name,
+                enabled: c.enabled,
+                lastRun: c.lastRun.flatMap(parseDate)
+            ))
+            current = nil
+        }
+
+        for raw in lines {
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            if let header = isBlockHeader(trimmed) {
+                flush()
+                current = BlockBuilder(id: header.id, enabled: header.enabled)
+                continue
+            }
+            if current != nil, let (key, value) = splitKeyValue(trimmed) {
+                switch key.lowercased() {
+                case "name": current?.name = value
+                case "schedule": current?.schedule = value
+                case "last run": current?.lastRun = value
+                default: break
+                }
+            }
+        }
+        flush()
+        return jobs
+    }
+
+    /// Block-form header: `<hex-id> [<status>]`. `enabled` is true for
+    /// `active`; `paused` and anything else (including future tags like
+    /// `disabled`) are treated as not enabled so the toggle reflects the
+    /// runtime state. Returns nil for non-header lines so the caller can
+    /// branch cleanly.
+    private static func isBlockHeader(_ line: String) -> (id: String, enabled: Bool)? {
+        guard let bracket = line.firstIndex(of: "["),
+              line.hasSuffix("]") else { return nil }
+        let id = line[line.startIndex..<bracket].trimmingCharacters(in: .whitespaces)
+        let status = line[line.index(after: bracket)..<line.index(before: line.endIndex)]
+            .trimmingCharacters(in: .whitespaces)
+            .lowercased()
+        guard !id.isEmpty, id.allSatisfy({ $0.isHexDigit }) else { return nil }
+        return (id, status == "active")
+    }
+
+    private static func splitKeyValue(_ line: String) -> (key: String, value: String)? {
+        guard let colon = line.firstIndex(of: ":") else { return nil }
+        let key = line[line.startIndex..<colon].trimmingCharacters(in: .whitespaces)
+        let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        if key.isEmpty || value.isEmpty { return nil }
+        return (String(key), String(value))
     }
 
     private static func parseLine(_ line: String) -> CronJob? {

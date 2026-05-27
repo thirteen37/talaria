@@ -31,16 +31,16 @@ struct SkillsView: View {
                 return
             }
             if harness != nil { return }
+            // No toggler — hermes (as of 0.14) exposes only an interactive
+            // `skills config` UI for enable/disable, with no scriptable
+            // enable/disable subcommand. The Skills column is rendered as a
+            // read-only status indicator below; if a future hermes adds a
+            // scriptable toggle, swap this back to call HermesSkills.enable/
+            // disable and restore the Toggle column.
             let h = ManageListHarness<SkillRow>(
                 runner: runner,
                 lister: { try await HermesSkills.list(runner: $0) },
-                toggler: { runner, row, enabled in
-                    if enabled {
-                        try await HermesSkills.enable(runner: runner, name: row.name)
-                    } else {
-                        try await HermesSkills.disable(runner: runner, name: row.name)
-                    }
-                }
+                toggler: { _, _, _ in }
             )
             harness = h
             await h.refresh()
@@ -49,40 +49,42 @@ struct SkillsView: View {
 
     @ViewBuilder
     private func content(harness: ManageListHarness<SkillRow>) -> some View {
-        VStack(spacing: 0) {
-            HSplitView {
-                Table(harness.rows, selection: Binding(get: { harness.selectionID }, set: { harness.selectionID = $0 })) {
-                    TableColumn("Name") { row in
-                        Text(row.name)
-                    }
-                    TableColumn("Enabled") { row in
-                        Toggle("", isOn: Binding(
-                            get: { row.enabled },
-                            set: { newValue in
-                                Task { await harness.setEnabled(row, enabled: newValue) }
-                            }
-                        ))
-                        .labelsHidden()
-                    }
-                    .width(80)
-                    TableColumn("Path") { row in
-                        Text(row.path ?? "")
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
+        // Attach `manageBanner` directly to the HSplitView (matching CronView)
+        // rather than to a wrapping VStack. The earlier VStack wrapper caused
+        // the safe-area inset banner to render only above the left pane —
+        // the table column headers ("Enabled", "Path") bled through on the
+        // right where the banner had no width.
+        HSplitView {
+            Table(harness.rows, selection: Binding(get: { harness.selectionID }, set: { harness.selectionID = $0 })) {
+                TableColumn("Name") { row in
+                    Text(row.name)
                 }
-                .overlay {
-                    if harness.rows.isEmpty, !harness.isLoading {
-                        ContentUnavailableView("No skills", systemImage: "wand.and.stars")
-                    }
+                // Read-only enabled indicator. Hermes 0.14 doesn't expose a
+                // CLI to flip the value, so showing a Toggle just sets the
+                // user up to hit an "invalid choice" error. A glyph still
+                // communicates the on-disk state at a glance.
+                TableColumn("Enabled") { row in
+                    Image(systemName: row.enabled ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(row.enabled ? .green : .secondary)
+                        .help(row.enabled ? "Enabled" : "Disabled")
                 }
-                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
-
-                previewPane(harness: harness)
-                    .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
+                .width(60)
+                TableColumn("Path") { row in
+                    Text(row.path ?? "")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay {
+                if harness.rows.isEmpty, !harness.isLoading {
+                    ContentUnavailableView("No skills", systemImage: "wand.and.stars")
+                }
+            }
+            .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+
+            previewPane(harness: harness)
+                .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar {
@@ -133,11 +135,12 @@ struct SkillsView: View {
             loadingPreview = false
             return
         }
+        let source = harness.rows.first(where: { $0.id == id })?.source
         loadingPreview = true
         previewTask = Task {
             defer { loadingPreview = false }
             do {
-                let body = try await HermesSkills.show(runner: runner, name: id)
+                let body = try await HermesSkills.show(runner: runner, name: id, source: source)
                 // Belt-and-braces: even if cancellation lost the race, only
                 // apply the result when the selection is still on this row.
                 guard !Task.isCancelled, harness.selectionID == id else { return }

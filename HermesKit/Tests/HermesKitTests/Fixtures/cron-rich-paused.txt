@@ -1,0 +1,23 @@
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Scheduled Jobs                                  │
+└─────────────────────────────────────────────────────────────────────────┘
+
+  c164af3d9600 [paused]
+    Name:      talaria-fixture
+    Schedule:  0 9 * * *
+    Repeat:    ∞
+    Next run:  2026-05-25T09:00:00+08:00
+    Deliver:   local
+
+  f19e42b678fe [active]
+    Name:      another
+    Schedule:  */15 * * * *
+    Repeat:    ∞
+    Next run:  2026-05-24T15:30:00+08:00
+    Deliver:   local
+
+  ⚠  Gateway is not running — jobs won't fire automatically.
+     Start it with: hermes gateway install
+                    sudo hermes gateway install --system  # Linux servers
+

@@ -1,0 +1,116 @@
+
+┌─────────────────────────────────────────────────────────┐
+│                 🩺 Hermes Doctor                        │
+└─────────────────────────────────────────────────────────┘
+
+◆ Security Advisories
+  ✓ No active security advisories
+
+◆ Python Environment
+  ✓ Python 3.11.15
+  ✓ Virtual environment active
+
+◆ Required Packages
+  ✓ OpenAI SDK
+  ✓ Rich (terminal UI)
+  ✓ python-dotenv
+  ✓ PyYAML
+  ✓ HTTPX
+  ✓ Croniter (cron expressions) (optional)
+  ⚠ python-telegram-bot (optional, not installed)
+  ⚠ discord.py (optional, not installed)
+
+◆ Configuration Files
+  ✓ ~/.hermes/.env file exists
+  ✓ API key or custom endpoint configured
+  ✓ ~/.hermes/config.yaml exists
+  ✓ Config version up to date (v23)
+
+◆ xAI Model Retirement (May 15, 2026)
+  ✓ No retired xAI models in config
+
+◆ Auth Providers
+  ⚠ Nous Portal auth (not logged in)
+  ⚠ OpenAI Codex auth (not logged in)
+    → No Codex credentials stored. Run `hermes auth` to authenticate.
+  ⚠ Google Gemini OAuth (not logged in)
+  ⚠ MiniMax OAuth (not logged in)
+  ⚠ xAI OAuth (not logged in)
+    → No xAI OAuth credentials stored. Select xAI Grok OAuth (SuperGrok Subscription) in `hermes model`.
+
+◆ Directory Structure
+  ✓ ~/.hermes directory exists
+  ✓ ~/.hermes/cron/ exists
+  ✓ ~/.hermes/sessions/ exists
+  ✓ ~/.hermes/logs/ exists
+  ✓ ~/.hermes/skills/ exists
+  ✓ ~/.hermes/memories/ exists
+  ✓ ~/.hermes/SOUL.md exists (persona configured)
+  ✓ ~/.hermes/memories/ directory exists
+    → MEMORY.md not created yet (will be created when the agent first writes a memory)
+    → USER.md not created yet (will be created when the agent first writes a memory)
+  ✓ ~/.hermes/state.db exists (41 sessions)
+
+◆ Command Installation
+  ✓ Venv entry point exists (venv/bin/hermes)
+  ✓ ~/.local/bin/hermes exists (non-symlink)
+
+◆ External Tools
+  ✓ git
+  ✓ ripgrep (rg) (faster file search)
+  ✓ docker (optional)
+  ✓ Node.js
+  ✓ agent-browser (Node.js) (browser automation)
+  ✓ Playwright Chromium (browser engine)
+  ✓ Browser tools (agent-browser) deps (no known vulnerabilities)
+
+◆ API Connectivity
+  Running 27 connectivity checks in parallel…                                                                        ⚠ OpenRouter API (not configured)
+
+◆ Tool Availability
+  ✓ browser
+  ✓ clarify
+  ✓ code_execution
+  ✓ cronjob
+  ✓ terminal
+  ✓ delegation
+  ✓ file
+  ✓ memory
+  ✓ session_search
+  ✓ skills
+  ✓ todo
+  ✓ tts
+  ✓ vision
+  ✓ video
+  ✓ kanban (runtime-gated; loaded only for dispatcher-spawned workers)
+  ⚠ browser-cdp (system dependency not met)
+  ⚠ computer_use (system dependency not met)
+  ⚠ discord (missing DISCORD_BOT_TOKEN)
+  ⚠ discord_admin (missing DISCORD_BOT_TOKEN)
+  ⚠ feishu_doc (system dependency not met)
+  ⚠ feishu_drive (system dependency not met)
+  ⚠ homeassistant (system dependency not met)
+  ⚠ image_gen (system dependency not met)
+  ⚠ moa (missing OPENROUTER_API_KEY)
+  ⚠ messaging (system dependency not met)
+  ⚠ video_gen (system dependency not met)
+  ⚠ web (missing EXA_API_KEY, PARALLEL_API_KEY, TAVILY_API_KEY, FIRECRAWL_API_KEY, FIRECRAWL_API_URL, FIRECRAWL_GATEWAY_URL, TOOL_GATEWAY_DOMAIN, TOOL_GATEWAY_SCHEME, TOOL_GATEWAY_USER_TOKEN)
+  ⚠ x_search (missing XAI_API_KEY)
+  ⚠ hermes-yuanbao (system dependency not met)
+  ⚠ spotify (system dependency not met)
+
+◆ Skills Hub
+  ✓ Skills Hub directory exists
+  ✓ Lock file OK (0 hub-installed skill(s))
+  ⚠ No GITHUB_TOKEN (60 req/hr rate limit — set in ~/.hermes/.env for better rates)
+
+◆ Memory Provider
+  ✓ Built-in memory active (no external provider configured — this is fine)
+
+────────────────────────────────────────────────────────────
+  Found 1 issue(s) to address:
+
+  1. Run 'hermes setup' to configure missing API keys for full tool access
+
+  Tip: run 'hermes doctor --fix' to auto-fix what's possible.
+
