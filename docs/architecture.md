@@ -13,7 +13,7 @@ Talaria is a SwiftUI macOS app backed by a shared `HermesKit` Swift package. The
 
 ## Read And Write Model
 
-Live chat stays on ACP over newline-delimited JSON-RPC. Non-chat surfaces are backed by the Hermes dashboard HTTP API (`hermes dashboard --host 127.0.0.1 --port <ephemeral>`). Talaria never reads or writes Hermes SQLite files directly.
+Live chat stays on ACP over newline-delimited JSON-RPC. Non-chat surfaces are backed by the Hermes dashboard HTTP API (`hermes dashboard --host 127.0.0.1 --port <port>`). Talaria allocates an ephemeral loopback port by default, but profiles can pin a dashboard port when the automatic choice conflicts with local or remote host policy. Talaria never reads or writes Hermes SQLite files directly.
 
 Each window acquires a dashboard endpoint for its `ServerProfile` through `DashboardSupervisor`. The supervisor starts `hermes dashboard`, polls `/api/status`, caches the session token scraped from the dashboard SPA, reference-counts consumers, and terminates the child when the last window releases it.
 

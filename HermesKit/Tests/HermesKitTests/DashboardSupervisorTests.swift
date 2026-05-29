@@ -125,6 +125,39 @@ struct DashboardSupervisorTests {
     }
 
     @Test
+    func releaseDuringPendingAcquireTerminatesSpawnWhenItBecomesReady() async throws {
+        let launcher = StubLauncher()
+        let http = StubHTTP(responses: [])
+        let supervisor = DashboardSupervisor(
+            profile: ServerProfile(name: "L", kind: .local, hermesPath: "/bin/hermes"),
+            launcher: launcher,
+            http: http,
+            portAllocator: { 51919 },
+            reachabilityTimeout: 5.0,
+            reachabilityPollInterval: 0.01
+        )
+
+        let acquireTask = Task {
+            try await supervisor.acquire()
+        }
+        while launcher.launchedSpecs.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        await supervisor.release()
+
+        do {
+            _ = try await acquireTask.value
+            Issue.record("Expected pending acquire to be cancelled")
+        } catch is CancellationError {
+            // Expected: teardown released the only pending consumer.
+        } catch {
+            Issue.record("Expected CancellationError, got \(error)")
+        }
+        #expect(launcher.lastSpawnedProcess?.terminatedCount.value == 1)
+    }
+
+    @Test
     func acquireFailsWhenStatusNeverBecomesReachable() async throws {
         let launcher = StubLauncher()
         // No /api/status response — every probe returns the URLError default.

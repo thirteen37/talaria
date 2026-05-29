@@ -91,6 +91,9 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
     public var identityFile: String?
     public var hermesPath: String
     public var hermesHome: String?
+    /// Optional fixed dashboard port. When nil, Talaria allocates an
+    /// ephemeral loopback port for `hermes dashboard`.
+    public var dashboardPort: Int?
     public var env: [String: String]
     public var version: HermesVersion?
     public var remoteShellMode: RemoteShellMode
@@ -116,6 +119,7 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
         identityFile: String? = nil,
         hermesPath: String = "hermes",
         hermesHome: String? = nil,
+        dashboardPort: Int? = nil,
         env: [String: String] = [:],
         version: HermesVersion? = nil,
         remoteShellMode: RemoteShellMode = .shLogin,
@@ -132,6 +136,7 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
         self.identityFile = identityFile
         self.hermesPath = hermesPath
         self.hermesHome = hermesHome
+        self.dashboardPort = dashboardPort
         self.env = env
         self.version = version
         self.remoteShellMode = remoteShellMode
@@ -141,7 +146,7 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, kind, host, user, port, identityFile, hermesPath, hermesHome, env, version
+        case id, name, kind, host, user, port, identityFile, hermesPath, hermesHome, dashboardPort, env, version
         case remoteShellMode, remoteShellPrefix
         case keychainKeyReference, pinnedHostKeyFingerprint
     }
@@ -157,6 +162,7 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
         self.identityFile = try c.decodeIfPresent(String.self, forKey: .identityFile)
         self.hermesPath = try c.decodeIfPresent(String.self, forKey: .hermesPath) ?? "hermes"
         self.hermesHome = try c.decodeIfPresent(String.self, forKey: .hermesHome)
+        self.dashboardPort = try c.decodeIfPresent(Int.self, forKey: .dashboardPort)
         self.env = try c.decodeIfPresent([String: String].self, forKey: .env) ?? [:]
         self.version = try c.decodeIfPresent(HermesVersion.self, forKey: .version)
         // Legacy profiles persisted before Sprint 5 didn't carry these keys.

@@ -33,24 +33,25 @@ Run this script before a v1 release candidate.
     - *Install update* starts the dashboard update action, polls action status, and appends only new log lines.
     - Button is disabled when no update is available.
 14. **Dashboard lifecycle**: open two windows for the same profile and confirm they share one `hermes dashboard` process. Close both and verify the child exits.
-15. Open an SSH profile and repeat steps 8–13 against the remote profile. Confirm dashboard startup failures surface useful messages for missing `[web]`, auth failure, and connection timeout.
+15. Set a fixed dashboard port in the profile editor, reopen the profile, and confirm `hermes dashboard` binds that port. Clear the field and confirm Talaria returns to automatic port allocation.
+16. Open an SSH profile and repeat steps 8–13 against the remote profile. Confirm dashboard startup failures surface useful messages for missing `[web]`, auth failure, and connection timeout.
 
 ## Release artifact verification
 
 Run these against the signed, notarised, stapled build produced by `scripts/release.sh` — **not** a `CODE_SIGNING_ALLOWED=NO` dev build.
 
-16. **Signing assertions** (in a shell):
+17. **Signing assertions** (in a shell):
     - `codesign --verify --deep --strict --verbose=2 build/export/Talaria.app` exits 0.
     - `xcrun stapler validate build/export/Talaria.app` reports `The validate action worked!`.
     - `xcrun stapler validate build/Talaria-<VERSION>.dmg` reports the same.
     - `spctl -a -vvv -t install build/export/Talaria.app` reports `accepted source=Notarized Developer ID`.
-17. **Gatekeeper first-launch** (on a fresh Mac or a fresh user account):
+18. **Gatekeeper first-launch** (on a fresh Mac or a fresh user account):
     - Download the DMG from the GitHub Release page **via the browser** (not `curl` — Gatekeeper relies on the download quarantine xattr).
     - Drag `Talaria.app` to `/Applications`.
     - Launch from Finder (double-click). Confirm no quarantine warning appears.
-18. **Sparkle in-app update** (only if the previous signed build is available):
+19. **Sparkle in-app update** (only if the previous signed build is available):
     - Install the previous signed build, launch it once so Sparkle stores its profile.
     - Replace `docs/appcast.xml` to point at the new version.
     - Re-launch the older build. Confirm Sparkle finds the new release, downloads it, validates the ed25519 signature, and relaunches into the new build.
     - Trigger manually via **Talaria → Check for Updates…** and confirm the menu item is reachable.
-19. **Version display**: the macOS About panel shows the `MARKETING_VERSION` and build number from `Info.plist`.
+20. **Version display**: the macOS About panel shows the `MARKETING_VERSION` and build number from `Info.plist`.

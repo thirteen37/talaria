@@ -32,7 +32,12 @@ final class DashboardCoordinator {
             profile: profile,
             launcher: launcher,
             http: http,
-            portAllocator: { try DashboardPortAllocator.allocate() }
+            portAllocator: {
+                if let port = profile.dashboardPort {
+                    return port
+                }
+                return try DashboardPortAllocator.allocate()
+            }
         )
         supervisors[profile.id] = supervisor
         return supervisor
@@ -83,7 +88,7 @@ struct ServerWindow: View {
             // the chat surface (which doesn't need the dashboard) renders
             // immediately. Surfaces that do need it observe
             // `harness.dashboardClient` flipping non-nil when ready.
-            Task { await new.acquireDashboard() }
+            new.startDashboard()
         }
         .onDisappear {
             // Cancel the window-scoped log tailer (and any future
@@ -200,6 +205,9 @@ final class ServerWindowHarness {
     /// this is nil and for showing `dashboardError` if acquisition failed.
     var dashboardClient: DashboardClient?
     var dashboardError: String?
+    private var dashboardTask: Task<Void, Never>?
+    private var dashboardStarted = false
+    private var dashboardReleased = false
 
     private init(store: SessionsStore, profile: ServerProfile) {
         self.store = store
@@ -215,12 +223,30 @@ final class ServerWindowHarness {
     /// guarantee relative to window close.
     func tearDown() {
         #if os(macOS)
+        guard dashboardStarted, !dashboardReleased else { return }
+        dashboardReleased = true
+        dashboardTask?.cancel()
+        dashboardTask = nil
+        dashboardClient = nil
+        store.dashboardClient = nil
         // Drop our refcount on the per-profile dashboard supervisor. The
         // coordinator's release is async; fire-and-forget is fine because
         // the window is going away — nothing depends on the teardown
         // completing before the harness is deallocated.
         let profile = profile
         Task { await DashboardCoordinator.shared.release(profile: profile) }
+        #endif
+    }
+
+    func startDashboard() {
+        #if os(macOS)
+        guard !dashboardStarted else { return }
+        dashboardStarted = true
+        dashboardTask = Task { [weak self] in
+            await self?.acquireDashboard()
+        }
+        #else
+        dashboardError = "Dashboard mode requires macOS in this release."
         #endif
     }
 
@@ -233,10 +259,13 @@ final class ServerWindowHarness {
         #if os(macOS)
         do {
             let endpoint = try await DashboardCoordinator.shared.acquire(profile: profile)
+            try Task.checkCancellation()
+            guard !dashboardReleased else { return }
             dashboardClient = endpoint.session.client()
             store.dashboardClient = dashboardClient
             dashboardError = nil
         } catch {
+            guard !Task.isCancelled, !dashboardReleased else { return }
             dashboardClient = nil
             store.dashboardClient = nil
             dashboardError = error.localizedDescription

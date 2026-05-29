@@ -48,18 +48,25 @@ public actor DashboardSupervisor {
     private let reachabilityPollInterval: TimeInterval
 
     private var refcount: Int = 0
+    private var pendingRefcount: Int = 0
     private var current: ActiveProcess?
     /// In-flight spawn shared by concurrent acquirers. Without this, two
     /// callers arriving while `current` is nil would each see nil after the
     /// first `await spawnAndReady()` suspends the actor, and each would
     /// launch its own `hermes dashboard` — one of which then leaks (no
     /// terminate) because `current` only holds the last assignment.
-    private var pendingAcquire: Task<DashboardEndpoint, Error>?
+    private var pendingAcquire: PendingAcquire?
+    private var pendingGeneration: Int = 0
 
     private struct ActiveProcess {
         let process: any DashboardProcess
         let endpoint: DashboardEndpoint
         let stderrBuffer: DashboardStderrBuffer
+    }
+
+    private struct PendingAcquire {
+        let generation: Int
+        let task: Task<ActiveProcess, Error>
     }
 
     public init(
@@ -84,37 +91,70 @@ public actor DashboardSupervisor {
             return current.endpoint
         }
         if let pending = pendingAcquire {
-            // Coalesce: another acquirer is already spawning. Wait for it,
-            // then take a reference. The spawn task only sets `refcount = 1`
-            // (the first acquirer); every other waiter bumps it on resume.
-            let endpoint = try await pending.value
-            refcount += 1
-            return endpoint
+            // Coalesce: another acquirer is already spawning. Reserve this
+            // consumer before awaiting so a matching release during startup
+            // can cancel or tear down the pending process.
+            pendingRefcount += 1
+            return try await finishPendingAcquire(pending)
         }
-        let task = Task<DashboardEndpoint, Error> { [self] in
-            let active = try await self.spawnAndReady()
-            await self.installAcquired(active)
-            return active.endpoint
+        let task = Task<ActiveProcess, Error> { [self] in
+            try await self.spawnAndReady()
         }
-        pendingAcquire = task
+        pendingGeneration += 1
+        let pending = PendingAcquire(generation: pendingGeneration, task: task)
+        pendingAcquire = pending
+        pendingRefcount = 1
+        return try await finishPendingAcquire(pending)
+    }
+
+    private func finishPendingAcquire(_ pending: PendingAcquire) async throws -> DashboardEndpoint {
         do {
-            let endpoint = try await task.value
-            pendingAcquire = nil
-            return endpoint
+            let active = try await pending.task.value
+            guard pendingAcquire?.generation == pending.generation else {
+                await active.process.terminate()
+                if let current {
+                    return current.endpoint
+                }
+                throw CancellationError()
+            }
+            if current == nil {
+                pendingAcquire = nil
+                if pendingRefcount > 0 {
+                    installAcquired(active, refcount: pendingRefcount)
+                    pendingRefcount = 0
+                } else {
+                    pendingRefcount = 0
+                    await active.process.terminate()
+                    throw CancellationError()
+                }
+            }
+            guard let current else {
+                throw CancellationError()
+            }
+            return current.endpoint
         } catch {
-            // Failed spawn: clear so the next acquire tries again instead of
-            // re-throwing the same cached error forever.
-            pendingAcquire = nil
+            if pendingAcquire?.generation == pending.generation {
+                pendingAcquire = nil
+                pendingRefcount = 0
+            }
             throw error
         }
     }
 
-    private func installAcquired(_ active: ActiveProcess) {
+    private func installAcquired(_ active: ActiveProcess, refcount: Int) {
         current = active
-        refcount = 1
+        self.refcount = refcount
     }
 
     public func release() async {
+        if current == nil, pendingAcquire != nil {
+            guard pendingRefcount > 0 else { return }
+            pendingRefcount -= 1
+            if pendingRefcount == 0 {
+                pendingAcquire?.task.cancel()
+            }
+            return
+        }
         guard refcount > 0 else { return }
         refcount -= 1
         if refcount == 0, let active = current {
