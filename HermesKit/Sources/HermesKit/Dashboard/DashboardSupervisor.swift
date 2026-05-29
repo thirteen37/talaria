@@ -39,7 +39,9 @@ public enum DashboardSupervisorError: Error, Equatable, Sendable, LocalizedError
 /// `SystemDashboardProcessLauncher` which shells out to `/usr/bin/ssh` or
 /// the local `hermes` binary.
 public actor DashboardSupervisor {
-    public let profile: ServerProfile
+    // `nonisolated` so the coordinator can compare/evict by profile without
+    // hopping onto the actor — it's an immutable `Sendable` value.
+    public nonisolated let profile: ServerProfile
 
     private let launcher: any DashboardProcessLauncher
     private let http: any DashboardHTTP
@@ -152,6 +154,14 @@ public actor DashboardSupervisor {
         current = active
         currentGeneration = generation
         self.refcount = refcount
+    }
+
+    /// True when no consumer holds the supervisor and nothing is spawning —
+    /// the process (if any) has been terminated. The coordinator uses this to
+    /// evict a fully-released supervisor from its per-profile cache so a later
+    /// acquire rebuilds against the current profile config.
+    public var isFullyReleased: Bool {
+        refcount == 0 && pendingRefcount == 0 && current == nil && pendingAcquire == nil
     }
 
     public func release() async {

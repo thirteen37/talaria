@@ -14,23 +14,41 @@ final class DashboardCoordinator {
 
     private var supervisors: [UUID: DashboardSupervisor] = [:]
     private let http: any DashboardHTTP = URLSession.shared
-    private let launcher: any DashboardProcessLauncher = SystemDashboardProcessLauncher()
 
-    func acquire(profile: ServerProfile) async throws -> DashboardEndpoint {
+    /// Acquires the dashboard for `profile`, returning the endpoint and the
+    /// supervisor that owns it. Callers hold the returned supervisor and pass
+    /// it back to ``release(_:)`` rather than re-looking-up by id — the cached
+    /// supervisor for an id can be swapped out from under them by a profile
+    /// edit, so id-keyed release would target the wrong instance.
+    func acquire(profile: ServerProfile) async throws -> (DashboardEndpoint, DashboardSupervisor) {
         let supervisor = ensure(profile: profile)
-        return try await supervisor.acquire()
+        let endpoint = try await supervisor.acquire()
+        return (endpoint, supervisor)
     }
 
-    func release(profile: ServerProfile) async {
-        guard let supervisor = supervisors[profile.id] else { return }
+    func release(_ supervisor: DashboardSupervisor) async {
         await supervisor.release()
+        // Evict once fully released so the next acquire rebuilds against the
+        // current profile config — but only if this instance is still the
+        // cached one (a profile edit may have already replaced it).
+        if supervisors[supervisor.profile.id] === supervisor, await supervisor.isFullyReleased {
+            supervisors[supervisor.profile.id] = nil
+        }
     }
 
     private func ensure(profile: ServerProfile) -> DashboardSupervisor {
-        if let existing = supervisors[profile.id] { return existing }
+        // Reuse only when the cached supervisor was built from the same profile
+        // config. A profile edit keeps the id but changes hermesPath / host /
+        // port / dashboardPort, so an id-only match would spawn the dashboard
+        // with stale settings (or reuse a process started with them). The
+        // displaced supervisor is still held + released by the harness that
+        // acquired it, so its process is torn down — no leak.
+        if let existing = supervisors[profile.id], existing.profile == profile {
+            return existing
+        }
         let supervisor = DashboardSupervisor(
             profile: profile,
-            launcher: launcher,
+            launcher: launcher(for: profile),
             http: http,
             portAllocator: {
                 if let port = profile.dashboardPort {
@@ -41,6 +59,44 @@ final class DashboardCoordinator {
         )
         supervisors[profile.id] = supervisor
         return supervisor
+    }
+
+    /// Local profiles need the login-shell PATH injected (a Finder/Dock-launched
+    /// app's environment lacks Homebrew dirs), or `/usr/bin/env hermes dashboard`
+    /// can't find a non-absolute `hermes` and the spawn exits before reachable.
+    /// Mirrors `PathAwareHermesAdminRunner` for the admin path.
+    private func launcher(for profile: ServerProfile) -> any DashboardProcessLauncher {
+        switch profile.kind {
+        case .local:
+            return PathAugmentingDashboardLauncher(
+                inner: SystemDashboardProcessLauncher(),
+                resolver: LoginShellPATHResolver.shared
+            )
+        case .ssh:
+            return SystemDashboardProcessLauncher()
+        }
+    }
+}
+
+/// Wraps a `DashboardProcessLauncher` to merge the resolved login-shell
+/// environment (PATH, etc.) under the spec's own environment before launch.
+/// The spec's values win, so an explicit `HERMES_HOME` / `profile.env` still
+/// takes precedence over the login-shell PATH.
+struct PathAugmentingDashboardLauncher: DashboardProcessLauncher {
+    let inner: any DashboardProcessLauncher
+    let resolver: LoginShellPATHResolver
+
+    func launch(spec: DashboardSpawnSpec) async throws -> any DashboardProcess {
+        var environment = await resolver.extraEnv()
+        for (key, value) in spec.environment {
+            environment[key] = value
+        }
+        let augmented = DashboardSpawnSpec(
+            executable: spec.executable,
+            arguments: spec.arguments,
+            environment: environment
+        )
+        return try await inner.launch(spec: augmented)
     }
 }
 #endif
@@ -676,7 +732,13 @@ final class ServerWindowHarness {
     private var dashboardTask: Task<Void, Never>?
     private var dashboardStarted = false
     private var dashboardReleased = false
-    #if !os(macOS)
+    #if os(macOS)
+    /// The supervisor this harness acquired from `DashboardCoordinator`. Held
+    /// so `tearDown()` releases the exact instance it acquired — a profile edit
+    /// can swap the coordinator's cached supervisor for the id, so releasing by
+    /// id could hit the wrong one.
+    private var macDashboardSupervisor: DashboardSupervisor?
+    #else
     /// iOS owns its dashboard supervisor directly (one window per profile, no
     /// cross-window refcount sharing as on macOS). Built lazily in
     /// `acquireDashboard()`; released in `tearDown()`.
@@ -718,10 +780,15 @@ final class ServerWindowHarness {
             dashboardTask = nil
             dashboardClient = nil
             store.dashboardClient = nil
-            let profile = profile
+            // Await the acquire task first so `macDashboardSupervisor` is set
+            // (acquire stores it before returning), then release that exact
+            // instance. Strong `self` keeps the harness alive for the brief
+            // release so the refcount actually drops.
             Task {
                 await acquireTask?.value
-                await DashboardCoordinator.shared.release(profile: profile)
+                if let supervisor = self.macDashboardSupervisor {
+                    await DashboardCoordinator.shared.release(supervisor)
+                }
             }
         }
         #else
@@ -776,7 +843,10 @@ final class ServerWindowHarness {
     func acquireDashboard() async {
         #if os(macOS)
         do {
-            let endpoint = try await DashboardCoordinator.shared.acquire(profile: profile)
+            let (endpoint, supervisor) = try await DashboardCoordinator.shared.acquire(profile: profile)
+            // Store before the cancellation check so `tearDown()` can release
+            // the acquired refcount even if we bail out right after.
+            macDashboardSupervisor = supervisor
             try Task.checkCancellation()
             guard !dashboardReleased else { return }
             dashboardClient = endpoint.session.client()
