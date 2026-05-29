@@ -36,6 +36,36 @@ struct LocalProcessTransportTests {
         await transport.close()
     }
 
+    // Regression test for a data-loss race: bytes pulled out of the stdout FD
+    // by the readability handler could be dropped if the process-termination
+    // finish path won the readQueue ordering and finished the stream first. The
+    // race is timing- and load-sensitive, so we run many echoing transports
+    // concurrently to force the contention that surfaces it.
+    @Test
+    func concurrentEchoTransportsNeverDropOutput() async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for index in 0 ..< 64 {
+                group.addTask {
+                    let transport = LocalProcessTransport(
+                        executableURL: URL(fileURLWithPath: "/bin/sh"),
+                        arguments: ["-c", "read line; printf \"echo:%s\\n\" \"$line\""]
+                    )
+                    try transport.start()
+                    try await transport.send(Data("hello\(index)\n".utf8))
+
+                    var received = Data()
+                    for try await chunk in transport.inbound {
+                        received.append(chunk)
+                    }
+
+                    #expect(String(decoding: received, as: UTF8.self) == "echo:hello\(index)\n")
+                    await transport.close()
+                }
+            }
+            try await group.waitForAll()
+        }
+    }
+
     @Test
     func stdoutEOFFinishesInboundEvenIfProcessStaysAlive() async throws {
         let transport = LocalProcessTransport(
