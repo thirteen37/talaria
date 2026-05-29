@@ -1,0 +1,3 @@
+default    running
+work       stopped
+staging

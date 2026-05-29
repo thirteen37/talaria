@@ -304,6 +304,7 @@ enum BrowseDestination: Hashable {
     case doctor
     case updates
     case notifications
+    case profiles
 }
 
 struct ServerWindow: View {
@@ -568,6 +569,7 @@ struct ServerWindow: View {
                     browseRow("Skills", systemImage: "sparkles", destination: .skills, store: harness.store)
                     browseRow("Tools", systemImage: "wrench.and.screwdriver", destination: .tools, store: harness.store)
                     browseRow("Cron", systemImage: "calendar", destination: .cron, store: harness.store)
+                    browseRow("Profiles", systemImage: "person.2", destination: .profiles, store: harness.store)
                     browseRow("Logs", systemImage: "doc.text", destination: .logs, store: harness.store)
                     browseRow("Doctor", systemImage: "stethoscope", destination: .doctor, store: harness.store)
                     browseRow("Updates", systemImage: "arrow.down.circle", destination: .updates, store: harness.store)
@@ -661,6 +663,7 @@ struct ServerWindow: View {
             case .skills: SkillsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
             case .tools: ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
             case .cron: CronView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            case .profiles: ProfilesView(runner: harness.store.adminRunner, profile: harness.profile, transfer: harness.snapshotTransfer)
             case .logs:
                 LogsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
             case .doctor:
@@ -715,6 +718,13 @@ struct ServerWindow: View {
 final class ServerWindowHarness {
     let store: SessionsStore
     let profile: ServerProfile
+    /// The SSH transfer built by `makeRemote` with this window's transport
+    /// selection (NIO + keychain/host-key store when NIO is active or on iOS;
+    /// nil on the system-ssh macOS path, where consumers fall back to
+    /// `SFTPSubprocessTransfer`). Reused by surfaces that read remote files —
+    /// e.g. Profiles' config comparison — so they honor the same auth + trust
+    /// policy as Sessions/snapshot rather than hardcoding one transport.
+    let snapshotTransfer: RemoteSnapshotTransfer?
     /// Drives the trust-on-first-use prompt for unknown SSH host keys. Always
     /// present for SSH profiles; nil for the bundled local profile.
     let hostKeyCoordinator: HostKeyConfirmationCoordinator?
@@ -748,10 +758,12 @@ final class ServerWindowHarness {
     private init(
         store: SessionsStore,
         profile: ServerProfile,
+        snapshotTransfer: RemoteSnapshotTransfer? = nil,
         hostKeyCoordinator: HostKeyConfirmationCoordinator? = nil
     ) {
         self.store = store
         self.profile = profile
+        self.snapshotTransfer = snapshotTransfer
         self.hostKeyCoordinator = hostKeyCoordinator
         self.notifications = WindowNotificationCenter(adminRunner: store.adminRunner)
         self.notifications.start()
@@ -999,6 +1011,13 @@ final class ServerWindowHarness {
     private static func makeRemote(profile: ServerProfile) -> ServerWindowHarness {
         let useNIO = preferNIOSSHTransport()
         let manager: SessionManager
+        // Transport-appropriate remote-file reader for surfaces that read
+        // files off the host (Profiles' config comparison). NIO `cat` with the
+        // keychain/host-key wiring when NIO is active or on iOS; nil on the
+        // system-ssh macOS path, where `HermesConfigReader` falls back to
+        // `SFTPSubprocessTransfer`. Keeps config reads on the same auth +
+        // host-key-trust policy as the chat transport.
+        let snapshotTransfer: RemoteSnapshotTransfer?
 
         let hostKeyCoordinator = HostKeyConfirmationCoordinator()
         if useNIO {
@@ -1017,6 +1036,12 @@ final class ServerWindowHarness {
                 try await transport.start()
                 return transport
             }
+            snapshotTransfer = NIOSSHCatTransfer(
+                profile: profile,
+                credentialProvider: credentialProvider,
+                hostKeyStore: hostKeyStore,
+                hostKeyConfirmer: confirmer
+            )
         } else {
             #if os(macOS)
             manager = SessionManager {
@@ -1033,10 +1058,13 @@ final class ServerWindowHarness {
                 try transport.start()
                 return transport
             }
+            // nil → HermesConfigReader falls back to SFTPSubprocessTransfer.
+            snapshotTransfer = nil
             #else
             // Defensive: iOS never falls into this branch because
             // `preferNIOSSHTransport()` always returns true off-macOS.
             manager = SessionManager { throw TransportError.unsupportedPlatform }
+            snapshotTransfer = nil
             #endif
         }
 
@@ -1051,6 +1079,7 @@ final class ServerWindowHarness {
         return ServerWindowHarness(
             store: store,
             profile: profile,
+            snapshotTransfer: snapshotTransfer,
             hostKeyCoordinator: hostKeyCoordinator
         )
     }

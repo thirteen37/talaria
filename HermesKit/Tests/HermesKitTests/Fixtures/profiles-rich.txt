@@ -1,0 +1,7 @@
+┏━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┓
+┃ Name    ┃ Default ┃ Status  ┃
+┡━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━┩
+│ default │ yes     │ running │
+│ work    │ no      │ stopped │
+│ staging │ no      │         │
+└─────────┴─────────┴─────────┘
