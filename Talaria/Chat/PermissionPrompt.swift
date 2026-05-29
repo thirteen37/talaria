@@ -7,6 +7,23 @@ struct PermissionPrompt: View {
     let cancel: () -> Void
 
     var body: some View {
+        #if os(macOS)
+        promptBody
+            .padding(20)
+            .frame(minWidth: 460, idealWidth: 560, maxWidth: 680)
+        #else
+        // On iPhone the fixed 460pt minimum overflows the ~390pt screen and
+        // clips the prompt. Fill the sheet width and scroll vertically so a
+        // tall diff/content payload stays reachable.
+        ScrollView {
+            promptBody
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        #endif
+    }
+
+    private var promptBody: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "hand.raised.fill")
@@ -48,8 +65,6 @@ struct PermissionPrompt: View {
                     .keyboardShortcut(.cancelAction)
             }
         }
-        .padding(20)
-        .frame(minWidth: 460, idealWidth: 560, maxWidth: 680)
     }
 
     private func iconName(for kind: PermissionOptionKind) -> String {

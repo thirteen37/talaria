@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 
 public struct HermesProbeResult: Equatable, Sendable {
@@ -22,6 +21,7 @@ public enum HermesProbeError: Error, Equatable, Sendable {
     case transportFailed(SSHTransportError)
 }
 
+#if os(macOS)
 public enum HermesProbe {
     /// Minimum Hermes version we consider ACP-capable. Sprint 6 finalizes the
     /// real pin; for Sprint 4 we just record what we observed.

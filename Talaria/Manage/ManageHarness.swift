@@ -73,12 +73,12 @@ func capabilityBanner(
     guard let version else { return nil }
     if table.has(capability, in: version) { return nil }
     guard let minimum = table.minimumVersions[capability] else { return nil }
-    return "\(feature) requires Hermes \(format(minimum)) or later (this profile is at \(format(version)))."
+    return "\(feature) requires Hermes \(format(minimum)) or later (this server is at \(format(version)))."
 }
 
 /// Renders a `HermesVersion` for user-facing messages, including any
 /// `-prerelease` suffix. Without the suffix a user on `1.0.0-rc.1` against a
-/// pin of `1.0.0` would see "requires 1.0.0 or later (this profile is at
+/// pin of `1.0.0` would see "requires 1.0.0 or later (this server is at
 /// 1.0.0)" — correct semver semantics but visually contradictory.
 private func format(_ version: HermesVersion) -> String {
     var rendered = "\(version.major).\(version.minor).\(version.patch)"

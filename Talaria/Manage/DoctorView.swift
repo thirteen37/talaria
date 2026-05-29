@@ -16,7 +16,7 @@ struct DoctorView: View {
                 ContentUnavailableView(
                     "Admin runner unavailable",
                     systemImage: "stethoscope",
-                    description: Text("Open a profile with a Hermes binary to run Doctor.")
+                    description: Text("Open a server with a Hermes binary to run Doctor.")
                 )
             } else {
                 content

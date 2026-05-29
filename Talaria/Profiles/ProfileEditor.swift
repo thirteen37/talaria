@@ -1,4 +1,6 @@
+#if os(macOS)
 import AppKit
+#endif
 import HermesKit
 import SwiftUI
 
@@ -63,8 +65,50 @@ final class ProfileEditorState {
 struct ProfileEditor: View {
     @Environment(ProfileDirectory.self) private var directory
     @State private var state = ProfileEditorState()
+    #if os(iOS)
+    /// Drives the iOS NavigationStack so `addNew()` (and similar actions)
+    /// can push the detail view programmatically.
+    @State private var iOSPath: [UUID] = []
+    #endif
+    /// Optional dismiss callback used by the iOS Settings sheet. macOS's
+    /// Settings scene leaves it nil — the editor is the whole window there
+    /// and the system Close button handles dismissal.
+    var onDismiss: (() -> Void)? = nil
 
     var body: some View {
+        #if os(iOS)
+        // Use a NavigationStack with explicit push navigation. This gives the
+        // detail form the full sheet width on iPhone and works reliably in a
+        // sheet (NavigationSplitView's selection-driven push in a sheet
+        // doesn't fire on iPhone in compact-width presentation).
+        NavigationStack(path: $iOSPath) {
+            iOSProfileList
+                .navigationTitle("Servers")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            addNew()
+                            if let pending = state.pendingDraft {
+                                iOSPath = [pending.id]
+                            }
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .accessibilityLabel("Add server")
+                    }
+                    if let onDismiss {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button("Done", action: onDismiss)
+                        }
+                    }
+                }
+                .navigationDestination(for: UUID.self) { id in
+                    iOSDetailView(for: id)
+                }
+        }
+        .task { await reload() }
+        #else
         HStack(spacing: 0) {
             sidebar
                 .frame(width: 240)
@@ -72,12 +116,56 @@ struct ProfileEditor: View {
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task {
-            await directory.reload()
-            state.resetIfMissing(in: directory)
-            if state.selection == nil, let first = directory.profiles.first {
-                state.select(first.id, in: directory)
+        .task { await reload() }
+        #endif
+    }
+
+    #if os(iOS)
+    @ViewBuilder
+    private var iOSProfileList: some View {
+        List {
+            if let pending = state.pendingDraft {
+                Section("Unsaved") {
+                    NavigationLink(value: pending.id) {
+                        row(for: pending, isDraft: true)
+                    }
+                }
             }
+            Section("Configured") {
+                if directory.profiles.isEmpty && state.pendingDraft == nil {
+                    Text("No servers yet. Tap + to add one.")
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                } else {
+                    ForEach(directory.profiles) { profile in
+                        NavigationLink(value: profile.id) {
+                            row(for: profile, isDraft: false)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Pushed detail view for an iOS NavigationLink. Selects the profile into
+    /// the editor state on appear so `state.draft` matches the row tapped,
+    /// then renders the same detail Form used by macOS.
+    @ViewBuilder
+    private func iOSDetailView(for id: UUID) -> some View {
+        detail
+            .onAppear {
+                if state.selection != id {
+                    state.select(id, in: directory)
+                }
+            }
+    }
+    #endif
+
+    private func reload() async {
+        await directory.reload()
+        state.resetIfMissing(in: directory)
+        if state.selection == nil, let first = directory.profiles.first {
+            state.select(first.id, in: directory)
         }
     }
 
@@ -177,16 +265,20 @@ struct ProfileEditor: View {
                 canSave: canSave(draft),
                 isPending: state.pendingDraft?.id == draft.id,
                 onProbe: { runProbe() },
-                onSave: { save() },
+                onSave: { passwordInput in save(passwordInput: passwordInput) },
                 onDiscard: { discardPending() },
-                onPickIdentity: { pickIdentity() }
+                onPickIdentity: {
+                    #if os(macOS)
+                    pickIdentity()
+                    #endif
+                }
             )
             .id(draft.id)
         } else {
             ContentUnavailableView(
-                "Select a profile",
+                "Select a server",
                 systemImage: "server.rack",
-                description: Text("Add a new server profile or pick one on the left.")
+                description: Text("Add a new server or pick one on the left.")
             )
         }
     }
@@ -203,6 +295,15 @@ struct ProfileEditor: View {
     }
 
     private func canSave(_ draft: ServerProfile) -> Bool {
+        #if os(iOS)
+        // iOS has no probe path (no `OneShotProcess`, no system ssh), so the
+        // validatedThisSession gate would lock new SSH profiles out of Save
+        // forever. Allow Save when the draft has divergent content; the
+        // user accepts that capability discovery happens at first connect.
+        if state.pendingDraft?.id == draft.id { return true }
+        guard let existing = directory.profile(id: draft.id) else { return false }
+        return existing != draft
+        #else
         // Pending new drafts require at least one successful probe before they
         // can be persisted — same gating as plan-of-record.
         if state.pendingDraft?.id == draft.id {
@@ -214,6 +315,7 @@ struct ProfileEditor: View {
         guard let existing = directory.profile(id: draft.id) else { return false }
         if existing == draft { return false }
         return state.validatedThisSession.contains(draft.id) || existing.version != nil
+        #endif
     }
 
     private func addNew() {
@@ -228,6 +330,11 @@ struct ProfileEditor: View {
         state.probeStates.removeValue(forKey: pending.id)
         state.validatedThisSession.remove(pending.id)
         state.select(directory.profiles.first?.id, in: directory)
+        #if os(iOS)
+        // Pop back to the list so the user isn't stuck on a detail page
+        // bound to a profile that no longer exists in state.
+        iOSPath.removeAll()
+        #endif
     }
 
     private func duplicate() {
@@ -253,8 +360,23 @@ struct ProfileEditor: View {
         }
     }
 
-    private func save() {
-        guard let draft = state.draft, canSave(draft) else { return }
+    private func save(passwordInput: String = "") {
+        guard var draft = state.draft, canSave(draft) else { return }
+        #if os(iOS)
+        // Persist the typed password into the Keychain when the user opted
+        // into password auth and entered a value. The draft only ever holds
+        // a reference UUID; the password itself stays in the OS Keychain.
+        if draft.authMethod == .password, !passwordInput.isEmpty {
+            let reference = draft.passwordKeychainReference ?? UUID().uuidString
+            do {
+                try PasswordKeychain.set(reference: reference, password: passwordInput)
+                draft.passwordKeychainReference = reference
+            } catch {
+                directory.lastError = "Couldn't save password to Keychain: \(error.localizedDescription)"
+                return
+            }
+        }
+        #endif
         Task {
             await directory.upsert(draft)
             // Clear pending status once the draft is on disk.
@@ -262,10 +384,16 @@ struct ProfileEditor: View {
                 state.pendingDraft = nil
             }
             state.select(draft.id, in: directory)
+            #if os(iOS)
+            // Pop back to the list after saving so the user sees the freshly
+            // persisted profile in the "Configured" section.
+            iOSPath.removeAll()
+            #endif
         }
     }
 
     private func runProbe() {
+        #if os(macOS)
         guard let probed = state.draft else { return }
         let id = probed.id
         state.probeStates[id] = .running
@@ -307,8 +435,10 @@ struct ProfileEditor: View {
                 state.probeStates[id] = .failure(humanReadable(error))
             }
         }
+        #endif
     }
 
+    #if os(macOS)
     private func pickIdentity() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -324,6 +454,7 @@ struct ProfileEditor: View {
             state.updateDraft(current)
         }
     }
+    #endif
 
     private func humanReadable(_ error: Error) -> String {
         if let probe = error as? HermesProbeError {
@@ -347,70 +478,57 @@ private struct ProfileDetailView: View {
     let canSave: Bool
     let isPending: Bool
     let onProbe: () -> Void
-    let onSave: () -> Void
+    /// Save callback receives the iOS-only typed password (empty on macOS).
+    let onSave: (String) -> Void
     let onDiscard: () -> Void
     let onPickIdentity: () -> Void
 
+    /// Ephemeral password input for iOS. Lives in @State so it never leaks
+    /// into the persisted `ServerProfile`; the parent moves it to the
+    /// Keychain on save and stores only a reference.
+    @State private var passwordInput: String = ""
+
     var body: some View {
+        #if os(iOS)
+        // Form is the scroll container — wrapping it in a ScrollView+VStack
+        // (as macOS does) collapses the Form to zero height on iOS, leaving
+        // only the banner and action row visible.
+        Form {
+            if isPending {
+                Section {
+                    Label("This server hasn't been saved yet. Save to keep it.", systemImage: "info.circle")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            formSections
+            if isPending {
+                Section {
+                    Button("Discard", role: .destructive, action: onDiscard)
+                }
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Save") { onSave(passwordInput) }
+                    // Typing a fresh password counts as a saveable change
+                    // even when no other field diverges from disk.
+                    .disabled(!canSave && passwordInput.isEmpty)
+                    .fontWeight(.semibold)
+            }
+        }
+        #else
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if isPending {
-                    Label("This profile hasn't been saved yet. Probe and Save to keep it.", systemImage: "info.circle")
+                    Label("This server hasn't been saved yet. Probe and Save to keep it.", systemImage: "info.circle")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal)
                         .padding(.top)
                 }
                 Form {
-                    Section("Identity") {
-                        TextField("Name", text: $draft.name)
-                        Picker("Kind", selection: $draft.kind) {
-                            Text("Local").tag(ServerProfile.Kind.local)
-                            Text("SSH").tag(ServerProfile.Kind.ssh)
-                        }
-                    }
-
-                    if draft.kind == .ssh {
-                        Section("SSH") {
-                            TextField("Host", text: bindingString(\.host))
-                            TextField("User (optional)", text: bindingString(\.user))
-                            TextField("Port (optional)", text: bindingInt(\.port))
-                            HStack {
-                                TextField("Identity file (optional)", text: bindingString(\.identityFile))
-                                Button("Choose…", action: onPickIdentity)
-                            }
-                        }
-                    }
-
-                    Section("Hermes") {
-                        TextField("Hermes binary", text: $draft.hermesPath)
-                        TextField("HERMES_HOME (optional)", text: bindingString(\.hermesHome))
-                    }
-
-                    if draft.kind == .ssh {
-                        Section {
-                            Picker("Remote shell", selection: $draft.remoteShellMode) {
-                                ForEach(RemoteShellMode.allCases, id: \.self) { mode in
-                                    Text(mode.label).tag(mode)
-                                }
-                            }
-                            if draft.remoteShellMode == .custom {
-                                TextField(
-                                    "Custom prefix (e.g. \"mise exec --\")",
-                                    text: bindingString(\.remoteShellPrefix)
-                                )
-                                .font(.system(.body, design: .monospaced))
-                            }
-                        } header: {
-                            Text("Remote shell")
-                        } footer: {
-                            Text(
-                                "Ssh's non-interactive command path doesn't source ~/.zshrc or ~/.bashrc, so PATH-based hermes lookups fail. Login-shell wrappers source profile files where PATH is usually set. Pick Direct if hermes is at an absolute path."
-                            )
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                    }
+                    formSections
                 }
                 .formStyle(.grouped)
 
@@ -423,12 +541,85 @@ private struct ProfileDetailView: View {
                     }
                     Spacer()
                     Button("Probe", action: onProbe)
-                    Button("Save", action: onSave)
+                    Button("Save") { onSave(passwordInput) }
                         .keyboardShortcut(.defaultAction)
                         .disabled(!canSave)
                 }
                 .padding(.horizontal)
                 .padding(.bottom)
+            }
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private var formSections: some View {
+        Section("Identity") {
+            TextField("Name", text: $draft.name)
+            Picker("Kind", selection: $draft.kind) {
+                #if os(macOS)
+                Text("Local").tag(ServerProfile.Kind.local)
+                #endif
+                Text("SSH").tag(ServerProfile.Kind.ssh)
+            }
+        }
+
+        if draft.kind == .ssh {
+            Section("SSH") {
+                TextField("Host", text: bindingString(\.host))
+                TextField("User (optional)", text: bindingString(\.user))
+                TextField("Port (optional)", text: bindingInt(\.port))
+                #if os(iOS)
+                Picker("Auth", selection: $draft.authMethod) {
+                    Text("Identity file").tag(SSHAuthMethod.identityFile)
+                    Text("Password").tag(SSHAuthMethod.password)
+                }
+                if draft.authMethod == .password {
+                    SecureField("Password", text: $passwordInput)
+                    if draft.passwordKeychainReference != nil, passwordInput.isEmpty {
+                        Text("A password is stored in the Keychain. Leave blank to keep it, or type a new one to replace it.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    TextField("Identity file (optional)", text: bindingString(\.identityFile))
+                }
+                #else
+                HStack {
+                    TextField("Identity file (optional)", text: bindingString(\.identityFile))
+                    Button("Choose…", action: onPickIdentity)
+                }
+                #endif
+            }
+        }
+
+        Section("Hermes") {
+            TextField("Hermes binary", text: $draft.hermesPath)
+            TextField("HERMES_HOME (optional)", text: bindingString(\.hermesHome))
+        }
+
+        if draft.kind == .ssh {
+            Section {
+                Picker("Remote shell", selection: $draft.remoteShellMode) {
+                    ForEach(RemoteShellMode.allCases, id: \.self) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                if draft.remoteShellMode == .custom {
+                    TextField(
+                        "Custom prefix (e.g. \"mise exec --\")",
+                        text: bindingString(\.remoteShellPrefix)
+                    )
+                    .font(.system(.body, design: .monospaced))
+                }
+            } header: {
+                Text("Remote shell")
+            } footer: {
+                Text(
+                    "Ssh's non-interactive command path doesn't source ~/.zshrc or ~/.bashrc, so PATH-based hermes lookups fail. Login-shell wrappers source profile files where PATH is usually set. Pick Direct if hermes is at an absolute path."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
         }
     }

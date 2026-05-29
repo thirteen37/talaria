@@ -4,16 +4,28 @@ import NIOSSH
 /// Provides the SSH client identity that ``NIOSSHAuthDelegate`` offers to
 /// the server. Implementations decide where the private key comes from
 /// (a file on disk on macOS, the Keychain on iOS) and how to handle
-/// passphrase-protected keys.
+/// passphrase-protected keys. Implementations may also surface a stored
+/// password for profiles that opt into password auth.
 ///
 /// The protocol is intentionally synchronous + throwing: the auth delegate
 /// runs on a NIO event loop and we don't want to block it on Keychain or
-/// disk I/O. Callers fetch the key once at transport construction and
-/// pass it in; if the key is encrypted and no passphrase was supplied, the
-/// provider throws ``SSHTransportError/needsPassphrase(keyPath:)`` so the
-/// host app can prompt and re-invoke the transport factory.
+/// disk I/O. Callers fetch the credentials once at transport construction
+/// and pass them in; if a key is encrypted and no passphrase was supplied,
+/// the provider throws ``SSHTransportError/needsPassphrase(keyPath:)`` so
+/// the host app can prompt and re-invoke the transport factory.
 public protocol SSHCredentialProvider: Sendable {
-    func privateKey(for profile: ServerProfile, passphrase: String?) throws -> NIOSSHPrivateKey
+    /// Returns the private key configured for the profile, or nil when the
+    /// profile is set up for password-only auth.
+    func privateKey(for profile: ServerProfile, passphrase: String?) throws -> NIOSSHPrivateKey?
+
+    /// Returns the password configured for the profile, or nil when no
+    /// password is stored. Default implementation returns nil so existing
+    /// providers continue to compile unchanged.
+    func password(for profile: ServerProfile) throws -> String?
+}
+
+extension SSHCredentialProvider {
+    public func password(for profile: ServerProfile) throws -> String? { nil }
 }
 
 // MARK: - File-backed provider (macOS today; works anywhere `profile.identityFile` is readable)
@@ -34,9 +46,14 @@ public protocol SSHCredentialProvider: Sendable {
 public struct FileIdentityProvider: SSHCredentialProvider {
     public init() {}
 
-    public func privateKey(for profile: ServerProfile, passphrase: String?) throws -> NIOSSHPrivateKey {
+    public func privateKey(for profile: ServerProfile, passphrase: String?) throws -> NIOSSHPrivateKey? {
+        // Password-auth profiles don't need a key. Return nil so the
+        // transport falls through to ``password(for:)``.
+        if profile.authMethod == .password { return nil }
         guard let raw = profile.identityFile, !raw.isEmpty else {
-            throw SSHTransportError.authFailed("profile has no identityFile")
+            // No identityFile configured — let the transport decide whether
+            // to fail or fall back to another method (password).
+            return nil
         }
         let expanded = (raw as NSString).expandingTildeInPath
         let url = URL(fileURLWithPath: expanded)
@@ -60,6 +77,17 @@ public struct FileIdentityProvider: SSHCredentialProvider {
             throw SSHTransportError.authFailed(error.localizedDescription)
         }
     }
+
+    public func password(for profile: ServerProfile) throws -> String? {
+        guard profile.authMethod == .password,
+              let reference = profile.passwordKeychainReference,
+              !reference.isEmpty else {
+            return nil
+        }
+        // ``PasswordKeychain`` is iOS-only; on macOS it always returns nil
+        // (system-ssh handles its own credentials).
+        return PasswordKeychain.get(reference: reference)
+    }
 }
 
 // MARK: - Keychain provider (cross-platform; stubbed for v1)
@@ -76,7 +104,7 @@ public struct FileIdentityProvider: SSHCredentialProvider {
 public struct KeychainIdentityProvider: SSHCredentialProvider {
     public init() {}
 
-    public func privateKey(for profile: ServerProfile, passphrase: String?) throws -> NIOSSHPrivateKey {
+    public func privateKey(for profile: ServerProfile, passphrase: String?) throws -> NIOSSHPrivateKey? {
         guard let reference = profile.keychainKeyReference, !reference.isEmpty else {
             throw SSHTransportError.authFailed("profile has no keychainKeyReference")
         }

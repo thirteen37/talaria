@@ -5,7 +5,9 @@ import SwiftUI
 struct TalariaApp: App {
     @State private var directory = ProfileDirectory()
     @State private var recents = RecentServers()
+    #if os(macOS)
     @StateObject private var updater = UpdateController()
+    #endif
 
     var body: some Scene {
         WindowGroup(for: UUID.self) { $profileId in
@@ -22,16 +24,20 @@ struct TalariaApp: App {
             // always landing on the bundled local profile.
             recents.ids.first ?? ProfileDirectory.localProfileID
         }
+        #if os(macOS)
         .commands {
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(updater: updater.updater)
             }
             ServerCommands(directory: directory, recents: recents)
         }
+        #endif
 
+        #if os(macOS)
         Settings {
             SettingsScene()
                 .environment(directory)
         }
+        #endif
     }
 }

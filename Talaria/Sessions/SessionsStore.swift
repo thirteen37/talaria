@@ -42,7 +42,7 @@ final class SessionsStore {
         manager: SessionManager,
         adminRunner: HermesAdminRunning? = nil,
         snapshot: RemoteSnapshot? = nil,
-        defaultCwd: String = FileManager.default.homeDirectoryForCurrentUser.path,
+        defaultCwd: String = SessionsStore.defaultHomeDirectory(),
         cwdStore: SessionsCwdStore = SessionsCwdStore()
     ) {
         self.manager = manager
@@ -52,17 +52,76 @@ final class SessionsStore {
         self.cwdStore = cwdStore
     }
 
+    /// `FileManager.homeDirectoryForCurrentUser` is unavailable on iOS — the
+    /// app sandbox makes a per-user home meaningless there. iOS is remote-only,
+    /// so the cwd lives on the remote host: returning `"~"` lets the remote
+    /// shell expand it to whichever home the SSH login lands in, rather than
+    /// shipping a local sandbox path the remote can't `cd` into.
+    static func defaultHomeDirectory() -> String {
+        #if os(macOS)
+        return FileManager.default.homeDirectoryForCurrentUser.path
+        #else
+        return "~"
+        #endif
+    }
+
+    /// Upper bound on opening a session. The SSH connect already has its own
+    /// 15s bound, but the ACP `initialize` + `session/new` round-trips that
+    /// follow have none — a host that accepts the connection but never speaks
+    /// ACP (wrong binary, `hermes acp` wedged) would otherwise hang `openNew`
+    /// forever with no error surfaced. 30s covers a slow login shell sourcing
+    /// heavy rc files plus the handshake.
+    static let openTimeout: TimeInterval = 30
+
     func openNew(cwd: String? = nil) async {
         let workingDir = cwd ?? defaultCwd
+        AppLog.session.info("openNew: begin cwd=\(workingDir, privacy: .public)")
         do {
-            let state = try await manager.openNew(cwd: workingDir)
+            let state = try await Self.withTimeout(Self.openTimeout) {
+                try await self.manager.openNew(cwd: workingDir)
+            }
             cwdStore.record(id: state.id, cwd: state.cwd)
             insert(OpenSession(id: state.id, cwd: state.cwd, title: nil))
             selection = state.id
             attachStatus(id: state.id)
             await ensureViewModel(id: state.id, cwd: state.cwd)
+            AppLog.session.info("openNew: ready id=\(state.id, privacy: .public)")
         } catch {
-            lastError = error.localizedDescription
+            AppLog.session.error("openNew: failed: \(String(describing: error), privacy: .public)")
+            lastError = Self.describe(error)
+        }
+    }
+
+    /// Human-readable text for connection/session errors. Prefers our typed
+    /// `LocalizedError` descriptions over Foundation's opaque
+    /// "operation couldn't be completed (… error N)".
+    static func describe(_ error: Error) -> String {
+        if let localized = error as? LocalizedError, let message = localized.errorDescription {
+            return message
+        }
+        return error.localizedDescription
+    }
+
+    /// Races `operation` against a timeout. On expiry the operation task is
+    /// cancelled (HermesClient's request path honors cancellation) and a
+    /// descriptive error is thrown so the UI shows something actionable
+    /// instead of spinning silently.
+    static func withTimeout<T: Sendable>(
+        _ seconds: TimeInterval,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw TransportError.processDidNotStart(
+                    "Connected, but the server didn't complete the Hermes handshake within \(Int(seconds))s. "
+                    + "Check that `hermes acp` runs on the server for this profile's shell."
+                )
+            }
+            defer { group.cancelAll() }
+            // First task to finish wins; cancel the rest.
+            return try await group.next()!
         }
     }
 
@@ -80,7 +139,9 @@ final class SessionsStore {
 
         let workingDir = cwdStore.cwd(for: summary.id) ?? summary.cwd ?? defaultCwd
         do {
-            let state = try await manager.openExisting(id: summary.id, cwd: workingDir)
+            let state = try await Self.withTimeout(Self.openTimeout) {
+                try await self.manager.openExisting(id: summary.id, cwd: workingDir)
+            }
             cwdStore.record(id: state.id, cwd: state.cwd)
             insert(OpenSession(id: state.id, cwd: state.cwd, title: summary.title))
             selection = state.id
@@ -90,7 +151,8 @@ final class SessionsStore {
             // A concurrent caller registered first; just focus the session.
             selection = summary.id
         } catch {
-            lastError = error.localizedDescription
+            AppLog.session.error("openExisting: failed: \(String(describing: error), privacy: .public)")
+            lastError = Self.describe(error)
         }
     }
 

@@ -16,6 +16,16 @@ public protocol HostKeyStore: Sendable {
     func pin(host: String, port: Int, key: NIOSSHPublicKey) throws
 }
 
+/// Async confirmation callback the host app supplies for trust-on-first-use.
+/// When ``NIOSSHHostKeyVerifier`` encounters an unknown host key and a
+/// confirmer is present, it asks the user (via this callback) whether to
+/// trust the key. Returning `true` pins the key and proceeds; `false`
+/// aborts with ``SSHTransportError/hostKeyUnknown(fingerprint:)``.
+///
+/// Required on iOS, where there's no `~/.ssh/known_hosts` to seed trust —
+/// without a confirmer the very first connection to any host fails.
+public typealias HostKeyConfirmer = @Sendable (_ host: String, _ port: Int, _ fingerprint: String) async -> Bool
+
 /// Outcome of a trust lookup. Kept separate from a plain `Bool` so the
 /// verifier can distinguish a previously-pinned mismatch (security alert)
 /// from a never-seen host (benign TOFU prompt). `.revoked` is fatal: the

@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 
 // Apps launched outside a terminal inherit only a minimal PATH. We probe the
@@ -189,3 +190,4 @@ private final class ProbeBuffer: @unchecked Sendable {
         return data
     }
 }
+#endif

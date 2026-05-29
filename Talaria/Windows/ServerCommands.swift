@@ -16,7 +16,7 @@ struct ServerCommands: Commands {
                 }
                 if directory.profiles.isEmpty {
                     Divider()
-                    Text("No remote profiles configured")
+                    Text("No remote servers configured")
                         .foregroundStyle(.secondary)
                 }
             }

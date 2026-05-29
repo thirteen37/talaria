@@ -106,7 +106,7 @@ struct UpdatesView: View {
                 ContentUnavailableView(
                     "Admin runner unavailable",
                     systemImage: "arrow.triangle.2.circlepath",
-                    description: Text("Open a profile with a Hermes binary to check for updates.")
+                    description: Text("Open a server with a Hermes binary to check for updates.")
                 )
             } else if let harness {
                 content(harness: harness)

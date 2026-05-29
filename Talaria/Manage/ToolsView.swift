@@ -18,7 +18,7 @@ struct ToolsView: View {
                 ContentUnavailableView(
                     "Admin runner unavailable",
                     systemImage: "hammer",
-                    description: Text("Open a profile with a Hermes binary to manage tools.")
+                    description: Text("Open a server with a Hermes binary to manage tools.")
                 )
             } else if let harness {
                 content(harness: harness)
