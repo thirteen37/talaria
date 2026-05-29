@@ -56,8 +56,20 @@ public struct DashboardSpawnSpec: Sendable, Equatable {
         // whitespace or shell metacharacters (e.g. `/Users/x/My Tools/hermes`)
         // survives the remote shell's word splitting. `RemoteShellMode.wrap`
         // re-quotes the whole line for the chosen login shell on top of this.
-        let quotedHermes = RemoteShellMode.singleQuote(profile.hermesPath)
-        let dashboardLine = "\(quotedHermes) dashboard --no-open --host 127.0.0.1 --port \(remotePort)"
+        var remoteParts: [String] = []
+        if let hermesHome = profile.hermesHome, !hermesHome.isEmpty {
+            remoteParts += ["env", ShellQuoting.shellQuote("HERMES_HOME=\(hermesHome)")]
+        }
+        remoteParts += [
+            ShellQuoting.shellQuote(profile.hermesPath),
+            "dashboard",
+            "--no-open",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            String(remotePort),
+        ]
+        let dashboardLine = remoteParts.joined(separator: " ")
         let wrapped = profile.remoteShellMode.wrap(
             command: dashboardLine,
             customPrefix: profile.remoteShellPrefix

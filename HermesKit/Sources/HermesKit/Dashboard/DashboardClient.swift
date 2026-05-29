@@ -70,6 +70,12 @@ public struct DashboardSessionSearchResult: Codable, Equatable, Sendable {
     public let role: String?
     public let sessionStarted: Double?
 
+    public var displaySnippet: String? {
+        snippet?
+            .replacingOccurrences(of: ">>>", with: "")
+            .replacingOccurrences(of: "<<<", with: "")
+    }
+
     enum CodingKeys: String, CodingKey {
         case snippet, role
         case sessionId = "session_id"

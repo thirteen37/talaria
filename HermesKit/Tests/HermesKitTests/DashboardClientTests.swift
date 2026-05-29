@@ -77,6 +77,26 @@ struct DashboardClientTests {
     }
 
     @Test
+    func searchSessionsExposesSnippetWithoutHighlightMarkers() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/sessions/search", body: try loadFixtureData("sessions-search.json"))
+        ])
+        let client = DashboardClient(
+            baseURL: URL(string: "http://127.0.0.1:9119")!,
+            token: { "tok" },
+            http: http
+        )
+
+        let response = try await client.searchSessions(query: "hermes", limit: 2)
+
+        let first = try #require(response.results.first)
+        let displaySnippet = try #require(first.displaySnippet)
+        #expect(displaySnippet.contains("/Users/hermes/.hermes/hermes-agent/hermes_constants.py"))
+        #expect(!displaySnippet.contains(">>>"))
+        #expect(!displaySnippet.contains("<<<"))
+    }
+
+    @Test
     func retriesOnceAfterUnauthorizedAndCallsRefresh() async throws {
         // First request: 401. Second request: 200 with fixture body. The
         // client must invoke `onUnauthorized` between the two so a caller-

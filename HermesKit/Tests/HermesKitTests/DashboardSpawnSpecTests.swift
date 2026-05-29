@@ -94,4 +94,20 @@ struct DashboardSpawnSpecTests {
         // space in "My Tools".
         #expect(command == "'/Users/x/My Tools/hermes' dashboard --no-open --host 127.0.0.1 --port 9119")
     }
+
+    @Test
+    func remoteProfileForwardsHermesHomeEnvironmentWhenSet() throws {
+        var profile = ServerProfile(
+            name: "Box",
+            kind: .ssh,
+            host: "h",
+            hermesPath: "hermes",
+            hermesHome: "/Users/x/Alt Hermes",
+            remoteShellMode: .direct
+        )
+        profile.user = "x"
+        let spec = DashboardSpawnSpec.remote(profile: profile, localPort: 1000, remotePort: 9119)
+        let command = try #require(spec.arguments.last)
+        #expect(command == "env 'HERMES_HOME=/Users/x/Alt Hermes' 'hermes' dashboard --no-open --host 127.0.0.1 --port 9119")
+    }
 }

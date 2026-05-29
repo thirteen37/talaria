@@ -106,7 +106,7 @@ struct SessionsBrowser: View {
                 results = response.results.map { hit in
                     HermesSessionSummary(
                         id: hit.sessionId,
-                        title: hit.snippet ?? "",
+                        title: hit.displaySnippet ?? "",
                         updatedAt: hit.sessionStarted.map { Date(timeIntervalSince1970: $0) },
                         cwd: nil
                     )
