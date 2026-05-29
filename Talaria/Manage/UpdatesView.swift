@@ -107,7 +107,10 @@ struct UpdatesView: View {
             }
         }
         .navigationTitle("Updates")
-        .task {
+        // Keyed on client availability so the harness is built when the
+        // dashboard finishes booting and `client` flips non-nil, not only on
+        // first appear (a bare `.task` on the Group never re-runs for that flip).
+        .task(id: client != nil) {
             guard let client else { harness = nil; return }
             if harness != nil { return }
             let h = UpdatesHarness(service: DashboardUpdatesService(client: client))

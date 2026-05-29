@@ -163,6 +163,57 @@ struct DashboardSupervisorTests {
     }
 
     @Test
+    func acquireAfterReleaseToZeroDuringPendingSpawnStartsFresh() async throws {
+        // Regression: when the last pending consumer releases during startup we
+        // cancel the in-flight spawn. If `pendingAcquire` is left set, an
+        // `acquire()` arriving while the cancelled spawn is still unwinding
+        // (here: blocked in `launch`) coalesces onto the dead task and inherits
+        // its `CancellationError` instead of spawning fresh. The gate pins the
+        // first spawn inside `launch` so the second acquire hits that exact
+        // window deterministically.
+        let gate = Gate()
+        let launcher = StubLauncher()
+        launcher.launchGate = { await gate.wait() }
+        let http = StubHTTP(responses: [])  // never reachable
+        let supervisor = DashboardSupervisor(
+            profile: ServerProfile(name: "L", kind: .local, hermesPath: "/bin/hermes"),
+            launcher: launcher,
+            http: http,
+            portAllocator: { 51919 },
+            reachabilityTimeout: 0.1,
+            reachabilityPollInterval: 0.02
+        )
+
+        let acquire1 = Task { try await supervisor.acquire() }
+        while launcher.launchedSpecs.isEmpty {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        // Last pending consumer releases: cancels the spawn and clears the slot.
+        await supervisor.release()
+
+        // New acquirer arrives while the cancelled spawn is still gated in
+        // `launch`. With the fix it starts its own spawn rather than coalescing.
+        // (Bounded sleep, not a spin on launch count: the buggy path coalesces
+        // and never reaches a second launch, so this fails fast on the
+        // assertions below rather than hanging.)
+        let acquire2 = Task { try await supervisor.acquire() }
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        await gate.open()
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await acquire1.value
+        }
+        // acquire2 must not inherit the cancellation — it fails only because the
+        // stub never becomes reachable, proving it ran its own spawn.
+        await #expect(throws: DashboardSupervisorError.notReachable) {
+            _ = try await acquire2.value
+        }
+        #expect(launcher.launchedSpecs.count == 2)
+    }
+
+    @Test
     func acquireFailsWhenStatusNeverBecomesReachable() async throws {
         let launcher = StubLauncher()
         // No /api/status response — every probe returns the URLError default.
@@ -243,6 +294,9 @@ final class StubLauncher: DashboardProcessLauncher, @unchecked Sendable {
     private var _launchedSpecs: [DashboardSpawnSpec] = []
     private var _lastSpawnedProcess: StubDashboardProcess?
     var onLaunch: (@Sendable (StubDashboardProcess) -> Void)?
+    /// Optional async barrier awaited before `launch` returns, letting a test
+    /// pin a spawn mid-flight to exercise startup races deterministically.
+    var launchGate: (@Sendable () async -> Void)?
 
     var launchedSpecs: [DashboardSpawnSpec] { queue.sync { _launchedSpecs } }
     var lastSpawnedProcess: StubDashboardProcess? { queue.sync { _lastSpawnedProcess } }
@@ -254,7 +308,27 @@ final class StubLauncher: DashboardProcessLauncher, @unchecked Sendable {
             _lastSpawnedProcess = process
         }
         onLaunch?(process)
+        await launchGate?()
         return process
+    }
+}
+
+/// One-shot gate: `wait()` suspends until `open()` is called, after which all
+/// current and future waiters proceed immediately.
+actor Gate {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        opened = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume() }
     }
 }
 

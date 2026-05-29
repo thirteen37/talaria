@@ -160,6 +160,16 @@ public actor DashboardSupervisor {
             pendingRefcount -= 1
             if pendingRefcount == 0 {
                 pendingAcquire?.task.cancel()
+                // Clear the pending slot now rather than waiting for the
+                // cancelled task to unwind through `finishPendingAcquire`'s
+                // catch block. Otherwise an `acquire()` arriving while the
+                // cancelled spawn is still unwinding (e.g. blocked in
+                // `launcher.launch`/SSH connect before its next cancellation
+                // check) would coalesce onto the dead task and get a spurious
+                // `CancellationError` instead of a freshly spawned dashboard.
+                // The stale task's `finishPendingAcquire` no-ops on its
+                // generation mismatch and terminates any process it spawned.
+                pendingAcquire = nil
             }
             return
         }

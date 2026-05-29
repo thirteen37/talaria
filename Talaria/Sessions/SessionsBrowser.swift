@@ -103,8 +103,13 @@ struct SessionsBrowser: View {
                 results = response.sessions.map(HermesSessionSummary.init)
             } else {
                 let response = try await client.searchSessions(query: trimmed, limit: 200)
-                results = response.results.map { hit in
-                    HermesSessionSummary(
+                // `/api/sessions/search` returns one hit per matching message, so
+                // a session matching in several messages appears multiple times.
+                // Keep the first hit per session to give `List` stable, unique IDs.
+                var seen = Set<String>()
+                results = response.results.compactMap { hit in
+                    guard seen.insert(hit.sessionId).inserted else { return nil }
+                    return HermesSessionSummary(
                         id: hit.sessionId,
                         title: hit.displaySnippet ?? "",
                         updatedAt: hit.sessionStarted.map { Date(timeIntervalSince1970: $0) },
@@ -112,6 +117,11 @@ struct SessionsBrowser: View {
                     )
                 }
             }
+            // Title sort is client-side over the fetched window only. The server
+            // returns at most `limit` sessions recency-first, so beyond that cap
+            // this reorders a recency-windowed subset rather than all sessions —
+            // an older session whose title sorts first won't appear. Accurate
+            // ordering past the cap needs server-side title sort or pagination.
             if sort == .title {
                 results.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
             }

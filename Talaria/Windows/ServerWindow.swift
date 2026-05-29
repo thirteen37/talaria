@@ -375,6 +375,21 @@ struct ServerWindow: View {
                 }
             }
 
+            // Surface a failed dashboard spawn window-wide. Without this the
+            // dashboard surfaces sit on a perpetual "connecting…" placeholder
+            // (their `client` never flips non-nil) with no hint as to why.
+            if let dashboardError = harness.dashboardError {
+                Section {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text(dashboardError)
+                            .font(.caption)
+                            .foregroundStyle(.primary)
+                    }
+                }
+            }
+
             Section("Browse") {
                 browseRow("Sessions", systemImage: "clock.arrow.circlepath", destination: .sessions, store: harness.store)
                 browseRow("Skills", systemImage: "sparkles", destination: .skills, store: harness.store)
@@ -462,8 +477,8 @@ final class ServerWindowHarness {
     /// Live `DashboardClient` once the per-profile supervisor's process has
     /// come online. `nil` until acquired (or while a teardown is in flight),
     /// non-nil for the lifetime of the window's interest in the profile.
-    /// Surfaces are responsible for rendering a "connecting…" state while
-    /// this is nil and for showing `dashboardError` if acquisition failed.
+    /// Surfaces render a "connecting…" state while this is nil; the window
+    /// sidebar surfaces `dashboardError` if acquisition failed.
     var dashboardClient: DashboardClient?
     var dashboardError: String?
     private var dashboardTask: Task<Void, Never>?
@@ -488,16 +503,23 @@ final class ServerWindowHarness {
         #if os(macOS)
         if dashboardStarted, !dashboardReleased {
             dashboardReleased = true
-            dashboardTask?.cancel()
+            // Chain release behind the acquire task. Cancelling it doesn't stop
+            // the supervisor's in-flight spawn (that inner Task doesn't inherit
+            // cancellation), so if teardown beats the acquire task to
+            // `DashboardCoordinator.acquire`, an independent release would find
+            // no registered supervisor, no-op, and leak the spawned process.
+            // Awaiting the acquire task first guarantees the supervisor is
+            // registered (refcount 1) before we drop our refcount.
+            let acquireTask = dashboardTask
+            acquireTask?.cancel()
             dashboardTask = nil
             dashboardClient = nil
             store.dashboardClient = nil
-            // Drop our refcount on the per-profile dashboard supervisor. The
-            // coordinator's release is async; fire-and-forget is fine because
-            // the window is going away — nothing depends on the teardown
-            // completing before the harness is deallocated.
             let profile = profile
-            Task { await DashboardCoordinator.shared.release(profile: profile) }
+            Task {
+                await acquireTask?.value
+                await DashboardCoordinator.shared.release(profile: profile)
+            }
         }
         #endif
         notifications.stop()

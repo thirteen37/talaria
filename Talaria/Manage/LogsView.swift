@@ -146,9 +146,15 @@ struct LogsView: View {
             }
         }
         .navigationTitle("Logs")
-        .task {
+        // Keyed on client availability so the harness is built when the
+        // dashboard finishes booting and `client` flips non-nil, not only on
+        // first appear (a bare `.task` on the Group never re-runs for that flip).
+        .task(id: client != nil) {
             guard let client else { harness = nil; return }
-            if harness != nil { return }
+            // Re-appearing after `.onDisappear` left a stopped harness in place:
+            // restart its poll loop (idempotent — `start()` guards on `task ==
+            // nil`) instead of returning early and leaving tailing dead.
+            if let harness { harness.start(); return }
             let h = LogsHarness(client: client)
             harness = h
             h.start()
