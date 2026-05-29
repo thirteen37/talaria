@@ -50,6 +50,8 @@ public actor DashboardSupervisor {
     private var refcount: Int = 0
     private var pendingRefcount: Int = 0
     private var current: ActiveProcess?
+    private var currentGeneration: Int?
+    private var discardedPendingGeneration: Int?
     /// In-flight spawn shared by concurrent acquirers. Without this, two
     /// callers arriving while `current` is nil would each see nil after the
     /// first `await spawnAndReady()` suspends the actor, and each would
@@ -110,21 +112,26 @@ public actor DashboardSupervisor {
     private func finishPendingAcquire(_ pending: PendingAcquire) async throws -> DashboardEndpoint {
         do {
             let active = try await pending.task.value
+            if currentGeneration == pending.generation, let current {
+                return current.endpoint
+            }
+            if discardedPendingGeneration == pending.generation {
+                throw CancellationError()
+            }
             guard pendingAcquire?.generation == pending.generation else {
                 await active.process.terminate()
-                if let current {
-                    return current.endpoint
-                }
+                discardedPendingGeneration = pending.generation
                 throw CancellationError()
             }
             if current == nil {
                 pendingAcquire = nil
                 if pendingRefcount > 0 {
-                    installAcquired(active, refcount: pendingRefcount)
+                    installAcquired(active, refcount: pendingRefcount, generation: pending.generation)
                     pendingRefcount = 0
                 } else {
                     pendingRefcount = 0
                     await active.process.terminate()
+                    discardedPendingGeneration = pending.generation
                     throw CancellationError()
                 }
             }
@@ -141,8 +148,9 @@ public actor DashboardSupervisor {
         }
     }
 
-    private func installAcquired(_ active: ActiveProcess, refcount: Int) {
+    private func installAcquired(_ active: ActiveProcess, refcount: Int, generation: Int) {
         current = active
+        currentGeneration = generation
         self.refcount = refcount
     }
 
@@ -160,6 +168,7 @@ public actor DashboardSupervisor {
         if refcount == 0, let active = current {
             await active.process.terminate()
             current = nil
+            currentGeneration = nil
         }
     }
 

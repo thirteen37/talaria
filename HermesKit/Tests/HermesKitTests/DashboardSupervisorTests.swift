@@ -53,6 +53,11 @@ struct DashboardSupervisorTests {
 
         #expect(launcher.launchedSpecs.count == 1)
         #expect(a.baseURL == b.baseURL)
+        #expect(launcher.lastSpawnedProcess?.terminatedCount.value == 0)
+        await supervisor.release()
+        #expect(launcher.lastSpawnedProcess?.terminatedCount.value == 0)
+        await supervisor.release()
+        #expect(launcher.lastSpawnedProcess?.terminatedCount.value == 1)
     }
 
     @Test
