@@ -19,8 +19,11 @@ public enum HermesConfigReaderError: Error, Equatable, Sendable, LocalizedError 
 
 /// Reads a profile's raw `config.yaml` bytes — locally for `.local` profiles,
 /// or over SSH (via an injected ``RemoteSnapshotTransfer``) for `.ssh`. The
-/// SSH path relies on SFTP resolving relative paths against the login user's
-/// `$HOME`, so no remote shell expansion is needed.
+/// caller injects whichever transport the app selected (NIO `cat` with the
+/// keychain/host-key wiring, or system-`sftp`); both resolve the home-relative
+/// path this builds against the login user's `$HOME` — SFTP relative to its
+/// start dir, `cat` relative to the exec session's CWD — so no remote shell
+/// expansion is needed.
 public enum HermesConfigReader {
     /// Path of a profile's config relative to its **Hermes home**:
     /// `config.yaml` for the default profile, `profiles/<name>/config.yaml`

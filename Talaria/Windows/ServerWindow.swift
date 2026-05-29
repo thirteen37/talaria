@@ -382,7 +382,7 @@ struct ServerWindow: View {
             case .skills: SkillsView(runner: harness.store.adminRunner)
             case .tools: ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
             case .cron: CronView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
-            case .profiles: ProfilesView(runner: harness.store.adminRunner, profile: harness.profile)
+            case .profiles: ProfilesView(runner: harness.store.adminRunner, profile: harness.profile, transfer: harness.snapshotTransfer)
             case .logs:
                 LogsView(
                     runner: harness.store.adminRunner,
@@ -451,6 +451,13 @@ final class ServerWindowHarness {
     let store: SessionsStore
     let snapshot: RemoteSnapshot?
     let profile: ServerProfile
+    /// The SSH transfer built by `makeRemote` with this window's transport
+    /// selection (NIO + keychain/host-key store when NIO is active or on iOS;
+    /// nil on the system-ssh macOS path, where consumers fall back to
+    /// `SFTPSubprocessTransfer`). Reused by surfaces that read remote files —
+    /// e.g. Profiles' config comparison — so they honor the same auth + trust
+    /// policy as Sessions/snapshot rather than hardcoding one transport.
+    let snapshotTransfer: RemoteSnapshotTransfer?
     /// Drives the trust-on-first-use prompt for unknown SSH host keys. Always
     /// present for SSH profiles; nil for the bundled local profile.
     let hostKeyCoordinator: HostKeyConfirmationCoordinator?
@@ -472,12 +479,14 @@ final class ServerWindowHarness {
         db: HermesDB?,
         snapshot: RemoteSnapshot?,
         profile: ServerProfile,
+        snapshotTransfer: RemoteSnapshotTransfer? = nil,
         hostKeyCoordinator: HostKeyConfirmationCoordinator? = nil
     ) {
         self.store = store
         self.db = db
         self.snapshot = snapshot
         self.profile = profile
+        self.snapshotTransfer = snapshotTransfer
         self.hostKeyCoordinator = hostKeyCoordinator
         self.notifications = WindowNotificationCenter(
             snapshot: snapshot,
@@ -719,6 +728,7 @@ final class ServerWindowHarness {
             db: db,
             snapshot: snapshot,
             profile: profile,
+            snapshotTransfer: snapshotTransfer,
             hostKeyCoordinator: hostKeyCoordinator
         )
     }

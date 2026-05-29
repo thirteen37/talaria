@@ -18,10 +18,18 @@ final class ProfilesConfigHarness {
 
     let runner: HermesAdminRunning?
     let profile: ServerProfile
+    /// Transport-appropriate SSH transfer injected from `ServerWindowHarness`
+    /// (NIO + keychain/host-key store when NIO is active or on iOS; nil on the
+    /// system-ssh macOS path, where the reader falls back to
+    /// `SFTPSubprocessTransfer`). Reusing it keeps config reads on the same
+    /// auth + host-key-trust policy as Sessions/snapshot instead of hardcoding
+    /// one transport. nil for local profiles (the reader hits the filesystem).
+    let transfer: RemoteSnapshotTransfer?
 
-    init(runner: HermesAdminRunning?, profile: ServerProfile) {
+    init(runner: HermesAdminRunning?, profile: ServerProfile, transfer: RemoteSnapshotTransfer? = nil) {
         self.runner = runner
         self.profile = profile
+        self.transfer = transfer
     }
 
     func loadProfiles() async {
@@ -61,7 +69,6 @@ final class ProfilesConfigHarness {
         isLoading = true
         defer { isLoading = false }
         do {
-            let transfer = makeTransfer()
             async let sourceTextTask = HermesConfigReader.read(profile: profile, profileName: pair.source, transfer: transfer)
             async let destTextTask = HermesConfigReader.read(profile: profile, profileName: pair.dest, transfer: transfer)
             let sourceText = try await sourceTextTask
@@ -76,18 +83,6 @@ final class ProfilesConfigHarness {
             comparison = nil
             handle(error)
         }
-    }
-
-    /// Builds the SSH transfer for remote reads. `nil` for local profiles (the
-    /// reader reads the filesystem directly). macOS-only: iPadOS later injects
-    /// a NIO transfer here.
-    private func makeTransfer() -> RemoteSnapshotTransfer? {
-        guard profile.kind == .ssh else { return nil }
-        #if os(macOS)
-        return SFTPSubprocessTransfer(profile: profile)
-        #else
-        return nil
-        #endif
     }
 
     private func handle(_ error: Error) {
@@ -105,12 +100,14 @@ final class ProfilesConfigHarness {
 struct ProfilesView: View {
     let runner: HermesAdminRunning?
     let profile: ServerProfile
+    let transfer: RemoteSnapshotTransfer?
 
     @State private var harness: ProfilesConfigHarness?
 
-    init(runner: HermesAdminRunning?, profile: ServerProfile) {
+    init(runner: HermesAdminRunning?, profile: ServerProfile, transfer: RemoteSnapshotTransfer? = nil) {
         self.runner = runner
         self.profile = profile
+        self.transfer = transfer
     }
 
     var body: some View {
@@ -131,7 +128,7 @@ struct ProfilesView: View {
         .task {
             if runner == nil { harness = nil; return }
             if harness != nil { return }
-            let h = ProfilesConfigHarness(runner: runner, profile: profile)
+            let h = ProfilesConfigHarness(runner: runner, profile: profile, transfer: transfer)
             harness = h
             await h.loadProfiles()
         }
