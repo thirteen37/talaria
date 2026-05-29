@@ -86,6 +86,7 @@ struct SkillsView: View {
 
     @ViewBuilder
     private func content(harness: SkillsHarness) -> some View {
+        #if os(macOS)
         HSplitView {
             Table(harness.rows, selection: Binding(
                 get: { harness.selectionID },
@@ -144,6 +145,12 @@ struct SkillsView: View {
             ),
             severity: harness.lastError != nil ? .error : .warning
         )
+        #else
+        // The Skills surface is only reachable on macOS/iPad's full sidebar.
+        // On iOS the runner is always nil so this branch never renders;
+        // stub it out so the file compiles for iOS.
+        ContentUnavailableView("Skills unavailable", systemImage: "wand.and.stars")
+        #endif
     }
 
     @ViewBuilder

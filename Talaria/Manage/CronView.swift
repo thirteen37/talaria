@@ -149,6 +149,7 @@ struct CronView: View {
 
     @ViewBuilder
     private func content(harness: CronHarness) -> some View {
+        #if os(macOS)
         HSplitView {
             jobsTable(harness: harness)
                 .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
@@ -165,6 +166,11 @@ struct CronView: View {
             ),
             severity: harness.lastError != nil ? .error : .warning
         )
+        #else
+        // The Cron surface is only reachable on macOS/iPad's full sidebar.
+        // On iOS the runner is always nil so this branch never renders.
+        ContentUnavailableView("Cron unavailable", systemImage: "calendar")
+        #endif
     }
 
     @ViewBuilder

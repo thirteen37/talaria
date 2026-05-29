@@ -50,8 +50,17 @@ struct SessionsSidebar: View {
                 Button {
                     Task { await store.openNew() }
                 } label: {
-                    Label("New session", systemImage: "plus")
+                    if store.isOpening {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Connecting…")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Label("New session", systemImage: "plus")
+                    }
                 }
+                .disabled(store.isOpening)
             }
         }
         .sheet(item: $renameTarget) { target in
@@ -65,18 +74,31 @@ struct SessionsSidebar: View {
             store.selection = session.id
         } label: {
             HStack(spacing: 8) {
-                statusDot(for: session.id)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.title ?? shortId(session.id))
-                        .lineLimit(1)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        // Pin the dot to the title's cap-height center rather than
+                        // the line-box center (which reads low against the
+                        // cap-height digits in session IDs). The baseline guide
+                        // floats the dot just above the baseline so its center
+                        // lands on the glyphs' optical middle.
+                        Circle()
+                            .fill(statusColor(for: session.id))
+                            .frame(width: 9, height: 9)
+                            .alignmentGuide(.firstTextBaseline) { $0.height + 2 }
+                        Text(session.title ?? shortId(session.id))
+                            .lineLimit(1)
+                    }
                     Text((session.cwd as NSString).lastPathComponent)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        // Indent under the title (dot width + HStack spacing).
+                        .padding(.leading, 17)
                 }
                 Spacer()
                 closeButton(for: session)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -103,6 +125,14 @@ struct SessionsSidebar: View {
         }
     }
 
+    private func statusColor(for id: SessionId) -> Color {
+        switch store.statuses[id] ?? .idle {
+        case .idle: return .secondary
+        case .working: return .green
+        case .error: return .red
+        }
+    }
+
     @ViewBuilder
     private func closeButton(for session: SessionsStore.OpenSession) -> some View {
         Button {
@@ -114,19 +144,6 @@ struct SessionsSidebar: View {
         .buttonStyle(.borderless)
         .opacity(hoveredSessionId == session.id ? 1 : 0)
         .help("Close session")
-    }
-
-    private func statusDot(for id: SessionId) -> some View {
-        let status = store.statuses[id] ?? .idle
-        let color: Color
-        switch status {
-        case .idle: color = .secondary
-        case .working: color = .green
-        case .error: color = .red
-        }
-        return Circle()
-            .fill(color)
-            .frame(width: 8, height: 8)
     }
 
     private func shortId(_ id: SessionId) -> String {

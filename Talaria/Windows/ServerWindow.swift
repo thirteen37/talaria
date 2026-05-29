@@ -257,6 +257,13 @@ struct ServerWindow: View {
     @Environment(RecentServers.self) private var recents
     @State private var harness: ServerWindowHarness?
     @State private var browse: BrowseDestination? = .sessions
+    @State private var showingSettings = false
+    @State private var showingAllSessions = false
+    @State private var showingLogs = false
+    /// Drives the iPhone chat push stack. Selecting/creating a session pushes
+    /// its id; popping (back-swipe) clears the selection. iPad/macOS use the
+    /// NavigationSplitView's detail column instead and ignore this.
+    @State private var chatPath: [SessionId] = []
     /// Live profile shown in this window. Diverges from `profileId` (the
     /// initial value `WindowGroup` opened with) once the user picks a
     /// different profile from the sidebar switcher; the harness rebuild
@@ -269,31 +276,37 @@ struct ServerWindow: View {
         Group {
             if let harness {
                 content(harness: harness)
+            } else if Idiom.isPhone {
+                noServerConfiguredView
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .navigationTitle(directory.profile(id: currentProfileId)?.name ?? "Hermes")
-        .navigationSubtitle(subtitle(for: directory.profile(id: currentProfileId)))
+        .navigationTitle(harness?.profile.name ?? directory.profile(id: currentProfileId)?.name ?? "Hermes")
+        #if os(macOS)
+        .navigationSubtitle(subtitle(for: harness?.profile ?? directory.profile(id: currentProfileId)))
+        #endif
         .task(id: currentProfileId) {
-            await directory.reload()
-            // Tear the previous profile's harness down before swapping. Without
-            // this, swapping the window's profile abandons the old
-            // `ServerWindowHarness` without releasing its dashboard refcount,
-            // leaking the spawned `hermes dashboard` (the coordinator holds the
-            // supervisor strongly, so nothing else releases it). `.onDisappear`
-            // only fires on window close, never on profile swap.
-            harness?.tearDown()
-            let profile = directory.profile(id: currentProfileId) ?? ProfileDirectory.localProfile
-            let new = ServerWindowHarness.make(profile: profile)
-            harness = new
-            // Spawn the per-profile dashboard process in the background so
-            // the chat surface (which doesn't need the dashboard) renders
-            // immediately. Surfaces that do need it observe
-            // `harness.dashboardClient` flipping non-nil when ready.
-            new.startDashboard()
+            await rebuildHarness()
         }
+        #if os(iOS)
+        // Auto-build only when no server is active yet (the no-server empty
+        // state), so saving the first server connects without a relaunch.
+        // Rebuilding while a harness is live would construct a fresh store
+        // with no open sessions and drop the in-progress chat, so an existing
+        // harness is left in place; profile edits apply on next launch.
+        .onChange(of: directory.profiles) { _, _ in
+            guard harness == nil else { return }
+            Task { await rebuildHarness() }
+        }
+        // Attached at body level so the no-server empty state (which has no
+        // harness/sidebar in scope) can still present the Settings sheet.
+        .sheet(isPresented: $showingSettings) {
+            ProfileEditor(onDismiss: { showingSettings = false })
+                .environment(directory)
+        }
+        #endif
         .onDisappear {
             // Cancel the window-scoped log tailer (and any future
             // long-lived per-window tasks) when the window closes. Without
@@ -301,6 +314,66 @@ struct ServerWindow: View {
             // every closed window that ever visited the Logs view.
             harness?.tearDown()
         }
+    }
+
+    @ViewBuilder
+    private var noServerConfiguredView: some View {
+        ContentUnavailableView {
+            Label("No server configured", systemImage: "server.rack")
+        } description: {
+            Text("Add a remote server to start chatting.")
+        } actions: {
+            Button("Open Settings") { showingSettings = true }
+                .buttonStyle(.borderedProminent)
+        }
+    }
+
+    /// Resolves the requested server (or first available SSH server on iOS)
+    /// and rebuilds the per-window harness. Called from `.task(id:)` on
+    /// profile changes and from `.onChange` on directory mutations.
+    @MainActor
+    private func rebuildHarness() async {
+        if UITestFlags.mockServer {
+            // UI-test mode: bypass SSH entirely with an in-process ACP server
+            // so navigation + chat can be exercised on the simulator.
+            let previous = harness
+            harness = ServerWindowHarness.makeMock()
+            previous?.tearDown()
+            return
+        }
+        await directory.reload()
+        AppLog.general.info("rebuildHarness: \(directory.profiles.count) profile(s) configured")
+        #if os(iOS)
+        // iOS can't run local hermes, so never fall back to the bundled
+        // local server. Prefer the requested server when it's a real SSH
+        // entry; otherwise pick the first persisted server. With none
+        // configured, leave the harness nil so the body renders the
+        // no-server empty state.
+        let resolved: ServerProfile?
+        if let p = directory.profile(id: currentProfileId), p.kind != .local {
+            resolved = p
+        } else {
+            resolved = directory.profiles.first
+        }
+        let previous = harness
+        if let profile = resolved {
+            harness = ServerWindowHarness.make(profile: profile)
+        } else {
+            harness = nil
+        }
+        previous?.tearDown()
+        #else
+        let previous = harness
+        let profile = directory.profile(id: currentProfileId) ?? ProfileDirectory.localProfile
+        harness = ServerWindowHarness.make(profile: profile)
+        previous?.tearDown()
+        #endif
+        // Spawn the per-profile dashboard in the background once the previous
+        // harness has released its refcount. Surfaces observe
+        // `harness.dashboardClient` flipping non-nil when ready (no-op on iOS
+        // until dashboard-over-SSH lands). Done after `tearDown()` so the old
+        // profile's supervisor is released before the new one acquires.
+        harness?.startDashboard()
     }
 
     /// In-place profile swap: tears the old harness down before swapping
@@ -317,24 +390,67 @@ struct ServerWindow: View {
 
     @ViewBuilder
     private func content(harness: ServerWindowHarness) -> some View {
-        NavigationSplitView {
-            sidebar(harness: harness)
-        } detail: {
-            detail(harness: harness)
-        }
-        .background {
-            // ⌘W normally closes the window; when a session tab is selected
-            // we hijack the shortcut to close that tab instead. With no
-            // selection the button is disabled so the default
-            // `Performs Close` menu item handles the keystroke as usual.
-            Button("Close Session") {
-                if let id = harness.store.selection {
-                    Task { await harness.store.closeTab(id) }
+        Group {
+            if Idiom.isPhone {
+                // Explicit push stack: the collapsed NavigationSplitView's
+                // programmatic detail push proved unreliable, so on iPhone we
+                // drive a NavigationStack directly from the selection.
+                NavigationStack(path: $chatPath) {
+                    sidebar(harness: harness)
+                        .navigationTitle(harness.profile.name)
+                        .navigationDestination(for: SessionId.self) { id in
+                            chatDestination(harness: harness, id: id)
+                        }
+                }
+                .onChange(of: harness.store.selection) { _, newValue in
+                    chatPath = newValue.map { [$0] } ?? []
+                }
+                .onChange(of: chatPath) { _, path in
+                    // Back-swipe empties the path — clear the selection so
+                    // re-tapping the same session re-pushes the chat.
+                    if path.isEmpty, harness.store.selection != nil {
+                        harness.store.selection = nil
+                    }
+                }
+            } else {
+                NavigationSplitView {
+                    sidebar(harness: harness)
+                } detail: {
+                    detail(harness: harness)
                 }
             }
-            .keyboardShortcut("w", modifiers: .command)
-            .disabled(harness.store.selection == nil)
-            .hidden()
+        }
+        .alert(
+            "Trust this server?",
+            isPresented: Binding(
+                get: { harness.hostKeyCoordinator?.pending != nil },
+                // Alerts only dismiss via their buttons (which resolve
+                // explicitly), so the setter is a no-op — resolving here would
+                // race the Trust button and could deny an approved key.
+                set: { _ in }
+            ),
+            presenting: harness.hostKeyCoordinator?.pending
+        ) { _ in
+            Button("Trust") { harness.hostKeyCoordinator?.resolve(true) }
+            Button("Cancel", role: .cancel) { harness.hostKeyCoordinator?.resolve(false) }
+        } message: { request in
+            Text(
+                "First connection to \(request.host):\(request.port).\n\n"
+                + "Key fingerprint:\n\(request.fingerprint)\n\n"
+                + "Trust and remember this server? Only do this if the fingerprint matches your server."
+            )
+        }
+    }
+
+    /// iPhone push destination for a selected session.
+    @ViewBuilder
+    private func chatDestination(harness: ServerWindowHarness, id: SessionId) -> some View {
+        if let session = harness.store.openSessions.first(where: { $0.id == id }),
+           let viewModel = harness.store.viewModel(for: session.id) {
+            ChatView(viewModel: viewModel)
+                .id(session.id)
+        } else {
+            ContentUnavailableView("Session unavailable", systemImage: "bubble.left.and.bubble.right")
         }
     }
 
@@ -390,15 +506,70 @@ struct ServerWindow: View {
                 }
             }
 
-            Section("Browse") {
-                browseRow("Sessions", systemImage: "clock.arrow.circlepath", destination: .sessions, store: harness.store)
-                browseRow("Skills", systemImage: "sparkles", destination: .skills, store: harness.store)
-                browseRow("Tools", systemImage: "wrench.and.screwdriver", destination: .tools, store: harness.store)
-                browseRow("Cron", systemImage: "calendar", destination: .cron, store: harness.store)
-                browseRow("Logs", systemImage: "doc.text", destination: .logs, store: harness.store)
-                browseRow("Doctor", systemImage: "stethoscope", destination: .doctor, store: harness.store)
-                browseRow("Updates", systemImage: "arrow.down.circle", destination: .updates, store: harness.store)
+            if !Idiom.isPhone {
+                Section("Browse") {
+                    browseRow("Sessions", systemImage: "clock.arrow.circlepath", destination: .sessions, store: harness.store)
+                    browseRow("Skills", systemImage: "sparkles", destination: .skills, store: harness.store)
+                    browseRow("Tools", systemImage: "wrench.and.screwdriver", destination: .tools, store: harness.store)
+                    browseRow("Cron", systemImage: "calendar", destination: .cron, store: harness.store)
+                    browseRow("Logs", systemImage: "doc.text", destination: .logs, store: harness.store)
+                    browseRow("Doctor", systemImage: "stethoscope", destination: .doctor, store: harness.store)
+                    browseRow("Updates", systemImage: "arrow.down.circle", destination: .updates, store: harness.store)
+                }
             }
+        }
+        #if os(iOS)
+        .toolbar {
+            if Idiom.isPhone {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        showingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                    }
+                    .accessibilityLabel("Settings")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showingAllSessions = true
+                    } label: {
+                        Image(systemName: "clock.arrow.circlepath")
+                    }
+                    .accessibilityLabel("All sessions")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showingLogs = true
+                    } label: {
+                        Image(systemName: "ladybug")
+                    }
+                    .accessibilityLabel("Logs")
+                }
+            }
+        }
+        #endif
+        .sheet(isPresented: $showingLogs) {
+            LogConsoleView(onDismiss: { showingLogs = false })
+        }
+        // Settings sheet is attached at the ServerWindow body level so the
+        // no-server empty state can present it too.
+        .sheet(isPresented: $showingAllSessions) {
+            #if os(iOS)
+            NavigationStack {
+                SessionsBrowser(
+                    store: harness.store,
+                    client: harness.dashboardClient,
+                    onOpen: { showingAllSessions = false }
+                )
+                .navigationTitle("Sessions")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { showingAllSessions = false }
+                    }
+                }
+            }
+            #endif
         }
     }
 
@@ -409,6 +580,24 @@ struct ServerWindow: View {
            let viewModel = harness.store.viewModel(for: session.id) {
             ChatView(viewModel: viewModel)
                 .id(session.id)
+                #if os(macOS)
+                .background {
+                    // ⌘W normally closes the window; when a session tab is
+                    // selected we hijack the shortcut to close that tab
+                    // instead. Disabled with no selection so the default
+                    // `Performs Close` handles the keystroke as usual.
+                    Button("Close Session") {
+                        if let id = harness.store.selection {
+                            Task { await harness.store.closeTab(id) }
+                        }
+                    }
+                    .keyboardShortcut("w", modifiers: .command)
+                    .disabled(harness.store.selection == nil)
+                    .hidden()
+                }
+                #endif
+        } else if Idiom.isPhone {
+            ContentUnavailableView("Pick a session", systemImage: "bubble.left.and.bubble.right")
         } else {
             switch browse ?? .sessions {
             case .sessions:
@@ -470,6 +659,9 @@ struct ServerWindow: View {
 final class ServerWindowHarness {
     let store: SessionsStore
     let profile: ServerProfile
+    /// Drives the trust-on-first-use prompt for unknown SSH host keys. Always
+    /// present for SSH profiles; nil for the bundled local profile.
+    let hostKeyCoordinator: HostKeyConfirmationCoordinator?
     /// Aggregates cross-cutting issues (update available, doctor failure)
     /// for the bell + notifications detail page. Built once per harness;
     /// cancelled in `tearDown()`.
@@ -485,9 +677,14 @@ final class ServerWindowHarness {
     private var dashboardStarted = false
     private var dashboardReleased = false
 
-    private init(store: SessionsStore, profile: ServerProfile) {
+    private init(
+        store: SessionsStore,
+        profile: ServerProfile,
+        hostKeyCoordinator: HostKeyConfirmationCoordinator? = nil
+    ) {
         self.store = store
         self.profile = profile
+        self.hostKeyCoordinator = hostKeyCoordinator
         self.notifications = WindowNotificationCenter(adminRunner: store.adminRunner)
         self.notifications.start()
     }
@@ -560,6 +757,15 @@ final class ServerWindowHarness {
         #else
         dashboardError = "Dashboard mode requires macOS in this release."
         #endif
+    }
+
+    /// Builds a harness backed by an in-process ``MockACPTransport`` for UI
+    /// tests — no SSH, no admin runner, no snapshot.
+    static func makeMock() -> ServerWindowHarness {
+        let manager = SessionManager { MockACPTransport() }
+        let store = SessionsStore(manager: manager, adminRunner: nil)
+        let profile = ServerProfile(name: "Mock Server", kind: .ssh, host: "mock.local")
+        return ServerWindowHarness(store: store, profile: profile)
     }
 
     static func make(profile: ServerProfile) -> ServerWindowHarness {
@@ -636,14 +842,19 @@ final class ServerWindowHarness {
         let useNIO = preferNIOSSHTransport()
         let manager: SessionManager
 
+        let hostKeyCoordinator = HostKeyConfirmationCoordinator()
         if useNIO {
             let credentialProvider: SSHCredentialProvider = FileIdentityProvider()
             let hostKeyStore = defaultHostKeyStore()
+            let confirmer: HostKeyConfirmer = { host, port, fingerprint in
+                await hostKeyCoordinator.confirm(host: host, port: port, fingerprint: fingerprint)
+            }
             manager = SessionManager {
                 let transport = try NIOSSHTransport(
                     profile: profile,
                     credentialProvider: credentialProvider,
-                    hostKeyStore: hostKeyStore
+                    hostKeyStore: hostKeyStore,
+                    hostKeyConfirmer: confirmer
                 )
                 try await transport.start()
                 return transport
@@ -672,8 +883,18 @@ final class ServerWindowHarness {
         }
 
         let admin = remoteAdminRunner(for: profile)
-        let store = SessionsStore(manager: manager, adminRunner: admin)
-        return ServerWindowHarness(store: store, profile: profile)
+        let store = SessionsStore(
+            manager: manager,
+            adminRunner: admin,
+            // Pause the open timeout while the trust prompt is up so a slow
+            // fingerprint comparison doesn't tear down the pending connection.
+            isAwaitingUserInput: { hostKeyCoordinator.pending != nil }
+        )
+        return ServerWindowHarness(
+            store: store,
+            profile: profile,
+            hostKeyCoordinator: hostKeyCoordinator
+        )
     }
 
     /// True if we should use the NIO transport for this profile. iOS has

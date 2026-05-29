@@ -81,11 +81,13 @@ struct Composer: View {
                     Image(systemName: "stop.fill")
                 }
                 .help("Cancel")
+                .accessibilityLabel("Cancel")
             } else {
                 Button(action: send) {
                     Image(systemName: "paperplane.fill")
                 }
                 .help("Send")
+                .accessibilityLabel("Send")
                 .disabled(trimmedPrompt.isEmpty || isBlocked)
             }
         }

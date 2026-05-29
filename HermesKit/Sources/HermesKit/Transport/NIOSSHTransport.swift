@@ -27,7 +27,9 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
 
     private let profile: ServerProfile
     private let hostKeyStore: HostKeyStore
-    private let privateKey: NIOSSHPrivateKey
+    private let hostKeyConfirmer: HostKeyConfirmer?
+    private let privateKey: NIOSSHPrivateKey?
+    private let password: String?
     private let group: EventLoopGroup
 
     private let inboundStream: AsyncThrowingStream<Data, Error>
@@ -51,27 +53,38 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
         profile: ServerProfile,
         credentialProvider: SSHCredentialProvider,
         hostKeyStore: HostKeyStore,
+        hostKeyConfirmer: HostKeyConfirmer? = nil,
         passphrase: String? = nil,
         group: EventLoopGroup = NIOSSHTransport.sharedGroup
     ) throws {
         let privateKey = try credentialProvider.privateKey(for: profile, passphrase: passphrase)
+        let password = try credentialProvider.password(for: profile)
+        if privateKey == nil, password == nil {
+            throw SSHTransportError.authFailed("profile has no identity file or password configured")
+        }
         self.init(
             profile: profile,
             privateKey: privateKey,
+            password: password,
             hostKeyStore: hostKeyStore,
+            hostKeyConfirmer: hostKeyConfirmer,
             group: group
         )
     }
 
     init(
         profile: ServerProfile,
-        privateKey: NIOSSHPrivateKey,
+        privateKey: NIOSSHPrivateKey?,
+        password: String? = nil,
         hostKeyStore: HostKeyStore,
+        hostKeyConfirmer: HostKeyConfirmer? = nil,
         group: EventLoopGroup
     ) {
         self.profile = profile
         self.privateKey = privateKey
+        self.password = password
         self.hostKeyStore = hostKeyStore
+        self.hostKeyConfirmer = hostKeyConfirmer
         self.group = group
 
         var captured: AsyncThrowingStream<Data, Error>.Continuation?
@@ -102,9 +115,25 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
         let port = profile.port ?? 22
         let user = profile.user ?? NSUserName()
         let command = buildHermesRemoteCommand(profile: profile)
+        let authKind = privateKey != nil ? "key" : "password"
+        HermesLog.transport.info("connect start \(user, privacy: .public)@\(host, privacy: .public):\(port) auth=\(authKind, privacy: .public)")
+        HermesLog.transport.info("remote command: \(command, privacy: .public)")
 
-        let authDelegate = NIOSSHAuthDelegate(username: user, privateKey: privateKey)
-        let hostKeyDelegate = NIOSSHHostKeyVerifier(store: hostKeyStore, host: host, port: port)
+        // Surface auth exhaustion (all credentials offered + rejected) as a
+        // fast, clear error instead of letting NIOSSH stall until the open
+        // timeout. The delegate fires `onExhausted` on the event loop; we fail
+        // this promise, which the channel-open await observes below.
+        let authFailure = group.next().makePromise(of: Void.self)
+        // No "Authentication failed" prefix here — `SSHTransportError.authFailed`'s
+        // errorDescription already adds it, so a prefix would double up.
+        let authFailureMessage = "The server rejected the \(authKind). Check the username and \(authKind) for this server."
+        let authDelegate = NIOSSHAuthDelegate(
+            username: user,
+            privateKey: privateKey,
+            password: password,
+            onExhausted: { authFailure.fail(SSHTransportError.authFailed(authFailureMessage)) }
+        )
+        let hostKeyDelegate = NIOSSHHostKeyVerifier(store: hostKeyStore, host: host, port: port, confirmUnknown: hostKeyConfirmer)
         let config = SSHClientConfiguration(
             userAuthDelegate: authDelegate,
             serverAuthDelegate: hostKeyDelegate
@@ -130,14 +159,23 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
         do {
             connection = try await bootstrap.connect(host: host, port: port).get()
         } catch {
+            HermesLog.transport.error("TCP/handshake failed: \(String(describing: error), privacy: .public)")
+            authFailure.succeed(()) // resolve the unused promise to avoid a leak warning
             _ = await markClosed()
             throw Self.mapConnectError(error, host: host, port: port)
         }
+        HermesLog.transport.info("TCP connected + SSH handshake/auth done; opening session channel")
         storeConnection(connection)
 
         let inboundContinuation = inboundContinuation
         let stderrRing = stderrRing
         let childPromise = connection.eventLoop.makePromise(of: Channel.self)
+        // Whichever settles first wins: the session channel opening, or auth
+        // exhaustion failing it. cascade forwards childPromise's outcome;
+        // a later auth failure is a no-op once the channel already opened.
+        let channelOpen = connection.eventLoop.makePromise(of: Channel.self)
+        childPromise.futureResult.cascade(to: channelOpen)
+        authFailure.futureResult.whenFailure { channelOpen.fail($0) }
         do {
             let handler = try await connection.pipeline.handler(type: NIOSSHHandler.self).get()
             handler.createChannel(childPromise, channelType: .session) { childChannel, _ in
@@ -148,8 +186,12 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
                 )
                 return childChannel.pipeline.addHandler(dataHandler)
             }
-            let child = try await childPromise.futureResult.get()
+            let child = try await channelOpen.futureResult.get()
+            // Resolve the auth-failure promise so it doesn't linger once the
+            // channel is up (no-op if it already failed).
+            authFailure.succeed(())
             storeChild(child)
+            HermesLog.transport.info("session channel open; awaiting exec ack")
             // Wait for the ExecRequest to be accepted (or for the child
             // channel to close, e.g. on auth/host-key failure during the
             // initial handshake). The handler stashes the promise; we
@@ -159,7 +201,10 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
                 return handler.execAckFuture(on: child.eventLoop)
             }.get()
             try await ackFuture.get()
+            HermesLog.transport.info("exec accepted — transport live")
         } catch {
+            HermesLog.transport.error("session/exec setup failed: \(String(describing: error), privacy: .public)")
+            authFailure.succeed(()) // resolve the unused promise to avoid a leak warning
             _ = await markClosed()
             throw Self.mapConnectError(error, host: host, port: port)
         }
@@ -261,6 +306,18 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
         }
         if let nio = error as? NIOSSHError {
             return SSHTransportError.authFailed(String(describing: nio))
+        }
+        // `ChannelError`'s NSError bridge yields a useless "operation couldn't
+        // be completed (NIOCore.ChannelError error N)" string. A channel-layer
+        // failure during connect means the TCP socket was refused, reset, or
+        // never established — on iOS the most common cause is Local Network
+        // privacy not yet granted for a LAN/self-hosted host. Render the case
+        // name and a hint instead of the opaque code.
+        if let channelError = error as? ChannelError {
+            return SSHTransportError.hostUnreachable(
+                "\(host):\(port) — connection failed (\(String(describing: channelError))). "
+                + "Check the host/port is reachable. On iOS, allow Local Network access for Talaria if the server is on your LAN."
+            )
         }
         let message = (error as NSError).localizedDescription
         let lowered = message.lowercased()

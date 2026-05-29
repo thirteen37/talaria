@@ -1,3 +1,4 @@
+#if os(macOS)
 import Sparkle
 import SwiftUI
 
@@ -56,3 +57,4 @@ private final class UpdaterChecker: ObservableObject {
             .assign(to: &$canCheckForUpdates)
     }
 }
+#endif

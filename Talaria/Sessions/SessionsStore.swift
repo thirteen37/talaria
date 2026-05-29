@@ -52,6 +52,11 @@ final class SessionsStore {
     var statuses: [SessionId: Status] = [:]
     var lastError: String?
     var browserRefreshToken: Int = 0
+    /// True while a session open (new or resume) is in flight, so the UI can
+    /// disable "New session" and show a connecting indicator. Tracked as a
+    /// count to stay correct if opens overlap.
+    var isOpening: Bool { openingCount > 0 }
+    private var openingCount = 0
 
     let manager: SessionManager
     /// CLI admin runner — used only for `hermes sessions rename` since the
@@ -71,32 +76,113 @@ final class SessionsStore {
     private var pendingOpens: Set<SessionId> = []
     private var toolKinds: [SessionId: [ToolCallId: ToolKind]] = [:]
     private let cwdStore: SessionsCwdStore
+    /// Returns true while the open is blocked on interactive user input (the
+    /// host-key trust prompt). The open timeout pauses while this is true so
+    /// a slow fingerprint comparison doesn't trip the "handshake" deadline.
+    private let isAwaitingUserInput: @MainActor @Sendable () -> Bool
 
     init(
         manager: SessionManager,
         adminRunner: HermesAdminRunning? = nil,
         dashboardClient: DashboardClient? = nil,
-        defaultCwd: String = FileManager.default.homeDirectoryForCurrentUser.path,
-        cwdStore: SessionsCwdStore = SessionsCwdStore()
+        defaultCwd: String = SessionsStore.defaultHomeDirectory(),
+        cwdStore: SessionsCwdStore = SessionsCwdStore(),
+        isAwaitingUserInput: @escaping @MainActor @Sendable () -> Bool = { false }
     ) {
         self.manager = manager
         self.adminRunner = adminRunner
         self.dashboardClient = dashboardClient
         self.defaultCwd = defaultCwd
         self.cwdStore = cwdStore
+        self.isAwaitingUserInput = isAwaitingUserInput
     }
+
+    /// `FileManager.homeDirectoryForCurrentUser` is unavailable on iOS — the
+    /// app sandbox makes a per-user home meaningless there. iOS is remote-only,
+    /// so the cwd lives on the remote host: returning `"~"` lets the remote
+    /// shell expand it to whichever home the SSH login lands in, rather than
+    /// shipping a local sandbox path the remote can't `cd` into.
+    static func defaultHomeDirectory() -> String {
+        #if os(macOS)
+        return FileManager.default.homeDirectoryForCurrentUser.path
+        #else
+        return "~"
+        #endif
+    }
+
+    /// Upper bound on opening a session. The SSH connect already has its own
+    /// 15s bound, but the ACP `initialize` + `session/new` round-trips that
+    /// follow have none — a host that accepts the connection but never speaks
+    /// ACP (wrong binary, `hermes acp` wedged) would otherwise hang `openNew`
+    /// forever with no error surfaced. 30s covers a slow login shell sourcing
+    /// heavy rc files plus the handshake.
+    static let openTimeout: TimeInterval = 30
 
     func openNew(cwd: String? = nil) async {
         let workingDir = cwd ?? defaultCwd
+        AppLog.session.info("openNew: begin cwd=\(workingDir, privacy: .public)")
+        openingCount += 1
+        defer { openingCount -= 1 }
         do {
-            let state = try await manager.openNew(cwd: workingDir)
+            let state = try await Self.withTimeout(Self.openTimeout, isPaused: isAwaitingUserInput) {
+                try await self.manager.openNew(cwd: workingDir)
+            }
             cwdStore.record(id: state.id, cwd: state.cwd)
             insert(OpenSession(id: state.id, cwd: state.cwd, title: nil))
             selection = state.id
             attachStatus(id: state.id)
             await ensureViewModel(id: state.id, cwd: state.cwd)
+            AppLog.session.info("openNew: ready id=\(state.id, privacy: .public)")
         } catch {
-            lastError = error.localizedDescription
+            AppLog.session.error("openNew: failed: \(String(describing: error), privacy: .public)")
+            lastError = Self.describe(error)
+        }
+    }
+
+    /// Human-readable text for connection/session errors. Prefers our typed
+    /// `LocalizedError` descriptions over Foundation's opaque
+    /// "operation couldn't be completed (… error N)".
+    static func describe(_ error: Error) -> String {
+        if let localized = error as? LocalizedError, let message = localized.errorDescription {
+            return message
+        }
+        return error.localizedDescription
+    }
+
+    /// Races `operation` against a timeout. On expiry the operation task is
+    /// cancelled (HermesClient's request path honors cancellation) and a
+    /// descriptive error is thrown so the UI shows something actionable
+    /// instead of spinning silently.
+    ///
+    /// `isPaused` lets the deadline stop advancing while the open is blocked on
+    /// interactive input (the host-key trust prompt) — otherwise a user who
+    /// takes >`seconds` to compare a fingerprint would trip the timeout and
+    /// tear down a connection they're about to trust.
+    static func withTimeout<T: Sendable>(
+        _ seconds: TimeInterval,
+        isPaused: @escaping @MainActor @Sendable () -> Bool = { false },
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                let tick: TimeInterval = 0.25
+                var remaining = seconds
+                while remaining > 0 {
+                    try await Task.sleep(nanoseconds: UInt64(tick * 1_000_000_000))
+                    // Don't count time spent waiting on the user's trust
+                    // decision — that's interactive wait, not a stalled host.
+                    if await isPaused() { continue }
+                    remaining -= tick
+                }
+                throw TransportError.processDidNotStart(
+                    "Connected, but the server didn't complete the Hermes handshake within \(Int(seconds))s. "
+                    + "Check that `hermes acp` runs on the server for this profile's shell."
+                )
+            }
+            defer { group.cancelAll() }
+            // First task to finish wins; cancel the rest.
+            return try await group.next()!
         }
     }
 
@@ -110,11 +196,17 @@ final class SessionsStore {
             return
         }
         pendingOpens.insert(summary.id)
-        defer { pendingOpens.remove(summary.id) }
+        openingCount += 1
+        defer {
+            pendingOpens.remove(summary.id)
+            openingCount -= 1
+        }
 
         let workingDir = cwdStore.cwd(for: summary.id) ?? summary.cwd ?? defaultCwd
         do {
-            let state = try await manager.openExisting(id: summary.id, cwd: workingDir)
+            let state = try await Self.withTimeout(Self.openTimeout, isPaused: isAwaitingUserInput) {
+                try await self.manager.openExisting(id: summary.id, cwd: workingDir)
+            }
             cwdStore.record(id: state.id, cwd: state.cwd)
             insert(OpenSession(id: state.id, cwd: state.cwd, title: summary.title))
             selection = state.id
@@ -124,7 +216,8 @@ final class SessionsStore {
             // A concurrent caller registered first; just focus the session.
             selection = summary.id
         } catch {
-            lastError = error.localizedDescription
+            AppLog.session.error("openExisting: failed: \(String(describing: error), privacy: .public)")
+            lastError = Self.describe(error)
         }
     }
 
