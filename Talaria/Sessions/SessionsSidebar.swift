@@ -31,8 +31,17 @@ struct SessionsSidebar: View {
                 Button {
                     Task { await store.openNew() }
                 } label: {
-                    Label("New session", systemImage: "plus")
+                    if store.isOpening {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Connecting…")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Label("New session", systemImage: "plus")
+                    }
                 }
+                .disabled(store.isOpening)
             }
         }
         .sheet(item: $renameTarget) { target in

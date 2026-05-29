@@ -22,6 +22,11 @@ final class SessionsStore {
     var statuses: [SessionId: Status] = [:]
     var lastError: String?
     var browserRefreshToken: Int = 0
+    /// True while a session open (new or resume) is in flight, so the UI can
+    /// disable "New session" and show a connecting indicator. Tracked as a
+    /// count to stay correct if opens overlap.
+    var isOpening: Bool { openingCount > 0 }
+    private var openingCount = 0
 
     let manager: SessionManager
     let adminRunner: HermesAdminRunning?
@@ -76,6 +81,8 @@ final class SessionsStore {
     func openNew(cwd: String? = nil) async {
         let workingDir = cwd ?? defaultCwd
         AppLog.session.info("openNew: begin cwd=\(workingDir, privacy: .public)")
+        openingCount += 1
+        defer { openingCount -= 1 }
         do {
             let state = try await Self.withTimeout(Self.openTimeout) {
                 try await self.manager.openNew(cwd: workingDir)
@@ -135,7 +142,11 @@ final class SessionsStore {
             return
         }
         pendingOpens.insert(summary.id)
-        defer { pendingOpens.remove(summary.id) }
+        openingCount += 1
+        defer {
+            pendingOpens.remove(summary.id)
+            openingCount -= 1
+        }
 
         let workingDir = cwdStore.cwd(for: summary.id) ?? summary.cwd ?? defaultCwd
         do {
