@@ -29,6 +29,13 @@ public final class NIOSSHDashboardConnection: @unchecked Sendable {
     private let hostKeyStore: HostKeyStore
     private let hostKeyConfirmer: HostKeyConfirmer?
     private let group: EventLoopGroup
+    /// Per-request ceiling for the tunneled HTTP round-trip. Without it a
+    /// half-open `direct-tcpip` channel (stalled dashboard, mobile link where
+    /// SSH peer death isn't detected promptly) would never deliver its
+    /// response — the response is signalled by channel close — and the
+    /// long-lived poll loops would hang with no error. `URLSession` (macOS
+    /// path) has an equivalent default; this is the NIO equivalent.
+    private let requestTimeout: TimeAmount
 
     private let lock = NSLock()
     private var connectionChannel: Channel?
@@ -46,12 +53,14 @@ public final class NIOSSHDashboardConnection: @unchecked Sendable {
         credentialProvider: SSHCredentialProvider,
         hostKeyStore: HostKeyStore,
         hostKeyConfirmer: HostKeyConfirmer? = nil,
+        requestTimeout: TimeAmount = .seconds(30),
         group: EventLoopGroup = NIOSSHTransport.sharedGroup
     ) {
         self.profile = profile
         self.credentialProvider = credentialProvider
         self.hostKeyStore = hostKeyStore
         self.hostKeyConfirmer = hostKeyConfirmer
+        self.requestTimeout = requestTimeout
         self.group = group
 
         var capturedStderr: AsyncStream<String>.Continuation?
@@ -145,14 +154,23 @@ public final class NIOSSHDashboardConnection: @unchecked Sendable {
             targetPort: targetPort,
             originatorAddress: try SocketAddress(ipAddress: "127.0.0.1", port: 0)
         )
+        let collector = DirectTCPIPResponseCollector(promise: bytesPromise, allocator: ByteBufferAllocator())
         sshHandler.createChannel(childPromise, channelType: .directTCPIP(direct)) { child, _ in
             child.eventLoop.makeCompletedFuture {
-                try child.pipeline.syncOperations.addHandler(
-                    DirectTCPIPResponseCollector(promise: bytesPromise, allocator: child.allocator)
-                )
+                try child.pipeline.syncOperations.addHandler(collector)
             }
         }
         let child = try await childPromise.futureResult.get()
+
+        // Arm a timeout: the response only arrives on channel close, so a
+        // half-open channel would otherwise hang forever. On expiry mark the
+        // collector timed-out and close the channel — `channelInactive` then
+        // fails the promise (a single completion point, no double-resolve).
+        let timeoutTask = connection.eventLoop.scheduleTask(in: requestTimeout) { [weak child, weak collector] in
+            collector?.markTimedOut()
+            child?.close(promise: nil)
+        }
+        bytesPromise.futureResult.whenComplete { _ in timeoutTask.cancel() }
 
         do {
             let requestBytes = DashboardHTTPWire.serializeRequest(request, url: url, targetPort: targetPort)
@@ -372,10 +390,18 @@ final class DirectTCPIPResponseCollector: ChannelInboundHandler {
 
     private var promise: EventLoopPromise<ByteBuffer>?
     private var accumulator: ByteBuffer
+    private var timedOut = false
 
     init(promise: EventLoopPromise<ByteBuffer>, allocator: ByteBufferAllocator) {
         self.promise = promise
         self.accumulator = allocator.buffer(capacity: 1024)
+    }
+
+    /// Flags that the request deadline fired; `channelInactive` (triggered by
+    /// the timeout's channel close) then fails the promise instead of
+    /// succeeding with a partial/empty buffer.
+    func markTimedOut() {
+        timedOut = true
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -385,7 +411,11 @@ final class DirectTCPIPResponseCollector: ChannelInboundHandler {
     }
 
     func channelInactive(context: ChannelHandlerContext) {
-        promise?.succeed(accumulator)
+        if timedOut {
+            promise?.fail(SSHTransportError.commandTimeout("dashboard HTTP request timed out"))
+        } else {
+            promise?.succeed(accumulator)
+        }
         promise = nil
         context.fireChannelInactive()
     }

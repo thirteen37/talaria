@@ -28,11 +28,15 @@ struct DoctorView: View {
 
     var body: some View {
         Group {
-            if runner == nil {
+            // The prereq/reachability rows are useful whenever there's a
+            // dashboard to probe, even where no admin runner exists (iPad,
+            // where `runner` is always nil). Only show the hard "unavailable"
+            // state when neither a runner nor a dashboard client is present.
+            if runner == nil && client == nil {
                 ContentUnavailableView(
-                    "Admin runner unavailable",
+                    "Doctor unavailable",
                     systemImage: "stethoscope",
-                    description: Text("Open a server with a Hermes binary to run Doctor.")
+                    description: Text("Open a server with a Hermes binary or a reachable dashboard to run diagnostics.")
                 )
             } else {
                 content
@@ -49,48 +53,65 @@ struct DoctorView: View {
         VStack(alignment: .leading, spacing: 0) {
             prereqSection
             Divider()
-            HStack(spacing: 8) {
-                Button {
-                    Task { await runDoctor() }
-                } label: {
-                    Label("Run Doctor", systemImage: "play.fill")
-                }
-                .disabled(isRunning)
-
-                if let report {
-                    Button {
-                        copyBundle(report)
-                    } label: {
-                        Label("Copy bundle", systemImage: "doc.on.doc")
-                    }
-                }
-
-                if isRunning { ProgressView().controlSize(.small) }
-
-                Spacer()
-                if let report {
-                    Text("Exit \(report.exitCode)")
-                        .font(.caption)
-                        .foregroundStyle(report.exitCode == 0 ? .green : .orange)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            Divider()
-
-            if let report {
-                reportView(report)
+            if runner != nil {
+                doctorRunSection
             } else {
+                // No CLI admin runner on this platform (e.g. iPad). The prereq
+                // rows above still apply; the full `hermes doctor` capture
+                // needs a local/SSH Hermes binary.
                 ContentUnavailableView(
-                    "Doctor Has Not Run",
+                    "Run Doctor unavailable here",
                     systemImage: "stethoscope",
-                    description: Text("Tap Run Doctor to capture a diagnostic report.")
+                    description: Text("Running the full diagnostic needs a local or SSH Hermes binary. The prerequisite checks above still apply.")
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .manageBanner(lastError)
+    }
+
+    @ViewBuilder
+    private var doctorRunSection: some View {
+        HStack(spacing: 8) {
+            Button {
+                Task { await runDoctor() }
+            } label: {
+                Label("Run Doctor", systemImage: "play.fill")
+            }
+            .disabled(isRunning)
+
+            if let report {
+                Button {
+                    copyBundle(report)
+                } label: {
+                    Label("Copy bundle", systemImage: "doc.on.doc")
+                }
+            }
+
+            if isRunning { ProgressView().controlSize(.small) }
+
+            Spacer()
+            if let report {
+                Text("Exit \(report.exitCode)")
+                    .font(.caption)
+                    .foregroundStyle(report.exitCode == 0 ? .green : .orange)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        Divider()
+
+        if let report {
+            reportView(report)
+        } else {
+            ContentUnavailableView(
+                "Doctor Has Not Run",
+                systemImage: "stethoscope",
+                description: Text("Tap Run Doctor to capture a diagnostic report.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 
     @ViewBuilder

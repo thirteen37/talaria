@@ -131,4 +131,25 @@ struct NIOSSHDashboardConnectionTests {
         #expect(parsed.status == 200)
         #expect(String(decoding: parsed.body, as: UTF8.self) == "hello")
     }
+
+    /// When the request deadline fires the collector is marked timed-out and
+    /// the channel is closed; `channelInactive` must then fail the promise
+    /// (rather than succeed with a partial buffer) so the poll loop surfaces
+    /// an error instead of hanging.
+    @Test
+    func responseCollectorFailsWhenTimedOut() throws {
+        let loop = EmbeddedEventLoop()
+        let channel = EmbeddedChannel(loop: loop)
+        let promise = loop.makePromise(of: ByteBuffer.self)
+        let collector = DirectTCPIPResponseCollector(promise: promise, allocator: channel.allocator)
+        try channel.pipeline.syncOperations.addHandler(collector)
+
+        collector.markTimedOut()
+        _ = try channel.finish()
+        loop.run()
+
+        #expect(throws: SSHTransportError.self) {
+            _ = try promise.futureResult.wait()
+        }
+    }
 }
