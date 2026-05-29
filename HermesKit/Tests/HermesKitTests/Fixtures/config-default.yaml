@@ -1,0 +1,13 @@
+log_level: info
+model:
+  default: opus
+  fallbacks:
+    - sonnet
+    - haiku
+agent:
+  max_turns: 10
+  timeout: 30
+terminal:
+  shell: /bin/zsh
+network:
+  port: 8080

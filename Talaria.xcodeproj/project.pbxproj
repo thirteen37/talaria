@@ -24,6 +24,7 @@
 		1CB486B12C0C991FB9C567DC /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2D698123A7F03A11D05B3938 /* PrivacyInfo.xcprivacy */; };
 		1D86001F1932D4D1C9682798 /* DoctorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30DFD8DFB5E048EC77638CD /* DoctorView.swift */; };
 		1EAF51239361572ABAC565FF /* UpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3264B2708DBDD18F28CB4686 /* UpdateController.swift */; };
+		1EC093D34C32379196FAD953 /* ProfilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DD849FF61E9E7FE99C2441B /* ProfilesView.swift */; };
 		1EECCDC4AE1FAACFF07BE0AD /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC6EAC9742C997DB3F416F0 /* AppLog.swift */; };
 		1FCAFC926C78EBAE5E0AF0F9 /* ServerWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = D29958F2AEE3B9C542F9987E /* ServerWindow.swift */; };
 		21F863E247E5CFE4FF377689 /* ChatBubble.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7708C07FD33792DB6597C593 /* ChatBubble.swift */; };
@@ -84,6 +85,7 @@
 		D8FEB4067CD793B27680FBF0 /* ProfileEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D65AF64BE04BFB6D54B5775 /* ProfileEditor.swift */; };
 		DEFC27063EB9EC591D93D07F /* HostKeyConfirmationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D9036C1EE4E2376B7311222 /* HostKeyConfirmationCoordinator.swift */; };
 		E372097A60B968931068D2B6 /* Composer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82CA47B4FE65F06FAC7B45D9 /* Composer.swift */; };
+		E47FDDE451E3FE90DAED7A72 /* ProfilesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DD849FF61E9E7FE99C2441B /* ProfilesView.swift */; };
 		E8784210DD69BF0150699653 /* Idiom.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D569271C66F7022F604360B /* Idiom.swift */; };
 		E89DCDB0C9AD12397615716C /* Markdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0726E977A155E433A5401996 /* Markdown.swift */; };
 		E96EB01A117C0954E4F23C37 /* LogConsole.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71FE69AC7DA73A5FB9244123 /* LogConsole.swift */; };
@@ -111,6 +113,7 @@
 		13E7B5FE8F2B768093DA0CC8 /* SessionsSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsSidebar.swift; sourceTree = "<group>"; };
 		16AA89CC111A07C767A69F09 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		1AB3B08C0EC24C29FE4F898B /* TalariaIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = TalariaIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1DD849FF61E9E7FE99C2441B /* ProfilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilesView.swift; sourceTree = "<group>"; };
 		1FAF0B860CFD0B1772AECD9C /* SessionsStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsStore.swift; sourceTree = "<group>"; };
 		2D698123A7F03A11D05B3938 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		323C950380308737D5290B8F /* MockACPTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockACPTransport.swift; sourceTree = "<group>"; };
@@ -236,6 +239,7 @@
 				A30DFD8DFB5E048EC77638CD /* DoctorView.swift */,
 				A12A6961B7D8E937263627BB /* LogsView.swift */,
 				F71BFC25850A646580866C0D /* ManageHarness.swift */,
+				1DD849FF61E9E7FE99C2441B /* ProfilesView.swift */,
 				6E5FD3271C03262E8A67B725 /* SkillsView.swift */,
 				E3EDBB9C99D2FF50800A31BE /* ToolsView.swift */,
 				3BE3C2E6EB6E8620978EE451 /* UpdatesView.swift */,
@@ -482,6 +486,7 @@
 				1964C2ACA58980B5A5A68B49 /* PermissionPrompt.swift in Sources */,
 				9C156DB4C32D6E646A38B6E1 /* ProfileDirectory.swift in Sources */,
 				D8FEB4067CD793B27680FBF0 /* ProfileEditor.swift in Sources */,
+				1EC093D34C32379196FAD953 /* ProfilesView.swift in Sources */,
 				83727994132ADEA7D5549C6C /* ReasoningPanel.swift in Sources */,
 				1C8FCA7408B8AACE039E5CA0 /* RecentServers.swift in Sources */,
 				75D3758DFB71B761C8EB6562 /* ServerCommands.swift in Sources */,
@@ -528,6 +533,7 @@
 				F0223600063B00912A0FB4F9 /* PermissionPrompt.swift in Sources */,
 				728C074511EF21DEF1EE05C3 /* ProfileDirectory.swift in Sources */,
 				4375D2022865DE71BDAB6783 /* ProfileEditor.swift in Sources */,
+				E47FDDE451E3FE90DAED7A72 /* ProfilesView.swift in Sources */,
 				527C4E56058EDAF20A3614F3 /* ReasoningPanel.swift in Sources */,
 				5A98F7AA8413101B4A7636B2 /* RecentServers.swift in Sources */,
 				AB5ABE2F6544726226EB0018 /* ServerCommands.swift in Sources */,
