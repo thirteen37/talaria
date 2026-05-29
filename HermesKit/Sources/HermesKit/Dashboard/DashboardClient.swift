@@ -151,6 +151,11 @@ public struct DashboardClient: Sendable {
     private let token: @Sendable () -> String?
     private let onUnauthorized: @Sendable () async -> Void
     private let http: any DashboardHTTP
+    private static let queryComponentAllowed: CharacterSet = {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return allowed
+    }()
 
     public init(
         baseURL: URL,
@@ -345,7 +350,7 @@ public struct DashboardClient: Sendable {
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
         components.path = path
         if !queryItems.isEmpty {
-            components.queryItems = queryItems
+            components.percentEncodedQuery = Self.percentEncodedQuery(for: queryItems)
         }
         var request = URLRequest(url: components.url!)
         request.httpMethod = method
@@ -359,6 +364,20 @@ public struct DashboardClient: Sendable {
         let (data, response) = try await http.data(for: request)
         try check(response: response, data: data)
         return (data, response)
+    }
+
+    private static func percentEncodedQuery(for items: [URLQueryItem]) -> String {
+        items
+            .map { item in
+                let name = percentEncodeQueryComponent(item.name)
+                guard let value = item.value else { return name }
+                return "\(name)=\(percentEncodeQueryComponent(value))"
+            }
+            .joined(separator: "&")
+    }
+
+    private static func percentEncodeQueryComponent(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: queryComponentAllowed) ?? value
     }
 
     private func check(response: URLResponse, data: Data) throws {

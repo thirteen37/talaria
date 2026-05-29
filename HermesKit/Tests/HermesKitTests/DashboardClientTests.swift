@@ -97,6 +97,24 @@ struct DashboardClientTests {
     }
 
     @Test
+    func searchSessionsPercentEncodesPlusInQuery() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/sessions/search", body: try loadFixtureData("sessions-search.json"))
+        ])
+        let client = DashboardClient(
+            baseURL: URL(string: "http://127.0.0.1:9119")!,
+            token: { "tok" },
+            http: http
+        )
+
+        _ = try await client.searchSessions(query: "C++", limit: 2)
+
+        let request = try #require(http.recordedRequests.first)
+        let absoluteString = try #require(request.url?.absoluteString)
+        #expect(absoluteString.contains("q=C%2B%2B"))
+    }
+
+    @Test
     func retriesOnceAfterUnauthorizedAndCallsRefresh() async throws {
         // First request: 401. Second request: 200 with fixture body. The
         // client must invoke `onUnauthorized` between the two so a caller-

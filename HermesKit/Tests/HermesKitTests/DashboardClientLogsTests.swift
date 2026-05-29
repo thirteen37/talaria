@@ -28,17 +28,17 @@ struct DashboardClientLogsTests {
             file: "agent",
             lines: 200,
             level: "WARNING",
-            component: "scheduler",
-            search: "ECONNREFUSED"
+            component: "scheduler;worker",
+            search: "C++"
         )
 
         let request = try #require(http.recordedRequests.first)
-        let query = try #require(request.url?.query)
+        let query = try #require(request.url?.absoluteString)
         #expect(query.contains("file=agent"))
         #expect(query.contains("lines=200"))
         #expect(query.contains("level=WARNING"))
-        #expect(query.contains("component=scheduler"))
-        #expect(query.contains("search=ECONNREFUSED"))
+        #expect(query.contains("component=scheduler%3Bworker"))
+        #expect(query.contains("search=C%2B%2B"))
     }
 
     private func makeClient(http: StubHTTP) -> DashboardClient {
