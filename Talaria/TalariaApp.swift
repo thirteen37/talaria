@@ -13,6 +13,7 @@ struct TalariaApp: App {
         WindowGroup(for: UUID.self) { $profileId in
             ServerWindow(profileId: profileId)
                 .environment(directory)
+                .environment(recents)
                 .task {
                     await directory.reload()
                     recents.record(profileId)
