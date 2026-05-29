@@ -81,6 +81,86 @@ struct DashboardUpdatesServiceTests {
         #expect(emitted == ["new-1\n", "new-2\n"])
     }
 
+    @Test
+    func applyWaitsForRunningBeforeTreatingNotRunningAsDone() async throws {
+        // The dashboard hasn't flipped `running` to true yet when the first
+        // poll lands after the trigger — it still reports the *previous* run's
+        // terminal state (running:false, exit 0, stale buffer). The stream must
+        // NOT finish here; it should keep polling until the real run starts and
+        // then completes, tailing only the new run's output.
+        let http = StubHTTP(responses: [
+            // Pre-start snapshot: a prior run's terminal state.
+            .init(path: "/api/actions/hermes-update/status",
+                  body: Data(#"{"name":"hermes-update","running":false,"exit_code":0,"pid":1,"lines":["old\n"]}"#.utf8)),
+            // POST to start.
+            .init(path: "/api/hermes/update", body: Data("{}".utf8)),
+            // First poll: run hasn't started yet — still the stale terminal state.
+            .init(path: "/api/actions/hermes-update/status",
+                  body: Data(#"{"name":"hermes-update","running":false,"exit_code":0,"pid":1,"lines":["old\n"]}"#.utf8)),
+            // Second poll: the run is now active and producing output.
+            .init(path: "/api/actions/hermes-update/status",
+                  body: Data(#"{"name":"hermes-update","running":true,"exit_code":null,"pid":2,"lines":["old\n","step1\n"]}"#.utf8)),
+            // Third poll: real completion.
+            .init(path: "/api/actions/hermes-update/status",
+                  body: Data(#"{"name":"hermes-update","running":false,"exit_code":0,"pid":2,"lines":["old\n","step1\n","done\n"]}"#.utf8)),
+        ])
+        let service = makeService(http: http, pollInterval: 0.001)
+
+        var emitted: [String] = []
+        var exitCode: Int32? = nil
+        for try await event in service.apply() {
+            switch event {
+            case .logLines(let lines): emitted.append(contentsOf: lines)
+            case .finished(let code): exitCode = code
+            }
+        }
+
+        // Only the new run's lines — proves we didn't finish on the stale poll.
+        #expect(emitted == ["step1\n", "done\n"])
+        #expect(exitCode == 0)
+    }
+
+    @Test
+    func applyFinishesAfterStartupGraceWhenRunNeverStarts() async throws {
+        // The run never flips `running` true (instant no-op, or the dashboard
+        // never starts it). The stream must not hang: after the startup grace
+        // it finishes rather than polling forever.
+        let http = StubHTTP(responses: [
+            .init(path: "/api/actions/hermes-update/status",
+                  body: Data(#"{"name":"hermes-update","running":false,"exit_code":0,"pid":null,"lines":[]}"#.utf8)),
+            .init(path: "/api/hermes/update", body: Data("{}".utf8)),
+            // Not-running polls until the 0.003s grace at 0.001s interval
+            // expires (~3 polls). One extra is provided so a float-rounding
+            // off-by-one can't exhaust the stub before the loop finishes;
+            // StubHTTP doesn't require every response to be consumed.
+            .init(path: "/api/actions/hermes-update/status",
+                  body: Data(#"{"name":"hermes-update","running":false,"exit_code":0,"pid":null,"lines":[]}"#.utf8)),
+            .init(path: "/api/actions/hermes-update/status",
+                  body: Data(#"{"name":"hermes-update","running":false,"exit_code":0,"pid":null,"lines":[]}"#.utf8)),
+            .init(path: "/api/actions/hermes-update/status",
+                  body: Data(#"{"name":"hermes-update","running":false,"exit_code":0,"pid":null,"lines":[]}"#.utf8)),
+            .init(path: "/api/actions/hermes-update/status",
+                  body: Data(#"{"name":"hermes-update","running":false,"exit_code":0,"pid":null,"lines":[]}"#.utf8)),
+        ])
+        let service = DashboardUpdatesService(
+            client: DashboardClient(baseURL: URL(string: "http://127.0.0.1:9119")!, token: { "tok" }, http: http),
+            pollInterval: 0.001,
+            startupGrace: 0.003
+        )
+
+        var emitted: [String] = []
+        var finished = false
+        for try await event in service.apply() {
+            switch event {
+            case .logLines(let lines): emitted.append(contentsOf: lines)
+            case .finished: finished = true
+            }
+        }
+
+        #expect(emitted.isEmpty)
+        #expect(finished)
+    }
+
     private func makeService(http: StubHTTP, pollInterval: TimeInterval) -> DashboardUpdatesService {
         let client = DashboardClient(
             baseURL: URL(string: "http://127.0.0.1:9119")!,
