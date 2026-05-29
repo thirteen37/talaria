@@ -265,7 +265,7 @@ struct ProfileEditor: View {
                 canSave: canSave(draft),
                 isPending: state.pendingDraft?.id == draft.id,
                 onProbe: { runProbe() },
-                onSave: { passwordInput in save(passwordInput: passwordInput) },
+                onSave: { password, changed in save(password: password, passwordChanged: changed) },
                 onDiscard: { discardPending() },
                 onPickIdentity: {
                     #if os(macOS)
@@ -363,31 +363,44 @@ struct ProfileEditor: View {
     /// Single source of truth for whether the current draft can be saved,
     /// shared by the Save button's disabled state and `save()`.
     ///
-    /// Password-auth profiles need a password available — either freshly typed
-    /// (`passwordInput`) or already stored in the Keychain
+    /// Password-auth profiles need a password available — either present in the
+    /// field (`hasPasswordInput`) or already stored in the Keychain
     /// (`passwordKeychainReference`). They're saveable when content diverged
-    /// (`baseCanSave`) or a new password was entered (covers rotating just the
-    /// password on an otherwise-unchanged profile, which doesn't touch the
-    /// `ServerProfile`). Non-password drafts fall through to `baseCanSave`.
-    static func isSaveable(_ draft: ServerProfile, passwordInput: String, baseCanSave: Bool) -> Bool {
+    /// (`baseCanSave`) or the password was edited (`passwordChanged` — covers
+    /// rotating just the password on an otherwise-unchanged profile, which
+    /// doesn't touch the `ServerProfile`). `passwordChanged` is a dirty check
+    /// against the pre-filled value, not mere non-emptiness, so an unchanged
+    /// saved profile correctly disables Save. Non-password drafts fall through
+    /// to `baseCanSave`.
+    static func isSaveable(
+        _ draft: ServerProfile,
+        hasPasswordInput: Bool,
+        passwordChanged: Bool,
+        baseCanSave: Bool
+    ) -> Bool {
         if draft.kind == .ssh, draft.authMethod == .password {
-            let hasPassword = !passwordInput.isEmpty || draft.passwordKeychainReference != nil
-            return hasPassword && (baseCanSave || !passwordInput.isEmpty)
+            let hasPassword = hasPasswordInput || draft.passwordKeychainReference != nil
+            return hasPassword && (baseCanSave || passwordChanged)
         }
         return baseCanSave
     }
 
-    private func save(passwordInput: String = "") {
+    private func save(password: String = "", passwordChanged: Bool = false) {
         guard var draft = state.draft,
-              Self.isSaveable(draft, passwordInput: passwordInput, baseCanSave: canSave(draft)) else { return }
+              Self.isSaveable(
+                draft,
+                hasPasswordInput: !password.isEmpty,
+                passwordChanged: passwordChanged,
+                baseCanSave: canSave(draft)
+              ) else { return }
         #if os(iOS)
-        // Persist the typed password into the Keychain when the user opted
-        // into password auth and entered a value. The draft only ever holds
-        // a reference UUID; the password itself stays in the OS Keychain.
-        if draft.authMethod == .password, !passwordInput.isEmpty {
+        // Persist the typed password into the Keychain only when it actually
+        // changed. The draft holds just a reference UUID; the password itself
+        // stays in the OS Keychain.
+        if draft.authMethod == .password, passwordChanged, !password.isEmpty {
             let reference = draft.passwordKeychainReference ?? UUID().uuidString
             do {
-                try PasswordKeychain.set(reference: reference, password: passwordInput)
+                try PasswordKeychain.set(reference: reference, password: password)
                 draft.passwordKeychainReference = reference
             } catch {
                 directory.lastError = "Couldn't save password to Keychain: \(error.localizedDescription)"
@@ -496,8 +509,9 @@ private struct ProfileDetailView: View {
     let canSave: Bool
     let isPending: Bool
     let onProbe: () -> Void
-    /// Save callback receives the iOS-only typed password (empty on macOS).
-    let onSave: (String) -> Void
+    /// Save callback receives the iOS-only typed password (empty on macOS) and
+    /// whether it differs from the pre-filled stored value.
+    let onSave: (_ password: String, _ passwordChanged: Bool) -> Void
     let onDiscard: () -> Void
     let onPickIdentity: () -> Void
 
@@ -507,14 +521,32 @@ private struct ProfileDetailView: View {
     /// the SecureField shows the saved password as masked dots (matching the
     /// platform convention), and saving keeps it unless the user edits it.
     @State private var passwordInput: String = ""
+    /// The value `passwordInput` was pre-filled with, so editing-vs-unchanged
+    /// can be distinguished (the pre-fill makes "non-empty" useless for that).
+    @State private var loadedPassword: String = ""
+
+    /// True when the user actually changed the password field away from its
+    /// stored/pre-filled value.
+    private var passwordChanged: Bool { passwordInput != loadedPassword }
+
+    private var canSaveNow: Bool {
+        ProfileEditor.isSaveable(
+            draft,
+            hasPasswordInput: !passwordInput.isEmpty,
+            passwordChanged: passwordChanged,
+            baseCanSave: canSave
+        )
+    }
 
     /// Loads any saved password into the field so it renders masked, rather
     /// than appearing empty when a password is in fact stored.
     private func loadStoredPassword() {
         #if os(iOS)
         guard draft.authMethod == .password, passwordInput.isEmpty,
-              let reference = draft.passwordKeychainReference else { return }
-        passwordInput = PasswordKeychain.get(reference: reference) ?? ""
+              let reference = draft.passwordKeychainReference,
+              let stored = PasswordKeychain.get(reference: reference) else { return }
+        passwordInput = stored
+        loadedPassword = stored
         #endif
     }
 
@@ -541,8 +573,8 @@ private struct ProfileDetailView: View {
         .onAppear(perform: loadStoredPassword)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Save") { onSave(passwordInput) }
-                    .disabled(!ProfileEditor.isSaveable(draft, passwordInput: passwordInput, baseCanSave: canSave))
+                Button("Save") { onSave(passwordInput, passwordChanged) }
+                    .disabled(!canSaveNow)
                     .fontWeight(.semibold)
             }
         }
@@ -570,7 +602,7 @@ private struct ProfileDetailView: View {
                     }
                     Spacer()
                     Button("Probe", action: onProbe)
-                    Button("Save") { onSave(passwordInput) }
+                    Button("Save") { onSave(passwordInput, passwordChanged) }
                         .keyboardShortcut(.defaultAction)
                         .disabled(!canSave)
                 }
