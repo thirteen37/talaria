@@ -13,6 +13,11 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
     private let readQueue = DispatchQueue(label: "com.talaria.HermesKit.LocalProcessTransport.read")
     private let writeQueue = DispatchQueue(label: "com.talaria.HermesKit.LocalProcessTransport.write")
     private let lock = NSLock()
+    // Serializes stdout FD reads with stream completion. The readability
+    // handler and the termination/EOF drain are two independent readers of the
+    // same file descriptor; without this, bytes pulled by one reader could be
+    // dropped when the other finished the stream first.
+    private let inboundLock = NSLock()
     private var started = false
     private var closed = false
     private var inboundFinished = false
@@ -56,11 +61,20 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
             // source rearms; deferring the read to another queue leaves the
             // FD buffered but the GCD source un-rearmed, and the handler
             // never fires again.
-            let data = handle.availableData
             guard let transport = self else {
                 return
             }
+            // Hold `inboundLock` across the read AND the yield. The drain in
+            // `finishAfterProcessTerminationOnReadQueue` reads the same FD under
+            // the same lock, so the two readers are mutually exclusive: any
+            // bytes pulled out here are yielded before a concurrent finish can
+            // empty the FD and terminate the stream. Previously the yield was a
+            // separate readQueue task that could be reordered after — and then
+            // dropped by — the finish, producing an empty inbound stream.
+            transport.inboundLock.lock()
+            let data = handle.availableData
             if data.isEmpty {
+                transport.inboundLock.unlock()
                 transport.readQueue.async { [weak transport] in
                     guard let transport, !transport.inboundFinished else {
                         return
@@ -73,12 +87,10 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
                     }
                 }
             } else {
-                transport.readQueue.async { [weak transport] in
-                    guard let transport, !transport.inboundFinished else {
-                        return
-                    }
+                if !transport.inboundFinished {
                     transport.inboundContinuation.yield(data)
                 }
+                transport.inboundLock.unlock()
             }
         }
 
@@ -111,7 +123,7 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
             started = false
             closed = true
             readQueue.async { [weak self] in
-                self?.finishInboundOnReadQueue()
+                self?.finishInbound()
             }
             throw TransportError.processDidNotStart(error.localizedDescription)
         }
@@ -164,7 +176,7 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
             await waitUntilExit()
         } else {
             readQueue.async { [weak self] in
-                self?.finishInboundOnReadQueue()
+                self?.finishInbound()
             }
         }
     }
@@ -200,7 +212,9 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
         stderrRing.snapshot()
     }
 
-    private func finishInboundOnReadQueue() {
+    private func finishInbound() {
+        inboundLock.lock()
+        defer { inboundLock.unlock() }
         guard !inboundFinished else {
             return
         }
@@ -209,11 +223,21 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
     }
 
     private func finishAfterProcessTerminationOnReadQueue() {
+        // The whole drain-then-finish runs under `inboundLock` so it is
+        // mutually exclusive with the readability handler's read+yield. This is
+        // what guarantees a chunk is never read out of the FD and then dropped
+        // by a finish that raced ahead of its yield.
+        inboundLock.lock()
+        defer { inboundLock.unlock() }
+        guard !inboundFinished else {
+            return
+        }
+
         outputPipe.fileHandleForReading.readabilityHandler = nil
         stderrPipe.fileHandleForReading.readabilityHandler = nil
 
         let trailingOutput = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        if !trailingOutput.isEmpty, !inboundFinished {
+        if !trailingOutput.isEmpty {
             inboundContinuation.yield(trailingOutput)
         }
 
@@ -222,7 +246,8 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
             stderrRing.append(trailingStderr)
         }
 
-        finishInboundOnReadQueue()
+        inboundFinished = true
+        inboundContinuation.finish()
     }
 
     private func finishOrTerminateAfterStdoutEOF() {
@@ -232,7 +257,7 @@ public final class LocalProcessTransport: Transport, @unchecked Sendable {
             }
 
             if self.process.isRunning {
-                self.finishInboundOnReadQueue()
+                self.finishInbound()
                 self.process.terminate()
             } else {
                 self.finishAfterProcessTerminationOnReadQueue()

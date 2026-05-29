@@ -38,8 +38,10 @@ struct SessionsSidebar: View {
                         profiles: profiles,
                         onSelect: onSwitchProfile
                     )
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     NotificationBell(center: notifications, onOpen: onOpenNotifications)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Section("Chat") {
@@ -53,11 +55,17 @@ struct SessionsSidebar: View {
                     if store.isOpening {
                         HStack(spacing: 8) {
                             ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 16, height: 16)
                             Text("Connecting…")
                                 .foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     } else {
                         Label("New session", systemImage: "plus")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                     }
                 }
                 .disabled(store.isOpening)
@@ -95,7 +103,11 @@ struct SessionsSidebar: View {
                         // Indent under the title (dot width + HStack spacing).
                         .padding(.leading, 17)
                 }
-                Spacer()
+                // Let the title/cwd column claim all available width so the
+                // title truncates only at the row's edge. A bare Spacer() here
+                // would split the flexible width with the Text and truncate it
+                // prematurely.
+                .frame(maxWidth: .infinity, alignment: .leading)
                 closeButton(for: session)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
