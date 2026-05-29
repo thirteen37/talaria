@@ -1,5 +1,0 @@
-name           enabled  path
--------------  -------  ------------------------------
-commit-push    yes      ~/.hermes/skills/commit-push
-cr             no       ~/.hermes/skills/cr
-review         yes      ~/.hermes/skills/review

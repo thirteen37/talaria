@@ -1,5 +1,0 @@
-name    platform   enabled
-------  ---------  -------
-Bash    posix      yes
-Read    universal  yes
-Edit    universal  no

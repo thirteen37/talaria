@@ -82,10 +82,12 @@ public enum HermesTools {
             let enabled = bulletChar == "\u{2713}"
             let remainder = String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
             // Split on runs of 2+ spaces so the trailing "🔍 Web Search &
-            // Scraping" stays a single field — `HermesCron.splitFields` does
-            // exactly this rather than the whitespace-greedy split that the
-            // existing `HermesSkills.splitFields` performs.
-            var fields = HermesCron.splitFields(remainder)
+            // Scraping" stays a single field — the whitespace-greedy variant
+            // in `CLIFieldParsing.splitFields` would shred the emoji + label.
+            var fields = remainder
+                .split(separator: /\s{2,}/)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
             // Drop the redundant "enabled"/"disabled" word. Hermes always
             // emits it after the bullet, so without this the name column
             // would consistently read "enabled" for every row.
@@ -109,22 +111,22 @@ public enum HermesTools {
             }
             let enabled = mark.trimmingCharacters(in: .whitespaces).lowercased() == "x"
             let remainder = String(line[scanner.currentIndex...]).trimmingCharacters(in: .whitespaces)
-            let parts = HermesSkills.splitFields(remainder)
+            let parts = CLIFieldParsing.splitFields(remainder)
             guard let name = parts.first else { return nil }
             let platform = parts.count >= 2 ? parts[1...].joined(separator: " ") : nil
             return ToolRow(name: name, platform: platform, enabled: enabled)
         }
-        let parts = HermesSkills.splitFields(line)
+        let parts = CLIFieldParsing.splitFields(line)
         guard let name = parts.first else { return nil }
         if parts.count == 1 {
             return ToolRow(name: name, platform: nil, enabled: true)
         }
         // Try: name <enabled>
-        if parts.count == 2, let flag = HermesSkills.parseBool(parts[1]) {
+        if parts.count == 2, let flag = CLIFieldParsing.parseBool(parts[1]) {
             return ToolRow(name: name, platform: nil, enabled: flag)
         }
         // Try: name platform enabled
-        if parts.count >= 3, let flag = HermesSkills.parseBool(parts[parts.count - 1]) {
+        if parts.count >= 3, let flag = CLIFieldParsing.parseBool(parts[parts.count - 1]) {
             let platform = parts[1..<(parts.count - 1)].joined(separator: " ")
             return ToolRow(name: name, platform: platform, enabled: flag)
         }

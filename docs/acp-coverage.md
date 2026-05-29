@@ -57,3 +57,30 @@ Sprint 6 added `skillsToggle` and `toolsEnablePerPlatform` to `HermesCapability`
 | `updateCheck` | `0.12.0` | `v2026.4.30` |
 
 Sprint 6 also wired `capabilityBanner(.<cap>, feature:, version:)` (defined in `Talaria/Manage/ManageHarness.swift`) into `CronView`, `ToolsView`, and `UpdatesView`. Each surface checks `CapabilityTable.has(_:in:)` against the profile's probed Hermes version and renders an orange warning banner when the pin isn't met; hard runtime errors still take precedence as red banners. `SkillsView` is intentionally skipped because Talaria 1.0 renders skills read-only.
+
+## Sprint 7 — Mandatory dashboard
+
+Sprint 7 makes the Hermes dashboard HTTP API (`hermes dashboard`, FastAPI/Uvicorn on `127.0.0.1:<ephemeral>`) a hard prerequisite for every non-chat surface. The SQLite snapshot path, the Rich-output scrapers for Skills / Cron / Logs / Updates, and the per-route capability flags they gated were removed:
+
+- Deleted `HermesDB.swift`, `RemoteSnapshot.swift`, `RemoteSnapshotTransfer.swift`, `HermesSkills.swift`, `HermesCron.swift`, `HermesLogs.swift`, `HermesUpdates.swift` (and their tests / fixtures).
+- Collapsed `cronCRUD` / `updateCheck` / `skillsToggle` and the five per-route `dashboard*API` flags into a single `requiresDashboard` capability pinned at Hermes 0.14.0.
+- Added `DashboardClient` (URLSession, retry-on-401), `DashboardSession` (token cache scraped from `GET /`), `DashboardSpawnSpec` (local + remote-via-ssh-`-L`), `DashboardSupervisor` (refcounted spawn + reachability poll + missing-`[web]` detection), `SystemDashboardProcessLauncher`, `DashboardPortAllocator`, and `DashboardUpdatesService`.
+- `DashboardCoordinator` in `Talaria/Windows/ServerWindow.swift` owns one supervisor per profile, shared across windows.
+- `DoctorView` shows two prereq probes — `Hermes ≥ 0.14.0` and "Dashboard reachable" — alongside the CLI-driven `hermes doctor` report.
+
+Dashboard coverage today (Hermes 0.14.0 / release 2026.5.16):
+
+| Surface | Dashboard route(s) |
+| --- | --- |
+| Sessions browse / search | `GET /api/sessions`, `GET /api/sessions/search` |
+| Sessions read / delete | `GET /api/sessions/{id}`, `DELETE /api/sessions/{id}` |
+| Sessions rename | _no route — still on `hermes sessions rename` CLI_ |
+| Updates | `GET /api/status` + `POST /api/hermes/update` + `GET /api/actions/hermes-update/status` |
+| Skills | `GET /api/skills`, `PUT /api/skills/toggle` |
+| Cron | full CRUD on `/api/cron/jobs` + `/pause` + `/resume` + `/trigger` |
+| Logs | polled `GET /api/logs` (`file`, `lines`, `level`, `component`, `search` query params) |
+| Tools enable/disable | _no toggle route — still on `hermes tools enable/disable` CLI_ |
+| Doctor | _no `/api/doctor` — still on `hermes doctor` CLI_ |
+| Chat | _stays on ACP/JSON-RPC, not the dashboard_ |
+
+iOS dashboard mode is deferred until NIO-SSH port forwarding lands; today the iOS surface only exercises ACP chat.

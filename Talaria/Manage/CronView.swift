@@ -3,39 +3,38 @@ import SwiftUI
 
 struct CronDraft: Equatable {
     var schedule: String = ""
-    var command: String = ""
+    var prompt: String = ""
+    var name: String = ""
 }
 
 @MainActor
 @Observable
 final class CronHarness {
-    var jobs: [CronJob] = []
+    var jobs: [DashboardCronJob] = []
     var lastError: String?
     var isLoading: Bool = false
-    /// Set to `true` once any call surfaces `commandUnavailable`, so the view
-    /// can banner instead of looking permanently broken.
-    var cronUnavailable: Bool = false
-    var selectionID: CronJob.ID?
-    /// Non-nil while the user is composing a new job; the editor pane binds
-    /// to this and only calls `hermes cron add` on explicit Save.
+    var selectionID: DashboardCronJob.ID?
     var draft: CronDraft?
 
-    let runner: HermesAdminRunning?
+    private let client: DashboardClient
 
-    init(runner: HermesAdminRunning?) {
-        self.runner = runner
+    init(client: DashboardClient) {
+        self.client = client
+    }
+
+    var selectedJob: DashboardCronJob? {
+        guard let id = selectionID else { return nil }
+        return jobs.first(where: { $0.id == id })
     }
 
     func refresh() async {
-        guard let runner else { jobs = []; return }
         isLoading = true
         defer { isLoading = false }
         do {
-            jobs = try await HermesCron.list(runner: runner)
-            cronUnavailable = false
+            jobs = try await client.listCronJobs()
             lastError = nil
         } catch {
-            handle(error)
+            lastError = error.localizedDescription
         }
     }
 
@@ -44,90 +43,90 @@ final class CronHarness {
         selectionID = nil
     }
 
-    func cancelAdd() {
-        draft = nil
-    }
+    func cancelAdd() { draft = nil }
 
-    func commitAdd(schedule: String, command: String) async {
-        guard let runner else { return }
+    func commitAdd(prompt: String, schedule: String, name: String) async {
         do {
-            try await HermesCron.add(runner: runner, schedule: schedule, command: command)
+            _ = try await client.createCronJob(
+                prompt: prompt,
+                schedule: schedule,
+                name: name.isEmpty ? nil : name
+            )
             draft = nil
             await refresh()
         } catch {
-            handle(error)
+            lastError = error.localizedDescription
         }
     }
 
-    func update(_ job: CronJob, schedule: String, command: String) async {
-        guard let runner else { return }
+    /// Patches a cron job. Pass `schedule == nil` to leave the existing
+    /// schedule alone — interval jobs use it because the editor only
+    /// supports cron expressions today, and sending the human-readable
+    /// "every 60m" display string back would either be rejected by the
+    /// dashboard or accepted and then mis-rendered.
+    func updateJob(_ job: DashboardCronJob, prompt: String, schedule: String?) async {
         do {
-            try await HermesCron.update(runner: runner, id: job.id, schedule: schedule, command: command)
+            var updates: [String: String] = ["prompt": prompt]
+            if let schedule {
+                updates["schedule"] = schedule
+            }
+            try await client.updateCronJob(id: job.id, updates: updates)
             await refresh()
-        } catch { handle(error) }
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
-    func delete(_ job: CronJob) async {
-        guard let runner else { return }
+    func delete(_ job: DashboardCronJob) async {
         do {
-            try await HermesCron.delete(runner: runner, id: job.id)
+            try await client.deleteCronJob(id: job.id)
             await refresh()
-        } catch { handle(error) }
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
-    func setEnabled(_ job: CronJob, enabled: Bool) async {
-        guard let runner else { return }
+    func setEnabled(_ job: DashboardCronJob, enabled: Bool) async {
         do {
             if enabled {
-                try await HermesCron.resume(runner: runner, id: job.id)
+                try await client.resumeCronJob(id: job.id)
             } else {
-                try await HermesCron.pause(runner: runner, id: job.id)
+                try await client.pauseCronJob(id: job.id)
             }
             await refresh()
-        } catch { handle(error) }
-    }
-
-    func runNow(_ job: CronJob) async {
-        guard let runner else { return }
-        do {
-            try await HermesCron.runNow(runner: runner, id: job.id)
-            await refresh()
-        } catch { handle(error) }
-    }
-
-    /// Single funnel so `commandUnavailable` consistently flips the banner
-    /// regardless of which mutator hit it — a user on an older Hermes who
-    /// first tries pause/resume should see the same friendly banner the list
-    /// path would surface.
-    private func handle(_ error: Error) {
-        if let cronError = error as? HermesCronError, case .commandUnavailable = cronError {
-            cronUnavailable = true
-            lastError = nil
-            jobs = []
-            return
+        } catch {
+            lastError = error.localizedDescription
         }
-        lastError = error.localizedDescription
+    }
+
+    func runNow(_ job: DashboardCronJob) async {
+        do {
+            try await client.triggerCronJob(id: job.id)
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 }
 
 struct CronView: View {
-    let runner: HermesAdminRunning?
+    let client: DashboardClient?
     let hermesVersion: HermesVersion?
 
     @State private var harness: CronHarness?
 
-    init(runner: HermesAdminRunning?, hermesVersion: HermesVersion? = nil) {
-        self.runner = runner
+    init(client: DashboardClient?, hermesVersion: HermesVersion? = nil) {
+        self.client = client
         self.hermesVersion = hermesVersion
     }
 
     var body: some View {
         Group {
-            if runner == nil {
+            if client == nil {
                 ContentUnavailableView(
-                    "Admin runner unavailable",
+                    "Dashboard not ready",
                     systemImage: "calendar.badge.clock",
-                    description: Text("Open a profile with a Hermes binary to manage cron jobs.")
+                    description: Text("Waiting for the Hermes dashboard to come online.")
                 )
             } else if let harness {
                 content(harness: harness)
@@ -137,9 +136,9 @@ struct CronView: View {
         }
         .navigationTitle("Cron")
         .task {
-            if runner == nil { harness = nil; return }
+            guard let client else { harness = nil; return }
             if harness != nil { return }
-            let h = CronHarness(runner: runner)
+            let h = CronHarness(client: client)
             harness = h
             await h.refresh()
         }
@@ -155,40 +154,45 @@ struct CronView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar { toolbar(harness: harness) }
-        .manageBanner(bannerMessage(harness: harness), severity: bannerSeverity(harness: harness))
-    }
-
-    /// Banner precedence:
-    /// 1. Hard runtime error from a failed admin call (red).
-    /// 2. Reactive "command unavailable" caught at call time (orange).
-    /// 3. Pre-emptive capability gate from the probed Hermes version (orange).
-    private func bannerMessage(harness: CronHarness) -> String? {
-        if let error = harness.lastError { return error }
-        if harness.cronUnavailable { return "Cron CRUD unavailable in this Hermes version." }
-        return capabilityBanner(.cronCRUD, feature: "Cron CRUD", version: hermesVersion)
-    }
-
-    private func bannerSeverity(harness: CronHarness) -> ManageBanner.Severity {
-        harness.lastError != nil ? .error : .warning
+        .manageBanner(
+            harness.lastError ?? capabilityBanner(
+                .requiresDashboard,
+                feature: "Cron via Hermes dashboard",
+                version: hermesVersion
+            ),
+            severity: harness.lastError != nil ? .error : .warning
+        )
     }
 
     @ViewBuilder
     private func jobsTable(harness: CronHarness) -> some View {
-        Table(harness.jobs, selection: Binding(get: { harness.selectionID }, set: { harness.selectionID = $0 })) {
-            TableColumn("ID") { Text($0.id).font(.system(.body, design: .monospaced)) }
-            TableColumn("Schedule") { Text($0.schedule).font(.system(.body, design: .monospaced)) }
-            TableColumn("Command") { Text($0.command).lineLimit(1).truncationMode(.tail) }
+        Table(harness.jobs, selection: Binding(
+            get: { harness.selectionID },
+            set: { harness.selectionID = $0 }
+        )) {
+            TableColumn("Name") { job in
+                Text(job.name ?? job.id)
+            }
+            TableColumn("Schedule") { job in
+                Text(scheduleDisplay(job.schedule))
+                    .font(.system(.body, design: .monospaced))
+            }
+            TableColumn("Prompt") { job in
+                Text(job.prompt).lineLimit(1).truncationMode(.tail)
+            }
             TableColumn("Enabled") { job in
                 Toggle("", isOn: Binding(
                     get: { job.enabled },
                     set: { newValue in Task { await harness.setEnabled(job, enabled: newValue) } }
                 ))
                 .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
             }
             .width(80)
         }
         .overlay {
-            if harness.jobs.isEmpty, !harness.isLoading, !harness.cronUnavailable {
+            if harness.jobs.isEmpty, !harness.isLoading {
                 ContentUnavailableView("No cron jobs", systemImage: "calendar")
             }
         }
@@ -206,16 +210,16 @@ struct CronView: View {
             } label: {
                 Label("Add", systemImage: "plus")
             }
-            .disabled(harness.cronUnavailable || harness.runner == nil || harness.draft != nil)
+            .disabled(harness.draft != nil)
             Button {
-                guard let id = harness.selectionID, let job = harness.jobs.first(where: { $0.id == id }) else { return }
+                guard let job = harness.selectedJob else { return }
                 Task { await harness.delete(job) }
             } label: {
                 Label("Delete", systemImage: "trash")
             }
             .disabled(harness.selectionID == nil)
             Button {
-                guard let id = harness.selectionID, let job = harness.jobs.first(where: { $0.id == id }) else { return }
+                guard let job = harness.selectedJob else { return }
                 Task { await harness.runNow(job) }
             } label: {
                 Label("Run Now", systemImage: "play")
@@ -232,16 +236,16 @@ struct CronView: View {
                     get: { harness.draft ?? CronDraft() },
                     set: { harness.draft = $0 }
                 ),
-                onSave: { schedule, command in
-                    Task { await harness.commitAdd(schedule: schedule, command: command) }
+                onSave: { prompt, schedule, name in
+                    Task { await harness.commitAdd(prompt: prompt, schedule: schedule, name: name) }
                 },
                 onCancel: { harness.cancelAdd() }
             )
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        } else if let id = harness.selectionID, let job = harness.jobs.first(where: { $0.id == id }) {
-            JobEditor(job: job) { schedule, command in
-                Task { await harness.update(job, schedule: schedule, command: command) }
+        } else if let job = harness.selectedJob {
+            JobEditor(job: job) { prompt, schedule in
+                Task { await harness.updateJob(job, prompt: prompt, schedule: schedule) }
             }
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -251,30 +255,35 @@ struct CronView: View {
         }
     }
 
+    private func scheduleDisplay(_ schedule: DashboardCronSchedule) -> String {
+        schedule.display ?? schedule.expr ?? (schedule.minutes.map { "every \($0)m" } ?? schedule.kind)
+    }
 }
 
 private struct DraftJobEditor: View {
     @Binding var draft: CronDraft
-    let onSave: (String, String) -> Void
+    let onSave: (String, String, String) -> Void
     let onCancel: () -> Void
 
     var body: some View {
         Form {
             Section("New cron job") {
+                TextField("Name (optional)", text: $draft.name)
                 TextField("Schedule (e.g. */5 * * * *)", text: $draft.schedule)
                     .font(.system(.body, design: .monospaced))
-                TextField("Command", text: $draft.command)
+                TextField("Prompt", text: $draft.prompt, axis: .vertical)
+                    .lineLimit(3...8)
             }
             HStack {
                 Button("Cancel", role: .cancel) { onCancel() }
                 Spacer()
                 Button("Add") {
-                    onSave(draft.schedule, draft.command)
+                    onSave(draft.prompt, draft.schedule, draft.name)
                 }
                 .keyboardShortcut(.return, modifiers: [.command])
                 .disabled(
                     draft.schedule.trimmingCharacters(in: .whitespaces).isEmpty
-                    || draft.command.trimmingCharacters(in: .whitespaces).isEmpty
+                    || draft.prompt.trimmingCharacters(in: .whitespaces).isEmpty
                 )
             }
         }
@@ -282,17 +291,22 @@ private struct DraftJobEditor: View {
 }
 
 private struct JobEditor: View {
-    let job: CronJob
-    let onSave: (String, String) -> Void
+    let job: DashboardCronJob
+    /// Schedule arg is nil when the job's underlying schedule isn't editable
+    /// (today: anything that isn't a cron expression — interval jobs in
+    /// particular). The harness leaves the schedule untouched in that case.
+    let onSave: (String, String?) -> Void
 
-    @State private var schedule: String
-    @State private var command: String
+    @State private var prompt: String
+    @State private var cronExpression: String
 
-    init(job: CronJob, onSave: @escaping (String, String) -> Void) {
+    private var isCronSchedule: Bool { job.schedule.kind == "cron" }
+
+    init(job: DashboardCronJob, onSave: @escaping (String, String?) -> Void) {
         self.job = job
         self.onSave = onSave
-        self._schedule = State(initialValue: job.schedule)
-        self._command = State(initialValue: job.command)
+        self._prompt = State(initialValue: job.prompt)
+        self._cronExpression = State(initialValue: job.schedule.expr ?? "")
     }
 
     var body: some View {
@@ -301,27 +315,51 @@ private struct JobEditor: View {
                 LabeledContent("ID") {
                     Text(job.id).font(.system(.body, design: .monospaced))
                 }
-                TextField("Schedule", text: $schedule)
-                    .font(.system(.body, design: .monospaced))
-                TextField("Command", text: $command)
-                if let lastRun = job.lastRun {
-                    LabeledContent("Last Run") {
-                        Text(lastRun, style: .relative)
+                if let name = job.name {
+                    LabeledContent("Name") { Text(name) }
+                }
+                if isCronSchedule {
+                    TextField("Schedule", text: $cronExpression)
+                        .font(.system(.body, design: .monospaced))
+                } else {
+                    LabeledContent("Schedule") {
+                        Text(job.schedule.display ?? scheduleFallback)
+                            .font(.system(.body, design: .monospaced))
                     }
+                    Text("Interval schedules can only be edited through `hermes cron` today; the dashboard PUT accepts cron expressions only.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                TextField("Prompt", text: $prompt, axis: .vertical)
+                    .lineLimit(3...8)
+                if let lastRunAt = job.lastRunAt {
+                    LabeledContent("Last Run") { Text(lastRunAt) }
+                }
+                if let state = job.state {
+                    LabeledContent("State") { Text(state) }
                 }
             }
             HStack {
                 Spacer()
                 Button("Save") {
-                    onSave(schedule, command)
+                    onSave(prompt, isCronSchedule ? cronExpression : nil)
                 }
                 .keyboardShortcut(.return, modifiers: [.command])
-                .disabled(
-                    schedule.trimmingCharacters(in: .whitespaces).isEmpty
-                    || command.trimmingCharacters(in: .whitespaces).isEmpty
-                )
+                .disabled(saveDisabled)
             }
         }
         .id(job.id)
+    }
+
+    private var saveDisabled: Bool {
+        if prompt.trimmingCharacters(in: .whitespaces).isEmpty { return true }
+        if isCronSchedule, cronExpression.trimmingCharacters(in: .whitespaces).isEmpty {
+            return true
+        }
+        return false
+    }
+
+    private var scheduleFallback: String {
+        job.schedule.minutes.map { "every \($0)m" } ?? job.schedule.kind
     }
 }

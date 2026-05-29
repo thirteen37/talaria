@@ -1,6 +1,45 @@
 import HermesKit
 import SwiftUI
 
+#if os(macOS)
+/// Per-profile dashboard lifecycle for the Talaria app. Owns one
+/// `DashboardSupervisor` per profile, reference-counted so multiple windows
+/// scoped to the same profile share a single `hermes dashboard` process.
+/// Inlined here (rather than its own file) to avoid pbxproj surgery; promote
+/// to a standalone Talaria/Dashboard/ group when more dashboard coordination
+/// code lands.
+@MainActor
+final class DashboardCoordinator {
+    static let shared = DashboardCoordinator()
+
+    private var supervisors: [UUID: DashboardSupervisor] = [:]
+    private let http: any DashboardHTTP = URLSession.shared
+    private let launcher: any DashboardProcessLauncher = SystemDashboardProcessLauncher()
+
+    func acquire(profile: ServerProfile) async throws -> DashboardEndpoint {
+        let supervisor = ensure(profile: profile)
+        return try await supervisor.acquire()
+    }
+
+    func release(profile: ServerProfile) async {
+        guard let supervisor = supervisors[profile.id] else { return }
+        await supervisor.release()
+    }
+
+    private func ensure(profile: ServerProfile) -> DashboardSupervisor {
+        if let existing = supervisors[profile.id] { return existing }
+        let supervisor = DashboardSupervisor(
+            profile: profile,
+            launcher: launcher,
+            http: http,
+            portAllocator: { try DashboardPortAllocator.allocate() }
+        )
+        supervisors[profile.id] = supervisor
+        return supervisor
+    }
+}
+#endif
+
 enum BrowseDestination: Hashable {
     case sessions
     case skills
@@ -22,9 +61,6 @@ struct ServerWindow: View {
         Group {
             if let harness {
                 content(harness: harness)
-                    .task(id: harness.snapshot?.profile.id) {
-                        await observeSnapshot(harness)
-                    }
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -33,8 +69,21 @@ struct ServerWindow: View {
         .navigationTitle(directory.profile(id: profileId)?.name ?? "Hermes")
         .task(id: profileId) {
             await directory.reload()
+            // Tear the previous profile's harness down before swapping. Without
+            // this, swapping the window's profile abandons the old
+            // `ServerWindowHarness` without releasing its dashboard refcount,
+            // leaking the spawned `hermes dashboard` (the coordinator holds the
+            // supervisor strongly, so nothing else releases it). `.onDisappear`
+            // only fires on window close, never on profile swap.
+            harness?.tearDown()
             let profile = directory.profile(id: profileId) ?? ProfileDirectory.localProfile
-            harness = ServerWindowHarness.make(profile: profile)
+            let new = ServerWindowHarness.make(profile: profile)
+            harness = new
+            // Spawn the per-profile dashboard process in the background so
+            // the chat surface (which doesn't need the dashboard) renders
+            // immediately. Surfaces that do need it observe
+            // `harness.dashboardClient` flipping non-nil when ready.
+            Task { await new.acquireDashboard() }
         }
         .onDisappear {
             // Cancel the window-scoped log tailer (and any future
@@ -42,36 +91,6 @@ struct ServerWindow: View {
             // this an SSH profile leaks its `ssh tail -F` subprocess for
             // every closed window that ever visited the Logs view.
             harness?.tearDown()
-        }
-    }
-
-    /// Opens / replaces / closes the `HermesDB` handle as the remote snapshot
-    /// lands or disappears. We must (re)open after every successful refresh:
-    /// `sftp` overwrites `state.db` in place, and a SQLite handle held across
-    /// that write would read torn pages or `database disk image is malformed`.
-    /// We don't recycle the handle on every state change though — invalidate
-    /// emits `.stale` without changing file contents, so the open handle is
-    /// still good there. The distinguishing signal is a transition out of
-    /// `.refreshing`.
-    private func observeSnapshot(_ harness: ServerWindowHarness) async {
-        guard let snapshot = harness.snapshot else { return }
-        var previous: SnapshotState?
-        for await state in await snapshot.subscribe() {
-            switch state {
-            case .fresh, .stale:
-                let justRefetched: Bool
-                if case .refreshing = previous {
-                    justRefetched = true
-                } else {
-                    justRefetched = false
-                }
-                if harness.db == nil || justRefetched {
-                    await harness.refreshDB()
-                }
-            case .missing, .refreshing, .error:
-                break
-            }
-            previous = state
         }
     }
 
@@ -87,7 +106,7 @@ struct ServerWindow: View {
     @ViewBuilder
     private func sidebar(harness: ServerWindowHarness) -> some View {
         List {
-            SessionsSidebar(store: harness.store, snapshot: harness.snapshot)
+            SessionsSidebar(store: harness.store)
                 .onChange(of: harness.store.selection) { _, newValue in
                     if newValue != nil {
                         browse = nil
@@ -133,27 +152,20 @@ struct ServerWindow: View {
         } else {
             switch browse ?? .sessions {
             case .sessions:
-                SessionsBrowser(store: harness.store, db: harness.db)
-            case .skills: SkillsView(runner: harness.store.adminRunner)
+                SessionsBrowser(store: harness.store, client: harness.dashboardClient)
+            case .skills: SkillsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
             case .tools: ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
-            case .cron: CronView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
+            case .cron: CronView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
             case .logs:
-                LogsView(
+                LogsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            case .doctor:
+                DoctorView(
                     runner: harness.store.adminRunner,
                     profile: harness.profile,
-                    provider: { [weak harness] in
-                        // Lambda captures the window-scoped harness so the
-                        // LogsHarness it returns outlives any single view
-                        // instance. Built lazily — the first sidebar click on
-                        // Logs spawns the tailer; subsequent clicks reuse it.
-                        guard let harness else { return nil }
-                        return harness.ensureLogsHarness(factory: {
-                            LogsView.makeTailing(profile: harness.profile)
-                        })
-                    }
+                    client: harness.dashboardClient,
+                    hermesVersion: harness.profile.version
                 )
-            case .doctor: DoctorView(runner: harness.store.adminRunner, profile: harness.profile)
-            case .updates: UpdatesView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
+            case .updates: UpdatesView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
             }
         }
     }
@@ -173,59 +185,65 @@ struct ServerWindow: View {
 }
 
 /// Bundles the per-window state so we can rebuild it cleanly when the
-/// window swaps profiles. SessionsStore and HermesDB hold long-lived
-/// resources (live ACP transport, SQLite handle) — making a fresh harness
-/// guarantees the previous profile's ones tear down before the new one boots.
-///
-/// `db` is `@Observable` and mutates: for remote profiles it starts nil and
-/// flips to a real `HermesDB` once the snapshot file lands on disk. Without
-/// this the first remote window opens against a missing SQLite file and the
-/// browser surfaces a raw open error.
+/// window swaps profiles. The `SessionsStore` holds the live ACP transport;
+/// making a fresh harness guarantees the previous profile's one tears down
+/// before the new one boots.
 @MainActor
 @Observable
 final class ServerWindowHarness {
     let store: SessionsStore
-    let snapshot: RemoteSnapshot?
     let profile: ServerProfile
-    private(set) var db: HermesDB?
-    /// Persistent log tailer. Lives at the window level so the Logs view's
-    /// buffered lines survive sidebar tab switches — when the user navigates
-    /// away from Logs and back, SwiftUI tears down LogsView and recreates it,
-    /// but the underlying ring buffer here continues to accumulate lines.
-    /// Lazily created on first access; nil for windows where the profile
-    /// doesn't expose a resolvable HERMES_HOME.
-    private(set) var logsHarness: LogsHarness?
+    /// Live `DashboardClient` once the per-profile supervisor's process has
+    /// come online. `nil` until acquired (or while a teardown is in flight),
+    /// non-nil for the lifetime of the window's interest in the profile.
+    /// Surfaces are responsible for rendering a "connecting…" state while
+    /// this is nil and for showing `dashboardError` if acquisition failed.
+    var dashboardClient: DashboardClient?
+    var dashboardError: String?
 
-    private init(store: SessionsStore, db: HermesDB?, snapshot: RemoteSnapshot?, profile: ServerProfile) {
+    private init(store: SessionsStore, profile: ServerProfile) {
         self.store = store
-        self.db = db
-        self.snapshot = snapshot
         self.profile = profile
     }
 
-    /// Returns the cached log tailer, or builds one when `factory` produces a
-    /// usable tailing implementation. LogsView calls this on appear; the
-    /// returned harness keeps streaming even after LogsView is dismissed.
-    func ensureLogsHarness(factory: () -> HermesLogTailing?) -> LogsHarness? {
-        if let logsHarness { return logsHarness }
-        guard let tailing = factory() else { return nil }
-        let harness = LogsHarness(tailing: tailing)
-        harness.start()
-        logsHarness = harness
-        return harness
+    /// Cancels long-lived per-window resources when the SwiftUI window
+    /// disappears. Releases this window's refcount on the per-profile
+    /// dashboard supervisor — the last release terminates the spawned
+    /// `hermes dashboard` process. Explicit hook (rather than `deinit`)
+    /// because Swift 6 makes MainActor deinits nonisolated, which would
+    /// force the teardown through a detached Task with no ordering
+    /// guarantee relative to window close.
+    func tearDown() {
+        #if os(macOS)
+        // Drop our refcount on the per-profile dashboard supervisor. The
+        // coordinator's release is async; fire-and-forget is fine because
+        // the window is going away — nothing depends on the teardown
+        // completing before the harness is deallocated.
+        let profile = profile
+        Task { await DashboardCoordinator.shared.release(profile: profile) }
+        #endif
     }
 
-    /// Cancels long-lived per-window resources when the SwiftUI window
-    /// disappears. Currently this is just the log tailer — for SSH profiles
-    /// it spawns a real `ssh tail -F` subprocess, which would otherwise
-    /// outlive its window if the remote logs are quiet. ServerWindow calls
-    /// this from `.onDisappear`; the explicit hook is preferred over a
-    /// `deinit` because Swift 6 makes MainActor deinits nonisolated, which
-    /// would force us to thread the cleanup through a detached Task with
-    /// no guarantee about ordering relative to window close.
-    func tearDown() {
-        logsHarness?.stop()
-        logsHarness = nil
+    /// Acquires the dashboard endpoint for this profile, publishing the
+    /// resulting `DashboardClient` so views can observe it. Spawning the
+    /// dashboard process can take a moment (Python boot + uvicorn) so
+    /// callers should drive this from `.task` and render a loading state
+    /// while `dashboardClient` is nil.
+    func acquireDashboard() async {
+        #if os(macOS)
+        do {
+            let endpoint = try await DashboardCoordinator.shared.acquire(profile: profile)
+            dashboardClient = endpoint.session.client()
+            store.dashboardClient = dashboardClient
+            dashboardError = nil
+        } catch {
+            dashboardClient = nil
+            store.dashboardClient = nil
+            dashboardError = error.localizedDescription
+        }
+        #else
+        dashboardError = "Dashboard mode requires macOS in this release."
+        #endif
     }
 
     static func make(profile: ServerProfile) -> ServerWindowHarness {
@@ -234,44 +252,14 @@ final class ServerWindowHarness {
             #if os(macOS)
             return makeLocal(profile: profile)
             #else
-            // Per the iOS transport plan, decision #3: iOS is remote-only.
-            // Surface a typed error from the factory so the chat surface
-            // can render an actionable empty state instead of crashing.
             let manager = SessionManager { throw TransportError.unsupportedPlatform }
             return ServerWindowHarness(
                 store: SessionsStore(manager: manager, adminRunner: nil),
-                db: nil,
-                snapshot: nil,
                 profile: profile
             )
             #endif
         case .ssh:
             return makeRemote(profile: profile)
-        }
-    }
-
-    /// Re-checks the snapshot path and (re)opens `HermesDB` against the
-    /// current file on disk. Called from `ServerWindow` whenever the snapshot
-    /// transitions out of `.refreshing` so we never keep an open handle
-    /// across the sftp in-place overwrite.
-    func refreshDB() async {
-        let previous = db
-        let config: HermesDBConfiguration
-        if let snapshot {
-            config = HermesDBConfiguration.forProfile(profile, remoteSnapshotPath: snapshot.localPath())
-        } else {
-            config = HermesDBConfiguration.forProfile(profile)
-        }
-        if FileManager.default.fileExists(atPath: config.databaseURL.path) {
-            db = HermesDB(configuration: config)
-        } else {
-            db = nil
-        }
-        // Close the previous handle after publishing the new one so observers
-        // never see a nil gap. The actor's queue serializes pending queries
-        // before close() takes effect.
-        if let previous {
-            await previous.close()
         }
     }
 
@@ -314,34 +302,23 @@ final class ServerWindowHarness {
             resolver: resolver
         )
         let store = SessionsStore(manager: manager, adminRunner: adminRunner)
-        let config = HermesDBConfiguration.forProfile(profile)
-        let db = FileManager.default.fileExists(atPath: config.databaseURL.path)
-            ? HermesDB(configuration: config)
-            : nil
-        return ServerWindowHarness(store: store, db: db, snapshot: nil, profile: profile)
+        return ServerWindowHarness(store: store, profile: profile)
     }
 
     #endif
 
-    /// `UserDefaults` key honored on macOS to opt the **ACP transport
-    /// and the snapshot fetch** into the pure-Swift NIO-SSH path instead
-    /// of the default system-ssh subprocess. The snapshot **backup**
-    /// (`sqlite3 .backup`) and **remote cleanup** (`rm -f`) steps in
-    /// `RemoteSnapshot` still shell out to `/usr/bin/ssh` even when the
-    /// flag is on — closing that gap requires the future NIO-`exec`
-    /// command runner that lands with the iOS app target. Host-key
-    /// trust therefore consults two verifiers when the flag is enabled:
-    /// system-ssh's `known_hosts` for backup/cleanup, ``HostKeyStore``
-    /// for ACP + fetch. See `docs/security.md`. iOS always uses NIO
-    /// regardless of this flag — system-ssh isn't available there.
-    /// Flip the default in a later release and delete system-ssh one
-    /// release after that.
+    /// `UserDefaults` key honored on macOS to opt the ACP transport into
+    /// the pure-Swift NIO-SSH path instead of the default system-ssh
+    /// subprocess. Host-key trust consults `HostKeyStore` for the NIO
+    /// path; system-ssh defers to `~/.ssh/known_hosts`. See
+    /// `docs/security.md`. iOS always uses NIO regardless of this flag —
+    /// system-ssh isn't available there. Flip the default in a later
+    /// release and delete system-ssh one release after that.
     static let useNIOSSHTransportDefaultsKey = "HermesKit.useNIOSSHTransport"
 
     private static func makeRemote(profile: ServerProfile) -> ServerWindowHarness {
         let useNIO = preferNIOSSHTransport()
         let manager: SessionManager
-        let snapshotTransfer: RemoteSnapshotTransfer?
 
         if useNIO {
             let credentialProvider: SSHCredentialProvider = FileIdentityProvider()
@@ -355,11 +332,6 @@ final class ServerWindowHarness {
                 try await transport.start()
                 return transport
             }
-            snapshotTransfer = NIOSSHCatTransfer(
-                profile: profile,
-                credentialProvider: credentialProvider,
-                hostKeyStore: hostKeyStore
-            )
         } else {
             #if os(macOS)
             manager = SessionManager {
@@ -376,29 +348,16 @@ final class ServerWindowHarness {
                 try transport.start()
                 return transport
             }
-            snapshotTransfer = nil // RemoteSnapshot picks SFTPSubprocessTransfer by default
             #else
             // Defensive: iOS never falls into this branch because
             // `preferNIOSSHTransport()` always returns true off-macOS.
             manager = SessionManager { throw TransportError.unsupportedPlatform }
-            snapshotTransfer = nil
             #endif
         }
 
         let admin = remoteAdminRunner(for: profile)
-        let snapshot = RemoteSnapshot(profile: profile, transfer: snapshotTransfer)
-        let snapshotPath = snapshot.localPath()
-        let store = SessionsStore(manager: manager, adminRunner: admin, snapshot: snapshot)
-        // Open the DB only if the snapshot file already exists from a prior
-        // session. Otherwise wait for `refreshDB()` after the first fetch.
-        let db: HermesDB?
-        if FileManager.default.fileExists(atPath: snapshotPath.path) {
-            let config = HermesDBConfiguration.forProfile(profile, remoteSnapshotPath: snapshotPath)
-            db = HermesDB(configuration: config)
-        } else {
-            db = nil
-        }
-        return ServerWindowHarness(store: store, db: db, snapshot: snapshot, profile: profile)
+        let store = SessionsStore(manager: manager, adminRunner: admin)
+        return ServerWindowHarness(store: store, profile: profile)
     }
 
     /// True if we should use the NIO transport for this profile. iOS has

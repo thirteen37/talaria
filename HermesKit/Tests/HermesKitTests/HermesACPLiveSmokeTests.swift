@@ -2,9 +2,13 @@ import Foundation
 import Testing
 @testable import HermesKit
 
-// End-to-end smoke against the real `hermes acp` binary. Skipped if hermes
-// is not on PATH.
-@Suite(.serialized)
+// End-to-end smoke against the real `hermes acp` binary. These tests spawn a
+// live `hermes` process and (in the prompt case) drive a real model turn, so
+// they are slow, network-dependent, and have no guaranteed instance in CI or
+// on a fresh checkout. They are therefore OPT-IN: the suite is skipped unless
+// `HERMES_LIVE_TESTS=1` is set in the environment. Run them manually with
+// `HERMES_LIVE_TESTS=1 swift test --filter HermesACPLiveSmokeTests`.
+@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["HERMES_LIVE_TESTS"] == "1"))
 struct HermesACPLiveSmokeTests {
     @Test
     func initializeAndNewSessionAgainstRealHermes() async throws {

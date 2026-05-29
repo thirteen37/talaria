@@ -2,6 +2,36 @@ import Foundation
 import HermesKit
 import SwiftUI
 
+/// UI-shaped summary of a Hermes session for sidebar rows. Lived in
+/// `HermesDB.swift` while the SQLite snapshot path was active; now that the
+/// dashboard `GET /api/sessions` is the only source, we keep the shape here
+/// (close to its sole consumer) and adapt `DashboardSessionSummary` into it
+/// at the boundary.
+struct HermesSessionSummary: Identifiable, Equatable {
+    var id: String
+    var title: String
+    var updatedAt: Date?
+    var cwd: String?
+
+    init(id: String, title: String, updatedAt: Date? = nil, cwd: String? = nil) {
+        self.id = id
+        self.title = title
+        self.updatedAt = updatedAt
+        self.cwd = cwd
+    }
+
+    init(_ summary: DashboardSessionSummary) {
+        self.id = summary.id
+        self.title = summary.title ?? ""
+        // Dashboard exposes startedAt (creation), not updatedAt; map it across
+        // for the sidebar's relative-time render. Losing the "modified since"
+        // semantics is acceptable — the next browser refresh re-fetches and
+        // ordering on the server is recency-first by default.
+        self.updatedAt = summary.startedAt.map { Date(timeIntervalSince1970: $0) }
+        self.cwd = nil
+    }
+}
+
 @MainActor
 @Observable
 final class SessionsStore {
@@ -24,30 +54,34 @@ final class SessionsStore {
     var browserRefreshToken: Int = 0
 
     let manager: SessionManager
+    /// CLI admin runner — used only for `hermes sessions rename` since the
+    /// dashboard doesn't expose a rename route. Delete goes through the
+    /// dashboard via `dashboardClient`.
     let adminRunner: HermesAdminRunning?
-    let snapshot: RemoteSnapshot?
+    /// Dashboard client for sessions delete and (eventually) any sessions
+    /// metadata writes that get a route upstream. Optional because the
+    /// dashboard may not be reachable yet when the store is constructed —
+    /// the view layer is responsible for surfacing that as a "connecting…"
+    /// state, not for blocking session-tab management.
+    var dashboardClient: DashboardClient?
     let defaultCwd: String
 
     private var statusTasks: [SessionId: Task<Void, Never>] = [:]
     private var viewModels: [SessionId: LocalChatViewModel] = [:]
     private var pendingOpens: Set<SessionId> = []
-    /// Per-session map from `toolCallId` → declared `kind`. ACP sets `kind`
-    /// on the initial `tool_call` event but typically omits it on the
-    /// follow-up `tool_call_update` events; we look up the original kind to
-    /// decide whether a completion should invalidate the snapshot.
     private var toolKinds: [SessionId: [ToolCallId: ToolKind]] = [:]
     private let cwdStore: SessionsCwdStore
 
     init(
         manager: SessionManager,
         adminRunner: HermesAdminRunning? = nil,
-        snapshot: RemoteSnapshot? = nil,
+        dashboardClient: DashboardClient? = nil,
         defaultCwd: String = FileManager.default.homeDirectoryForCurrentUser.path,
         cwdStore: SessionsCwdStore = SessionsCwdStore()
     ) {
         self.manager = manager
         self.adminRunner = adminRunner
-        self.snapshot = snapshot
+        self.dashboardClient = dashboardClient
         self.defaultCwd = defaultCwd
         self.cwdStore = cwdStore
     }
@@ -137,35 +171,24 @@ final class SessionsStore {
                 openSessions[index].title = title
             }
             browserRefreshToken &+= 1
-            if let snapshot {
-                await snapshot.invalidate()
-            }
         } catch {
             lastError = error.localizedDescription
         }
     }
 
     func deleteSession(_ id: SessionId) async {
-        guard let adminRunner else {
-            lastError = "Hermes admin not configured"
+        guard let dashboardClient else {
+            lastError = "Dashboard not reachable"
             return
         }
         // Tear down our ACP session first so the running `hermes acp` process
-        // releases its writer on state.db before the CLI delete subprocess
-        // touches the same rows. Running both in parallel can produce FK
-        // errors or orphan messages depending on upstream schema.
+        // releases its writer on the row before the dashboard delete fires.
+        // Running both in parallel can produce FK errors or orphan messages.
         await closeTab(id)
         do {
-            let result = try await adminRunner.deleteSession(id)
-            if result.exitCode != 0 {
-                lastError = result.stderr.isEmpty ? "hermes sessions delete exited \(result.exitCode)" : result.stderr
-                return
-            }
+            try await dashboardClient.deleteSession(id: id)
             cwdStore.forget(id: id)
             browserRefreshToken &+= 1
-            if let snapshot {
-                await snapshot.invalidate()
-            }
         } catch {
             lastError = error.localizedDescription
         }
@@ -230,32 +253,28 @@ final class SessionsStore {
     }
 
     private func handleStateMutation(sessionId: SessionId, update: SessionUpdate) {
-        // Stale the cached SQLite snapshot when the agent has touched state on
-        // the server. We don't refresh eagerly — the sidebar pulls on next
-        // appearance or manual refresh.
-        let mutates: Bool
+        // Side effects of state mutations used to drive snapshot invalidation;
+        // with the dashboard-backed Sessions browser the sidebar re-queries
+        // on its own refresh token, and mutation tracking now exists only to
+        // keep the per-session `toolKinds` cache pruned.
         switch update {
         case let .toolCall(toolCall):
-            mutates = recordAndDecide(
+            _ = recordAndDecide(
                 sessionId: sessionId,
                 toolCallId: toolCall.toolCallId,
                 kind: toolCall.kind,
                 status: toolCall.status
             )
         case let .toolCallUpdate(toolCall):
-            mutates = recordAndDecide(
+            _ = recordAndDecide(
                 sessionId: sessionId,
                 toolCallId: toolCall.toolCallId,
                 kind: toolCall.kind,
                 status: toolCall.status
             )
-        case .sessionInfoUpdate:
-            mutates = true
         default:
-            mutates = false
+            break
         }
-        guard mutates, let snapshot else { return }
-        Task { await snapshot.invalidate() }
     }
 
     /// Updates the per-session tool-kind cache, decides whether the event
