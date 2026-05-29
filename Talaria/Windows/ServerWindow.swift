@@ -803,11 +803,15 @@ final class ServerWindowHarness {
             dashboardTask = nil
             dashboardClient = nil
             store.dashboardClient = nil
-            let supervisor = iosDashboardSupervisor
-            iosDashboardSupervisor = nil
+            // Read `iosDashboardSupervisor` *after* the acquire task finishes —
+            // the acquire body assigns it before spawning, so capturing it
+            // synchronously here (teardown runs before that body) would miss it
+            // and leak the SSH connection + remote process. Mirrors the macOS
+            // branch above.
             Task {
                 await acquireTask?.value
-                await supervisor?.release()
+                await self.iosDashboardSupervisor?.release()
+                self.iosDashboardSupervisor = nil
             }
         }
         #endif
