@@ -17,6 +17,8 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - path: Talaria
+        excludes:
+          - "Info-iOS.plist"
     dependencies:
       - package: HermesKit
       - package: Sparkle
@@ -41,3 +43,55 @@ targets:
           CODE_SIGN_IDENTITY: "Developer ID Application"
           DEVELOPMENT_TEAM: "9URLHJ84PY"
           OTHER_CODE_SIGN_FLAGS: "--timestamp --options=runtime"
+
+  TalariaIOS:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Talaria
+        excludes:
+          - "Info.plist"
+          - "Talaria.entitlements"
+    dependencies:
+      - package: HermesKit
+    scheme:
+      testTargets:
+        - TalariaIOSUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.talaria.Talaria
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: Talaria/Info-iOS.plist
+        MARKETING_VERSION: 1.0
+        CURRENT_PROJECT_VERSION: 1
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_VERSION: 6.0
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        # Automatic signing for both Debug and Release. The team is set in
+        # base (not per-config) so on-device Debug builds provision too —
+        # simulator ignores signing, but a real iPhone/iPad needs the team.
+        # Both the Apple Development and Developer ID certs on file resolve
+        # to team 9URLHJ84PY (the cert OU), so iOS dev signing uses the
+        # Apple Development cert automatically.
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: "9URLHJ84PY"
+
+  TalariaIOSUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: TalariaUITests
+    dependencies:
+      - target: TalariaIOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.talaria.Talaria.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: 6.0
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: "9URLHJ84PY"
+        TEST_TARGET_NAME: TalariaIOS

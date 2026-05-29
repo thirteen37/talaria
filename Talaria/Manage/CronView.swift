@@ -127,7 +127,7 @@ struct CronView: View {
                 ContentUnavailableView(
                     "Admin runner unavailable",
                     systemImage: "calendar.badge.clock",
-                    description: Text("Open a profile with a Hermes binary to manage cron jobs.")
+                    description: Text("Open a server with a Hermes binary to manage cron jobs.")
                 )
             } else if let harness {
                 content(harness: harness)
@@ -147,6 +147,7 @@ struct CronView: View {
 
     @ViewBuilder
     private func content(harness: CronHarness) -> some View {
+        #if os(macOS)
         HSplitView {
             jobsTable(harness: harness)
                 .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
@@ -156,6 +157,11 @@ struct CronView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar { toolbar(harness: harness) }
         .manageBanner(bannerMessage(harness: harness), severity: bannerSeverity(harness: harness))
+        #else
+        // The Cron surface is only reachable on macOS/iPad's full sidebar.
+        // On iOS the runner is always nil so this branch never renders.
+        ContentUnavailableView("Cron unavailable", systemImage: "calendar")
+        #endif
     }
 
     /// Banner precedence:

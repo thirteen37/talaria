@@ -76,6 +76,16 @@ public enum RemoteShellMode: String, Codable, Sendable, CaseIterable {
     }
 }
 
+public enum SSHAuthMethod: String, Codable, Sendable, CaseIterable {
+    /// Read the private key from `identityFile` on disk (macOS) or
+    /// `keychainKeyReference` (future iOS work).
+    case identityFile
+    /// Read the password from the Keychain via `passwordKeychainReference`.
+    /// Supported on the NIO transport only — macOS's system-ssh path
+    /// uses `BatchMode=yes` which refuses interactive auth.
+    case password
+}
+
 public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
     public enum Kind: String, Codable, Sendable {
         case local
@@ -105,6 +115,12 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
     /// status without re-reading the host-key trust store. The trust store
     /// itself remains the source of truth for verification.
     public var pinnedHostKeyFingerprint: String?
+    /// Selects which credential to offer to the SSH server.
+    public var authMethod: SSHAuthMethod
+    /// Keychain item identifier for an SSH password (iOS only). The
+    /// password itself never leaves the OS Keychain — this field stores
+    /// the lookup reference. Used when `authMethod == .password`.
+    public var passwordKeychainReference: String?
 
     public init(
         id: UUID = UUID(),
@@ -121,7 +137,9 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
         remoteShellMode: RemoteShellMode = .shLogin,
         remoteShellPrefix: String? = nil,
         keychainKeyReference: String? = nil,
-        pinnedHostKeyFingerprint: String? = nil
+        pinnedHostKeyFingerprint: String? = nil,
+        authMethod: SSHAuthMethod = .identityFile,
+        passwordKeychainReference: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -138,12 +156,15 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
         self.remoteShellPrefix = remoteShellPrefix
         self.keychainKeyReference = keychainKeyReference
         self.pinnedHostKeyFingerprint = pinnedHostKeyFingerprint
+        self.authMethod = authMethod
+        self.passwordKeychainReference = passwordKeychainReference
     }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, kind, host, user, port, identityFile, hermesPath, hermesHome, env, version
         case remoteShellMode, remoteShellPrefix
         case keychainKeyReference, pinnedHostKeyFingerprint
+        case authMethod, passwordKeychainReference
     }
 
     public init(from decoder: Decoder) throws {
@@ -170,5 +191,9 @@ public struct ServerProfile: Codable, Equatable, Identifiable, Sendable {
         self.remoteShellPrefix = try c.decodeIfPresent(String.self, forKey: .remoteShellPrefix)
         self.keychainKeyReference = try c.decodeIfPresent(String.self, forKey: .keychainKeyReference)
         self.pinnedHostKeyFingerprint = try c.decodeIfPresent(String.self, forKey: .pinnedHostKeyFingerprint)
+        // Legacy profiles default to identityFile auth (the only path that
+        // existed before this field was introduced).
+        self.authMethod = try c.decodeIfPresent(SSHAuthMethod.self, forKey: .authMethod) ?? .identityFile
+        self.passwordKeychainReference = try c.decodeIfPresent(String.self, forKey: .passwordKeychainReference)
     }
 }

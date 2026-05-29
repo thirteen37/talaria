@@ -16,7 +16,7 @@ struct SkillsView: View {
                 ContentUnavailableView(
                     "Admin runner unavailable",
                     systemImage: "wand.and.stars",
-                    description: Text("Open a profile with a Hermes binary to manage skills.")
+                    description: Text("Open a server with a Hermes binary to manage skills.")
                 )
             } else if let harness {
                 content(harness: harness)
@@ -54,6 +54,7 @@ struct SkillsView: View {
         // the safe-area inset banner to render only above the left pane —
         // the table column headers ("Enabled", "Path") bled through on the
         // right where the banner had no width.
+        #if os(macOS)
         HSplitView {
             Table(harness.rows, selection: Binding(get: { harness.selectionID }, set: { harness.selectionID = $0 })) {
                 TableColumn("Name") { row in
@@ -101,6 +102,12 @@ struct SkillsView: View {
             loadPreview(for: newValue, harness: harness)
         }
         .manageBanner(harness.lastError)
+        #else
+        // The Skills surface is only reachable on macOS/iPad's full sidebar.
+        // On iOS the runner is always nil so this branch never renders;
+        // stub it out so the file compiles for iOS.
+        ContentUnavailableView("Skills unavailable", systemImage: "wand.and.stars")
+        #endif
     }
 
     @ViewBuilder

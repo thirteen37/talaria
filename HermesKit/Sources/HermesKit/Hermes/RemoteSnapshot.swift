@@ -44,18 +44,29 @@ public actor RemoteSnapshot {
 
     private let cacheRoot: URL
     private let transfer: RemoteSnapshotTransfer?
+    private let commandRunner: RemoteCommandRunning?
     private var subscribers: [UUID: AsyncStream<SnapshotState>.Continuation] = [:]
     private var refreshTask: Task<Void, Error>?
     private var lastState: SnapshotState = .missing
 
     /// `transfer == nil` selects the platform default: on macOS, the
     /// historical `/usr/bin/sftp` subprocess; on iOS, no transfer is
-    /// available without explicit injection (the caller is expected to
-    /// construct a ``NIOSSHCatTransfer`` once the iOS app target lands).
-    public init(profile: ServerProfile, cacheRoot: URL? = nil, transfer: RemoteSnapshotTransfer? = nil) {
+    /// available without explicit injection (the caller injects a
+    /// ``NIOSSHCatTransfer``).
+    ///
+    /// `commandRunner` drives the remote `sqlite3 .backup` + `rm -f` steps.
+    /// When nil, macOS shells out via `/usr/bin/ssh`; iOS requires an
+    /// injected ``NIOSSHCommandRunner`` (it has no `OneShotProcess`).
+    public init(
+        profile: ServerProfile,
+        cacheRoot: URL? = nil,
+        transfer: RemoteSnapshotTransfer? = nil,
+        commandRunner: RemoteCommandRunning? = nil
+    ) {
         self.profile = profile
         self.cacheRoot = cacheRoot ?? RemoteSnapshot.defaultCacheRoot
         self.transfer = transfer
+        self.commandRunner = commandRunner
     }
 
     public static var defaultCacheRoot: URL {
@@ -154,31 +165,47 @@ public actor RemoteSnapshot {
         try ensureDirectory(localURL.deletingLastPathComponent())
 
         do {
-            #if os(macOS)
-            do {
-                try await runBackup(host: host, remoteDB: remoteDB, remoteTmp: remoteTmp)
-            } catch {
-                // sqlite3 .backup may have created (or partially created) the
-                // tmp file before failing — best-effort cleanup so the host
-                // doesn't accumulate leftovers across timeouts and ssh drops.
+            if let commandRunner {
+                // NIO path (always on iOS; macOS when a runner is injected):
+                // backup + cleanup run as remote `exec` commands instead of
+                // shelling out to `/usr/bin/ssh`.
+                do {
+                    try await runBackup(commandRunner, remoteDB: remoteDB, remoteTmp: remoteTmp)
+                } catch {
+                    await runRemoteCleanup(commandRunner, remoteTmp: remoteTmp)
+                    throw error
+                }
+                do {
+                    try await runFetch(remoteTmp: remoteTmp, localURL: localURL)
+                } catch {
+                    await runRemoteCleanup(commandRunner, remoteTmp: remoteTmp)
+                    throw error
+                }
+                await runRemoteCleanup(commandRunner, remoteTmp: remoteTmp)
+            } else {
+                #if os(macOS)
+                do {
+                    try await runBackup(host: host, remoteDB: remoteDB, remoteTmp: remoteTmp)
+                } catch {
+                    // sqlite3 .backup may have created (or partially created) the
+                    // tmp file before failing — best-effort cleanup so the host
+                    // doesn't accumulate leftovers across timeouts and ssh drops.
+                    await runRemoteCleanup(host: host, remoteTmp: remoteTmp)
+                    throw error
+                }
+                do {
+                    try await runFetch(remoteTmp: remoteTmp, localURL: localURL)
+                } catch {
+                    await runRemoteCleanup(host: host, remoteTmp: remoteTmp)
+                    throw error
+                }
                 await runRemoteCleanup(host: host, remoteTmp: remoteTmp)
-                throw error
+                #else
+                // iOS reaches here only if no command runner was injected —
+                // a wiring bug, since the iOS harness always supplies one.
+                throw RemoteSnapshotError.sshFailed(.other("snapshot refresh requires a remote command runner"))
+                #endif
             }
-            do {
-                try await runFetch(remoteTmp: remoteTmp, localURL: localURL)
-            } catch {
-                await runRemoteCleanup(host: host, remoteTmp: remoteTmp)
-                throw error
-            }
-            await runRemoteCleanup(host: host, remoteTmp: remoteTmp)
-            #else
-            // iOS has no `OneShotProcess`. The iOS app target (when it
-            // lands) is expected to drive the backup + cleanup through
-            // a NIO-SSH `exec` command runner; for now we surface a clean
-            // error so callers can show "snapshot refresh unsupported on
-            // this platform" instead of crashing.
-            throw RemoteSnapshotError.sshFailed(.other("snapshot refresh requires the macOS host today"))
-            #endif
             publish(currentObservedState())
         } catch let snapshotError as RemoteSnapshotError {
             publish(.error(snapshotError.errorDescription ?? "snapshot refresh failed"))
@@ -188,6 +215,63 @@ public actor RemoteSnapshot {
             throw error
         }
     }
+
+    // MARK: NIO command-runner path (cross-platform)
+
+    private func runBackup(_ runner: RemoteCommandRunning, remoteDB: String, remoteTmp: String) async throws {
+        let cmd = Self.backupCommand(remoteDB: remoteDB, remoteTmp: remoteTmp)
+        let result: RemoteCommandResult
+        do {
+            result = try await runner.run(command: cmd, timeout: .seconds(30))
+        } catch let transport as SSHTransportError {
+            throw RemoteSnapshotError.sshFailed(transport)
+        } catch {
+            throw RemoteSnapshotError.ioFailed(error.localizedDescription)
+        }
+        if result.exitCode != 0 {
+            let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw RemoteSnapshotError.sqlite3Failed(stderr.isEmpty ? result.stdout : stderr)
+        }
+    }
+
+    private func runRemoteCleanup(_ runner: RemoteCommandRunning, remoteTmp: String) async {
+        // Best-effort — leave the temp file rather than surfacing an error
+        // mid-refresh. The remote path uses a UUID so collisions don't recur.
+        _ = try? await runner.run(command: Self.cleanupCommand(remoteTmp: remoteTmp), timeout: .seconds(15))
+    }
+
+    // MARK: Snapshot download (cross-platform)
+
+    private func runFetch(remoteTmp: String, localURL: URL) async throws {
+        // Use the injected transfer (NIO `cat` on iOS, or the opted-in NIO
+        // transfer on macOS). Fall back to the historical sftp subprocess
+        // only on macOS, where it exists.
+        let active: RemoteSnapshotTransfer
+        if let transfer {
+            active = transfer
+        } else {
+            #if os(macOS)
+            active = SFTPSubprocessTransfer(profile: profile)
+            #else
+            throw RemoteSnapshotError.sshFailed(.other("no snapshot transfer available"))
+            #endif
+        }
+        do {
+            try await active.fetch(remotePath: remoteTmp, to: localURL)
+        } catch let transportError as SSHTransportError {
+            switch transportError {
+            case let .transferFailed(message): throw RemoteSnapshotError.sftpFailed(message)
+            case .commandTimeout, .other, .hostUnreachable, .authFailed,
+                 .hostKeyVerification, .needsPassphrase, .hostKeyUnknown,
+                 .hostKeyMismatch, .hostKeyRevoked:
+                throw RemoteSnapshotError.sshFailed(transportError)
+            }
+        } catch {
+            throw RemoteSnapshotError.ioFailed(error.localizedDescription)
+        }
+    }
+
+    // MARK: system-ssh path (macOS only)
 
     #if os(macOS)
     private func runBackup(host: String, remoteDB: String, remoteTmp: String) async throws {
@@ -212,32 +296,6 @@ public actor RemoteSnapshot {
                 throw RemoteSnapshotError.sqlite3Failed(result.stderr.isEmpty ? result.stdout : result.stderr)
             }
             throw RemoteSnapshotError.sshFailed(classified)
-        }
-    }
-
-    private func runFetch(remoteTmp: String, localURL: URL) async throws {
-        // Pick the platform default if the caller didn't inject a transfer.
-        // The default keeps the historical sftp-subprocess path so existing
-        // macOS profiles round-trip byte-identically; opt-in via the
-        // `HermesKit.useNIOSSHTransport` UserDefault swaps **only this**
-        // fetch path (and the ACP transport) — `runBackup` and
-        // `runRemoteCleanup` below still shell out via system-ssh on
-        // macOS. That gap is documented in `docs/security.md`; closing
-        // it requires a NIO-`exec` command runner that lands with the
-        // iOS app target.
-        let active: RemoteSnapshotTransfer = transfer ?? SFTPSubprocessTransfer(profile: profile)
-        do {
-            try await active.fetch(remotePath: remoteTmp, to: localURL)
-        } catch let transportError as SSHTransportError {
-            switch transportError {
-            case let .transferFailed(message): throw RemoteSnapshotError.sftpFailed(message)
-            case .commandTimeout, .other, .hostUnreachable, .authFailed,
-                 .hostKeyVerification, .needsPassphrase, .hostKeyUnknown,
-                 .hostKeyMismatch, .hostKeyRevoked:
-                throw RemoteSnapshotError.sshFailed(transportError)
-            }
-        } catch {
-            throw RemoteSnapshotError.ioFailed(error.localizedDescription)
         }
     }
 
