@@ -676,6 +676,12 @@ final class ServerWindowHarness {
     private var dashboardTask: Task<Void, Never>?
     private var dashboardStarted = false
     private var dashboardReleased = false
+    #if !os(macOS)
+    /// iOS owns its dashboard supervisor directly (one window per profile, no
+    /// cross-window refcount sharing as on macOS). Built lazily in
+    /// `acquireDashboard()`; released in `tearDown()`.
+    private var iosDashboardSupervisor: DashboardSupervisor?
+    #endif
 
     private init(
         store: SessionsStore,
@@ -718,19 +724,47 @@ final class ServerWindowHarness {
                 await DashboardCoordinator.shared.release(profile: profile)
             }
         }
+        #else
+        if dashboardStarted, !dashboardReleased {
+            dashboardReleased = true
+            // Same chained-release reasoning as macOS, but the supervisor lives
+            // on the harness rather than a shared coordinator. Await the acquire
+            // task first so the supervisor has finished spawning (refcount 1)
+            // before we release and tear down the SSH connection.
+            let acquireTask = dashboardTask
+            acquireTask?.cancel()
+            dashboardTask = nil
+            dashboardClient = nil
+            store.dashboardClient = nil
+            let supervisor = iosDashboardSupervisor
+            iosDashboardSupervisor = nil
+            Task {
+                await acquireTask?.value
+                await supervisor?.release()
+            }
+        }
         #endif
         notifications.stop()
     }
 
     func startDashboard() {
-        #if os(macOS)
         guard !dashboardStarted else { return }
+        #if os(macOS)
         dashboardStarted = true
         dashboardTask = Task { [weak self] in
             await self?.acquireDashboard()
         }
         #else
-        dashboardError = "Dashboard mode requires macOS in this release."
+        // iOS reaches the dashboard over NIO-SSH, so it requires a remote
+        // server. Local profiles can't run hermes on-device.
+        guard profile.kind == .ssh else {
+            dashboardError = "Dashboard mode requires a remote (SSH) server."
+            return
+        }
+        dashboardStarted = true
+        dashboardTask = Task { [weak self] in
+            await self?.acquireDashboard()
+        }
         #endif
     }
 
@@ -755,9 +789,59 @@ final class ServerWindowHarness {
             dashboardError = error.localizedDescription
         }
         #else
-        dashboardError = "Dashboard mode requires macOS in this release."
+        let supervisor = makeIOSDashboardSupervisor()
+        iosDashboardSupervisor = supervisor
+        do {
+            let endpoint = try await supervisor.acquire()
+            try Task.checkCancellation()
+            guard !dashboardReleased else { return }
+            dashboardClient = endpoint.session.client()
+            store.dashboardClient = dashboardClient
+            dashboardError = nil
+        } catch {
+            guard !Task.isCancelled, !dashboardReleased else { return }
+            dashboardClient = nil
+            store.dashboardClient = nil
+            dashboardError = error.localizedDescription
+        }
         #endif
     }
+
+    #if !os(macOS)
+    /// Builds the iOS dashboard supervisor: a NIO-SSH connection that both
+    /// execs `hermes dashboard` on the remote host and tunnels its HTTP over a
+    /// `direct-tcpip` channel. Reuses the window's host-key trust coordinator
+    /// and the shared pinned host-key store so the dashboard connection
+    /// doesn't re-prompt for a key the chat transport already trusted.
+    private func makeIOSDashboardSupervisor() -> DashboardSupervisor {
+        var confirmer: HostKeyConfirmer?
+        if let coordinator = hostKeyCoordinator {
+            confirmer = { host, port, fingerprint in
+                await coordinator.confirm(host: host, port: port, fingerprint: fingerprint)
+            }
+        }
+        let connection = NIOSSHDashboardConnection(
+            profile: profile,
+            credentialProvider: FileIdentityProvider(),
+            hostKeyStore: Self.defaultHostKeyStore(),
+            hostKeyConfirmer: confirmer
+        )
+        let profile = profile
+        return DashboardSupervisor(
+            profile: profile,
+            launcher: NIOSSHDashboardProcessLauncher(connection: connection),
+            http: NIOSSHDashboardHTTP(connection: connection),
+            portAllocator: {
+                // No local forward on iOS, so this is purely the remote bind
+                // port. Honor an explicit profile port; otherwise pick a high
+                // ephemeral port (collisions surface as the supervisor's
+                // not-reachable error).
+                if let port = profile.dashboardPort { return port }
+                return Int.random(in: 40000...60000)
+            }
+        )
+    }
+    #endif
 
     /// Builds a harness backed by an in-process ``MockACPTransport`` for UI
     /// tests — no SSH, no admin runner, no snapshot.

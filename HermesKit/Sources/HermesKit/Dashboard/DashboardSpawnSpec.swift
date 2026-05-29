@@ -97,4 +97,37 @@ public struct DashboardSpawnSpec: Sendable, Equatable {
             environment: [:]
         )
     }
+
+    /// Spec for spawning the dashboard on a remote SSH host over the pure-Swift
+    /// NIO-SSH transport (iOS, where `/usr/bin/ssh` and `Process` don't exist).
+    /// Unlike ``remote(profile:localPort:remotePort:)`` there's no `ssh -L`
+    /// wrapper and no local port: the NIO launcher execs `arguments[0]`
+    /// directly on a session channel, and HTTP reaches the dashboard through a
+    /// `direct-tcpip` channel to `127.0.0.1:<port>` rather than a local
+    /// forward. `executable` is a sentinel the NIO launcher ignores.
+    public static func remoteNIO(profile: ServerProfile, port: Int) -> DashboardSpawnSpec {
+        var remoteParts: [String] = []
+        if let hermesHome = profile.hermesHome, !hermesHome.isEmpty {
+            remoteParts += ["env", ShellQuoting.shellQuote("HERMES_HOME=\(hermesHome)")]
+        }
+        remoteParts += [
+            ShellQuoting.shellQuote(profile.hermesPath),
+            "dashboard",
+            "--no-open",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            String(port),
+        ]
+        let dashboardLine = remoteParts.joined(separator: " ")
+        let wrapped = profile.remoteShellMode.wrap(
+            command: dashboardLine,
+            customPrefix: profile.remoteShellPrefix
+        )
+        return DashboardSpawnSpec(
+            executable: URL(fileURLWithPath: "/nio-ssh"),
+            arguments: [wrapped],
+            environment: [:]
+        )
+    }
 }

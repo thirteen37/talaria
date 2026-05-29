@@ -223,7 +223,15 @@ public actor DashboardSupervisor {
         case .local:
             return DashboardSpawnSpec.local(profile: profile, port: port)
         case .ssh:
+            #if os(macOS)
+            // macOS forwards through `/usr/bin/ssh -L` so the local port maps
+            // 1:1 to the remote port.
             return DashboardSpawnSpec.remote(profile: profile, localPort: port, remotePort: port)
+            #else
+            // iOS reaches the remote dashboard over NIO-SSH `direct-tcpip`,
+            // so there's no local forward — `port` is purely the remote port.
+            return DashboardSpawnSpec.remoteNIO(profile: profile, port: port)
+            #endif
         }
     }
 
