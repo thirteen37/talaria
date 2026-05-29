@@ -36,6 +36,15 @@ struct DoctorView: View {
                 }
                 .disabled(isRunning)
 
+                if report?.suggestsFix == true {
+                    Button {
+                        Task { await runFix() }
+                    } label: {
+                        Label("Run Fixes", systemImage: "wrench.and.screwdriver")
+                    }
+                    .disabled(isRunning)
+                }
+
                 if let report {
                     Button {
                         copyBundle(report)
@@ -109,6 +118,20 @@ struct DoctorView: View {
         lastError = nil
         do {
             let r = try await HermesDoctor.run(runner: runner)
+            report = r
+            expanded = Set(r.sections.map(\.id))
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    private func runFix() async {
+        guard let runner else { return }
+        isRunning = true
+        defer { isRunning = false }
+        lastError = nil
+        do {
+            let r = try await HermesDoctor.runFix(runner: runner)
             report = r
             expanded = Set(r.sections.map(\.id))
         } catch {

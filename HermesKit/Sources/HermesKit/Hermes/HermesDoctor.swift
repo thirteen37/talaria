@@ -16,11 +16,16 @@ public struct DoctorReport: Sendable, Equatable {
     public let raw: String
     public let sections: [Section]
     public let exitCode: Int32
+    /// Whether the report's raw text advertised the `doctor --fix` self-repair
+    /// flag (the "Tip: run 'hermes doctor --fix' …" line). Drives the UI's
+    /// optional **Run Fixes** affordance.
+    public let suggestsFix: Bool
 
-    public init(raw: String, sections: [Section], exitCode: Int32) {
+    public init(raw: String, sections: [Section], exitCode: Int32, suggestsFix: Bool = false) {
         self.raw = raw
         self.sections = sections
         self.exitCode = exitCode
+        self.suggestsFix = suggestsFix
     }
 }
 
@@ -38,7 +43,25 @@ public enum HermesDoctorError: Error, Equatable, Sendable, LocalizedError {
 
 public enum HermesDoctor {
     public static func run(runner: HermesAdminRunning) async throws -> DoctorReport {
-        let result = try await runner.run(HermesAdminCommand(arguments: ["doctor"]))
+        try await report(from: ["doctor"], runner: runner)
+    }
+
+    /// Runs `hermes doctor --fix` and parses its output the same way `run`
+    /// does. Use only when a prior report's `suggestsFix` is true.
+    public static func runFix(runner: HermesAdminRunning) async throws -> DoctorReport {
+        try await report(from: ["doctor", "--fix"], runner: runner)
+    }
+
+    /// True when doctor's output advertises its self-repair flag, e.g.
+    /// "Tip: run 'hermes doctor --fix' to auto-fix what's possible."
+    /// Matched on the `doctor --fix` substring so wording tweaks upstream
+    /// (different tip phrasing, quoting) still trigger the offer.
+    public static func suggestsFix(_ text: String) -> Bool {
+        text.contains("doctor --fix")
+    }
+
+    private static func report(from arguments: [String], runner: HermesAdminRunning) async throws -> DoctorReport {
+        let result = try await runner.run(HermesAdminCommand(arguments: arguments))
         // Doctor traditionally returns a non-zero exit when it surfaces
         // problems, but the text body is still useful. Only treat empty
         // output + non-zero as a hard failure.
@@ -49,7 +72,8 @@ public enum HermesDoctor {
         return DoctorReport(
             raw: result.stdout,
             sections: parseSections(result.stdout),
-            exitCode: result.exitCode
+            exitCode: result.exitCode,
+            suggestsFix: suggestsFix(result.stdout)
         )
     }
 
