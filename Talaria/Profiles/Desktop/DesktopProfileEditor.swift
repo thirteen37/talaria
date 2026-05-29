@@ -356,62 +356,58 @@ private struct DesktopProfileDetail: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if isPending {
+        // A single `Form` is the scroll container on every platform. Nesting a
+        // `Form` inside a `ScrollView`+`VStack` (the natural macOS layout)
+        // collapses it to zero height on iOS/iPadOS, which hid every field on
+        // iPad — only the banner, capabilities row, and buttons showed. Putting
+        // the capabilities + actions in their own sections keeps them reachable
+        // on both platforms without that nesting.
+        Form {
+            if isPending {
+                Section {
                     Label("This server hasn't been saved yet. Probe and Save to keep it.", systemImage: "info.circle")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal)
-                        .padding(.top)
                 }
-                Form {
-                    ProfileFormSections(draft: $draft, passwordInput: $passwordInput)
+            }
+            ProfileFormSections(draft: $draft, passwordInput: $passwordInput)
+            Section("Capabilities") {
+                probeContent
+            }
+            Section {
+                Button("Probe", action: onProbe)
+                Button("Save") { onSave(passwordInput, passwordChanged) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canSaveNow)
+                if isPending {
+                    Button("Discard", role: .destructive, action: onDiscard)
                 }
-                .formStyle(.grouped)
-
-                probeSection
-                    .padding(.horizontal)
-
-                HStack {
-                    if isPending {
-                        Button("Discard", role: .destructive, action: onDiscard)
-                    }
-                    Spacer()
-                    Button("Probe", action: onProbe)
-                    Button("Save") { onSave(passwordInput, passwordChanged) }
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(!canSaveNow)
-                }
-                .padding(.horizontal)
-                .padding(.bottom)
             }
         }
+        .formStyle(.grouped)
         .onAppear(perform: loadStoredPassword)
     }
 
     @ViewBuilder
-    private var probeSection: some View {
-        GroupBox("Capabilities") {
-            switch probeState {
-            case .idle:
-                Text("Run a probe to record the Hermes version and confirm SSH connectivity.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            case .running:
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Probing…")
-                }
+    private var probeContent: some View {
+        switch probeState {
+        case .idle:
+            Text("Run a probe to record the Hermes version and confirm SSH connectivity.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            case let .success(result):
-                ProbeCapabilityView(result: result)
-            case let .failure(message):
-                Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        case .running:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Probing…")
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        case let .success(result):
+            ProbeCapabilityView(result: result)
+        case let .failure(message):
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

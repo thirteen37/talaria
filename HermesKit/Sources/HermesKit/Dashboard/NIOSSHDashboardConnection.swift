@@ -146,18 +146,32 @@ public final class NIOSSHDashboardConnection: @unchecked Sendable {
             throw SSHTransportError.other("dashboard SSH connection is not open")
         }
 
-        let sshHandler = try await connection.pipeline.handler(type: NIOSSHHandler.self).get()
         let bytesPromise = connection.eventLoop.makePromise(of: ByteBuffer.self)
         let childPromise = connection.eventLoop.makePromise(of: Channel.self)
-        let direct = SSHChannelType.DirectTCPIP(
-            targetHost: "127.0.0.1",
-            targetPort: targetPort,
-            originatorAddress: try SocketAddress(ipAddress: "127.0.0.1", port: 0)
-        )
         let collector = DirectTCPIPResponseCollector(promise: bytesPromise, allocator: ByteBufferAllocator())
-        sshHandler.createChannel(childPromise, channelType: .directTCPIP(direct)) { child, _ in
-            child.eventLoop.makeCompletedFuture {
-                try child.pipeline.syncOperations.addHandler(collector)
+        // `NIOSSHHandler.createChannel` opens the child channel *synchronously*
+        // when the connection is already active — the steady state once the
+        // dashboard is up and reachability polling reuses the live connection.
+        // That synchronous path reads `self.channel`, which asserts it runs on
+        // the connection's event loop. Calling `createChannel` from this async
+        // executor therefore trips `assertInEventLoop`, so hop onto the loop
+        // (resolving the handler there via `syncOperations`) before opening the
+        // `direct-tcpip` channel.
+        connection.eventLoop.execute {
+            do {
+                let direct = SSHChannelType.DirectTCPIP(
+                    targetHost: "127.0.0.1",
+                    targetPort: targetPort,
+                    originatorAddress: try SocketAddress(ipAddress: "127.0.0.1", port: 0)
+                )
+                let sshHandler = try connection.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
+                sshHandler.createChannel(childPromise, channelType: .directTCPIP(direct)) { child, _ in
+                    child.eventLoop.makeCompletedFuture {
+                        try child.pipeline.syncOperations.addHandler(collector)
+                    }
+                }
+            } catch {
+                childPromise.fail(error)
             }
         }
         let child = try await childPromise.futureResult.get()

@@ -86,12 +86,16 @@ extension View {
         }
     }
 
-    /// Profile-editor sheet for the desktop window on iPad.
+    /// Profile-editor sheet for the desktop window on iPad. Wrapped in a
+    /// `NavigationStack` so the editor's toolbar (the Done button) has a
+    /// navigation bar to render into.
     func platformSettingsSheet<Editor: View>(
         isPresented: Binding<Bool>,
         @ViewBuilder editor: @escaping () -> Editor
     ) -> some View {
-        sheet(isPresented: isPresented, content: editor)
+        sheet(isPresented: isPresented) {
+            NavigationStack { editor() }
+        }
     }
 }
 
