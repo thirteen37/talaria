@@ -202,6 +202,7 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
             HermesLog.transport.info("exec accepted — transport live")
         } catch {
             HermesLog.transport.error("session/exec setup failed: \(String(describing: error), privacy: .public)")
+            authFailure.succeed(()) // resolve the unused promise to avoid a leak warning
             _ = await markClosed()
             throw Self.mapConnectError(error, host: host, port: port)
         }
