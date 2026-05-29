@@ -119,7 +119,18 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
         HermesLog.transport.info("connect start \(user, privacy: .public)@\(host, privacy: .public):\(port) auth=\(authKind, privacy: .public)")
         HermesLog.transport.info("remote command: \(command, privacy: .public)")
 
-        let authDelegate = NIOSSHAuthDelegate(username: user, privateKey: privateKey, password: password)
+        // Surface auth exhaustion (all credentials offered + rejected) as a
+        // fast, clear error instead of letting NIOSSH stall until the open
+        // timeout. The delegate fires `onExhausted` on the event loop; we fail
+        // this promise, which the channel-open await observes below.
+        let authFailure = group.next().makePromise(of: Void.self)
+        let authFailureMessage = "Authentication failed — the server rejected the \(authKind). Check the username and \(authKind) for this server."
+        let authDelegate = NIOSSHAuthDelegate(
+            username: user,
+            privateKey: privateKey,
+            password: password,
+            onExhausted: { authFailure.fail(SSHTransportError.authFailed(authFailureMessage)) }
+        )
         let hostKeyDelegate = NIOSSHHostKeyVerifier(store: hostKeyStore, host: host, port: port, confirmUnknown: hostKeyConfirmer)
         let config = SSHClientConfiguration(
             userAuthDelegate: authDelegate,
@@ -147,6 +158,7 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
             connection = try await bootstrap.connect(host: host, port: port).get()
         } catch {
             HermesLog.transport.error("TCP/handshake failed: \(String(describing: error), privacy: .public)")
+            authFailure.succeed(()) // resolve the unused promise to avoid a leak warning
             _ = await markClosed()
             throw Self.mapConnectError(error, host: host, port: port)
         }
@@ -156,6 +168,12 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
         let inboundContinuation = inboundContinuation
         let stderrRing = stderrRing
         let childPromise = connection.eventLoop.makePromise(of: Channel.self)
+        // Whichever settles first wins: the session channel opening, or auth
+        // exhaustion failing it. cascade forwards childPromise's outcome;
+        // a later auth failure is a no-op once the channel already opened.
+        let channelOpen = connection.eventLoop.makePromise(of: Channel.self)
+        childPromise.futureResult.cascade(to: channelOpen)
+        authFailure.futureResult.whenFailure { channelOpen.fail($0) }
         do {
             let handler = try await connection.pipeline.handler(type: NIOSSHHandler.self).get()
             handler.createChannel(childPromise, channelType: .session) { childChannel, _ in
@@ -166,7 +184,10 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
                 )
                 return childChannel.pipeline.addHandler(dataHandler)
             }
-            let child = try await childPromise.futureResult.get()
+            let child = try await channelOpen.futureResult.get()
+            // Resolve the auth-failure promise so it doesn't linger once the
+            // channel is up (no-op if it already failed).
+            authFailure.succeed(())
             storeChild(child)
             HermesLog.transport.info("session channel open; awaiting exec ack")
             // Wait for the ExecRequest to be accepted (or for the child
