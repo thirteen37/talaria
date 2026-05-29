@@ -394,18 +394,25 @@ struct ProfileEditor: View {
                 baseCanSave: canSave(draft)
               ) else { return }
         #if os(iOS)
-        // Persist the typed password into the Keychain only when it actually
-        // changed. The draft holds just a reference UUID; the password itself
-        // stays in the OS Keychain.
-        if draft.authMethod == .password, passwordChanged, !password.isEmpty {
-            let reference = draft.passwordKeychainReference ?? UUID().uuidString
-            do {
-                try PasswordKeychain.set(reference: reference, password: password)
-                draft.passwordKeychainReference = reference
-            } catch {
-                directory.lastError = "Couldn't save password to Keychain: \(error.localizedDescription)"
-                return
+        if draft.authMethod == .password {
+            // Persist the typed password into the Keychain only when it
+            // actually changed. The draft holds just a reference UUID; the
+            // password itself stays in the OS Keychain.
+            if passwordChanged, !password.isEmpty {
+                let reference = draft.passwordKeychainReference ?? UUID().uuidString
+                do {
+                    try PasswordKeychain.set(reference: reference, password: password)
+                    draft.passwordKeychainReference = reference
+                } catch {
+                    directory.lastError = "Couldn't save password to Keychain: \(error.localizedDescription)"
+                    return
+                }
             }
+        } else if let reference = draft.passwordKeychainReference {
+            // Switched away from password auth — purge the stored secret and
+            // drop the dangling reference so it isn't orphaned in the Keychain.
+            try? PasswordKeychain.delete(reference: reference)
+            draft.passwordKeychainReference = nil
         }
         #endif
         Task {

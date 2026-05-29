@@ -58,8 +58,14 @@ final class ProfileDirectory {
     }
 
     func delete(id: UUID) async {
+        // Capture before deleting so we can purge the profile's Keychain
+        // password (iOS) — otherwise the secret is orphaned forever.
+        let reference = profile(id: id)?.passwordKeychainReference
         do {
             try await store.delete(id: id)
+            if let reference {
+                try? PasswordKeychain.delete(reference: reference)
+            }
             await reload()
         } catch {
             lastError = error.localizedDescription
