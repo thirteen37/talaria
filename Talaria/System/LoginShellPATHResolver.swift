@@ -8,6 +8,20 @@ actor LoginShellPATHResolver {
     static let shared = LoginShellPATHResolver()
 
     private static let cacheKey = "talaria.loginShellPATH"
+    private static let hermesHomeCacheKey = "talaria.loginShellHermesHome"
+
+    /// Synchronous accessor for the HERMES_HOME the user's login shell exposes
+    /// (when set). Read from UserDefaults so the Logs view can pick it up
+    /// without awaiting an async probe. Returns nil when the probe hasn't run
+    /// yet, when the variable is unset on the user's shell, or when the probe
+    /// produced an empty value. Always reflects the most recent successful
+    /// probe — `warm()` (fired from app launch) refreshes it on every run.
+    static func cachedHermesHome() -> String? {
+        let value = UserDefaults.standard.string(forKey: hermesHomeCacheKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let value, !value.isEmpty else { return nil }
+        return value
+    }
 
     // Distinct from `resolved(nil)`: `unresolved` means the probe hasn't run
     // yet (or the previous launch never persisted anything to UserDefaults).
@@ -69,19 +83,24 @@ actor LoginShellPATHResolver {
 
     private static let beginMarker = "__TALARIA_PATH_BEGIN__"
     private static let endMarker = "__TALARIA_PATH_END__"
+    private static let beginHomeMarker = "__TALARIA_HOME_BEGIN__"
+    private static let endHomeMarker = "__TALARIA_HOME_END__"
 
     private static func runProbe() -> String? {
         let shellPath = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: shellPath)
-        // Wrap PATH in markers so any rc-file chatter on stdout (greetings,
-        // version banners) doesn't pollute the parsed value. Discard stderr
-        // entirely: an undrained pipe blocks the shell once the kernel buffer
-        // fills (oh-my-zsh, nvm/pyenv/asdf init, deprecation warnings, etc.),
-        // which would fail the probe.
+        // Wrap PATH (and opportunistically HERMES_HOME) in markers so any
+        // rc-file chatter on stdout (greetings, version banners) doesn't
+        // pollute the parsed values. Discard stderr entirely: an undrained
+        // pipe blocks the shell once the kernel buffer fills (oh-my-zsh,
+        // nvm/pyenv/asdf init, deprecation warnings, etc.), which would
+        // fail the probe. HERMES_HOME defaults to empty when unset so the
+        // single printf works regardless of whether the user exports it;
+        // the Logs view falls back to `~/.hermes` when nothing comes back.
         process.arguments = [
             "-ilc",
-            "printf '%s%s%s' '\(beginMarker)' \"$PATH\" '\(endMarker)'",
+            "printf '%s%s%s%s%s%s' '\(beginMarker)' \"$PATH\" '\(endMarker)' '\(beginHomeMarker)' \"${HERMES_HOME:-}\" '\(endHomeMarker)'",
         ]
         let pipe = Pipe()
         process.standardOutput = pipe
@@ -126,6 +145,22 @@ actor LoginShellPATHResolver {
         buffer.append(trailing)
 
         let output = String(decoding: buffer.snapshot(), as: UTF8.self)
+
+        // Opportunistically refresh the HERMES_HOME cache from the same probe.
+        // Independent of PATH parsing — even if the user's shell exports a
+        // weird PATH we still want to surface HERMES_HOME when it's present,
+        // and vice versa.
+        if let beginHome = output.range(of: beginHomeMarker),
+           let endHome = output.range(of: endHomeMarker, range: beginHome.upperBound..<output.endIndex) {
+            let home = String(output[beginHome.upperBound..<endHome.lowerBound])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if home.isEmpty {
+                UserDefaults.standard.removeObject(forKey: hermesHomeCacheKey)
+            } else {
+                UserDefaults.standard.set(home, forKey: hermesHomeCacheKey)
+            }
+        }
+
         guard let begin = output.range(of: beginMarker),
               let end = output.range(of: endMarker, range: begin.upperBound..<output.endIndex) else {
             return nil
