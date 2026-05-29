@@ -34,6 +34,20 @@ struct HermesProfilesTests {
     }
 
     @Test
+    func plainParseKeepsProfilesWhoseNameStartsWithName() {
+        // Regression: a bare `hasPrefix("name")` header heuristic silently
+        // dropped profiles like "namespace" / "name-test" from the plain path.
+        let profiles = HermesProfiles.parse("namespace\nname-test\nwork")
+        #expect(profiles.map(\.name) == ["namespace", "name-test", "work"])
+    }
+
+    @Test
+    func plainParseStillSkipsRealHeaderRow() {
+        let profiles = HermesProfiles.parse("Name       Default  Status\nwork       no       running")
+        #expect(profiles.map(\.name) == ["work"])
+    }
+
+    @Test
     func ensureDefaultInjectsMissingDefaultRow() {
         let parsed = HermesProfiles.parse("work\nstaging")
         #expect(!parsed.contains(where: { $0.name == "default" }))

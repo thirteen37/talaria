@@ -140,7 +140,12 @@ public enum HermesProfiles {
         if stripped.allSatisfy({ $0 == "-" || $0 == "=" || $0 == "_" }), !stripped.isEmpty {
             return true
         }
-        return line.lowercased().hasPrefix("name")
+        // Require a known second column alongside the `name` prefix (mirroring
+        // HermesSkills' `name` + `enabled` guard). A bare `hasPrefix("name")`
+        // would mistake a profile literally named "namespace" / "name-test"
+        // for the header and silently drop it from the list.
+        let lowered = line.lowercased()
+        return lowered.hasPrefix("name") && (lowered.contains("status") || lowered.contains("default"))
     }
 
     static func ensureSuccess(_ result: HermesAdminResult) throws {
