@@ -69,10 +69,15 @@ final class ProfilesConfigHarness {
         isLoading = true
         defer { isLoading = false }
         do {
-            async let sourceTextTask = HermesConfigReader.read(profile: profile, profileName: pair.source, transfer: transfer)
-            async let destTextTask = HermesConfigReader.read(profile: profile, profileName: pair.dest, transfer: transfer)
-            let sourceText = try await sourceTextTask
-            let destText = try await destTextTask
+            // Read sequentially, not via `async let`. On the NIO transport each
+            // read opens a fresh SSH connection, so concurrent reads race two
+            // host-key verifications — and HostKeyConfirmationCoordinator
+            // auto-denies a second prompt while one is pending, failing one
+            // side of the first comparison to an untrusted host. Sequential
+            // reads let the first connection pin the key before the second
+            // runs; config files are tiny, so the extra latency is negligible.
+            let sourceText = try await HermesConfigReader.read(profile: profile, profileName: pair.source, transfer: transfer)
+            let destText = try await HermesConfigReader.read(profile: profile, profileName: pair.dest, transfer: transfer)
             guard sourceName == pair.source, destName == pair.dest else { return }
             let source = try HermesConfigDocument.parse(sourceText)
             let dest = try HermesConfigDocument.parse(destText)
