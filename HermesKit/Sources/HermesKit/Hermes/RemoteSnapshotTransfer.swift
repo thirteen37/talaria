@@ -129,6 +129,7 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
     private let profile: ServerProfile
     private let credentialProvider: SSHCredentialProvider
     private let hostKeyStore: HostKeyStore
+    private let hostKeyConfirmer: HostKeyConfirmer?
     private let passphrase: String?
     private let group: EventLoopGroup
 
@@ -136,12 +137,14 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
         profile: ServerProfile,
         credentialProvider: SSHCredentialProvider,
         hostKeyStore: HostKeyStore,
+        hostKeyConfirmer: HostKeyConfirmer? = nil,
         passphrase: String? = nil,
         group: EventLoopGroup = NIOSSHTransport.sharedGroup
     ) {
         self.profile = profile
         self.credentialProvider = credentialProvider
         self.hostKeyStore = hostKeyStore
+        self.hostKeyConfirmer = hostKeyConfirmer
         self.passphrase = passphrase
         self.group = group
     }
@@ -154,8 +157,12 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
         let user = profile.user ?? NSUserName()
 
         let privateKey = try credentialProvider.privateKey(for: profile, passphrase: passphrase)
-        let authDelegate = NIOSSHAuthDelegate(username: user, privateKey: privateKey)
-        let hostKeyDelegate = NIOSSHHostKeyVerifier(store: hostKeyStore, host: host, port: port)
+        let password = try credentialProvider.password(for: profile)
+        if privateKey == nil, password == nil {
+            throw SSHTransportError.authFailed("profile has no identity file or password configured")
+        }
+        let authDelegate = NIOSSHAuthDelegate(username: user, privateKey: privateKey, password: password)
+        let hostKeyDelegate = NIOSSHHostKeyVerifier(store: hostKeyStore, host: host, port: port, confirmUnknown: hostKeyConfirmer)
         let config = SSHClientConfiguration(
             userAuthDelegate: authDelegate,
             serverAuthDelegate: hostKeyDelegate

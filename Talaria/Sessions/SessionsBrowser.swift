@@ -4,6 +4,11 @@ import SwiftUI
 struct SessionsBrowser: View {
     let store: SessionsStore
     let db: HermesDB?
+    /// Called after a session is opened. The iOS Settings/browser sheet uses
+    /// this to dismiss itself so the chat (which pushes via the selection)
+    /// becomes visible. macOS shows the browser in the detail pane and leaves
+    /// this nil.
+    var onOpen: (() -> Void)?
 
     @State private var query: String = ""
     @State private var sort: HermesDBSortOrder = .updatedDescending
@@ -45,6 +50,7 @@ struct SessionsBrowser: View {
                 List(sessions) { summary in
                     SessionRow(summary: summary) {
                         Task { await store.openExisting(summary) }
+                        onOpen?()
                     }
                 }
             }

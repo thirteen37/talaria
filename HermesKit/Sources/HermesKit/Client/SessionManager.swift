@@ -62,8 +62,11 @@ public actor SessionManager {
         let client = try await bootClient()
         let response: NewSessionResponse
         do {
+            HermesLog.session.info("openNew: sending session/new cwd=\(cwd, privacy: .public)")
             response = try await client.newSession(cwd: cwd, mcpServers: mcpServers)
+            HermesLog.session.info("openNew: session/new ok id=\(response.sessionId, privacy: .public)")
         } catch {
+            HermesLog.session.error("openNew: session/new failed: \(String(describing: error), privacy: .public)")
             await client.close()
             throw error
         }
@@ -149,14 +152,18 @@ public actor SessionManager {
     }
 
     private func bootClient() async throws -> HermesClient {
+        HermesLog.session.info("bootClient: starting transport")
         let transport = try await transportFactory()
         let client = HermesClient(transport: transport)
         do {
+            HermesLog.session.info("bootClient: sending ACP initialize")
             _ = try await client.initialize(
                 clientInfo: Implementation(name: clientInfo.name, version: clientInfo.version)
             )
+            HermesLog.session.info("bootClient: ACP initialize ok")
             return client
         } catch {
+            HermesLog.session.error("bootClient: initialize failed: \(String(describing: error), privacy: .public)")
             await client.close()
             throw error
         }

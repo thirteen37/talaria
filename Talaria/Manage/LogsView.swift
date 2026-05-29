@@ -93,11 +93,22 @@ struct LogsView: View {
 
     @State private var harness: LogsHarness?
     @State private var autoScroll: Bool = true
+    /// Distinguishes "provider hasn't been called yet" from "provider was
+    /// called and returned nil". Without this the iOS path (where
+    /// `makeTailing` always returns nil) would render a permanent spinner
+    /// in the iPad Browse → Logs surface.
+    @State private var providerAttempted = false
 
     var body: some View {
         Group {
             if let harness {
                 content(harness: harness)
+            } else if providerAttempted {
+                ContentUnavailableView(
+                    "Logs unavailable",
+                    systemImage: "doc.text",
+                    description: Text("No log tailer is available for this server on this platform.")
+                )
             } else {
                 ProgressView()
             }
@@ -112,6 +123,7 @@ struct LogsView: View {
             // point of the move out of @State.
             if harness == nil {
                 harness = provider()
+                providerAttempted = true
             }
         }
     }
@@ -122,6 +134,7 @@ struct LogsView: View {
     /// app's process environment > the user's login-shell HERMES_HOME (cached
     /// from `LoginShellPATHResolver`) > the `~/.hermes` default. SSH profiles
     /// are resolved at tail-time on the remote host and return nil here.
+    #if os(macOS)
     static func resolvedLocalHermesHome(profile: ServerProfile) -> String? {
         if let value = profile.hermesHome?.trimmingCharacters(in: .whitespacesAndNewlines),
            !value.isEmpty {
@@ -136,6 +149,7 @@ struct LogsView: View {
         }
         return (NSHomeDirectory() as NSString).appendingPathComponent(".hermes")
     }
+    #endif
 
     /// Built at window scope so the lazily-created `LogsHarness` outlives
     /// LogsView instances. For local profiles the path is resolved
