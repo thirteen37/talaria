@@ -1,0 +1,13 @@
+log_level: debug
+model:
+  default: sonnet
+  fallbacks:
+    - sonnet
+    - haiku
+agent:
+  max_turns: 10
+  retries: 3
+display:
+  theme: dark
+network:
+  port: 8080

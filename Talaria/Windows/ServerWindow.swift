@@ -10,6 +10,7 @@ enum BrowseDestination: Hashable {
     case doctor
     case updates
     case notifications
+    case profiles
 }
 
 struct ServerWindow: View {
@@ -163,6 +164,7 @@ struct ServerWindow: View {
                 browseRow("Skills", systemImage: "sparkles", destination: .skills, store: harness.store)
                 browseRow("Tools", systemImage: "wrench.and.screwdriver", destination: .tools, store: harness.store)
                 browseRow("Cron", systemImage: "calendar", destination: .cron, store: harness.store)
+                browseRow("Profiles", systemImage: "person.2", destination: .profiles, store: harness.store)
                 browseRow("Logs", systemImage: "doc.text", destination: .logs, store: harness.store)
                 browseRow("Doctor", systemImage: "stethoscope", destination: .doctor, store: harness.store)
                 browseRow("Updates", systemImage: "arrow.down.circle", destination: .updates, store: harness.store)
@@ -184,6 +186,7 @@ struct ServerWindow: View {
             case .skills: SkillsView(runner: harness.store.adminRunner)
             case .tools: ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
             case .cron: CronView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
+            case .profiles: ProfilesView(runner: harness.store.adminRunner, profile: harness.profile)
             case .logs:
                 LogsView(
                     runner: harness.store.adminRunner,
