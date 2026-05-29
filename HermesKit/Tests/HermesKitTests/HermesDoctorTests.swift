@@ -125,4 +125,86 @@ struct HermesDoctorTests {
         #expect(sections.count == 1)
         #expect(sections[0].body.contains("Nothing to report"))
     }
+
+    @Test
+    func suggestsFixDetectsTheTip() throws {
+        // The rich fixture ends with "Tip: run 'hermes doctor --fix' …".
+        let url = try #require(Bundle.module.url(forResource: "Fixtures/doctor-rich", withExtension: "txt"))
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #expect(HermesDoctor.suggestsFix(text))
+    }
+
+    @Test
+    func suggestsFixIsFalseWithoutTheTip() {
+        #expect(!HermesDoctor.suggestsFix("Everything looks fine.\nNothing to report."))
+    }
+
+    @Test
+    func runPopulatesSuggestsFixFromOutput() async throws {
+        let runner = RecordingAdminRunner(result: HermesAdminResult(
+            exitCode: 1,
+            stdout: "Found 1 issue.\n\nTip: run 'hermes doctor --fix' to auto-fix what's possible.\n",
+            stderr: ""
+        ))
+        let report = try await HermesDoctor.run(runner: runner)
+        #expect(report.suggestsFix)
+    }
+
+    @Test
+    func runFixIssuesFixSubcommandAndParses() async throws {
+        let runner = RecordingAdminRunner(result: HermesAdminResult(
+            exitCode: 0,
+            stdout: """
+            ◆ Security Advisories
+              Patched advisory CVE-1234.
+
+            ◆ Required Packages
+              Installed python-dotenv.
+            """,
+            stderr: ""
+        ))
+        let report = try await HermesDoctor.runFix(runner: runner)
+        #expect(runner.received == [["doctor", "--fix"]])
+        let titles = report.sections.map(\.title)
+        #expect(titles.contains("Security Advisories"))
+        #expect(titles.contains("Required Packages"))
+        #expect(report.exitCode == 0)
+    }
+
+    @Test
+    func runFixThrowsOnEmptyNonZeroOutput() async {
+        let runner = RecordingAdminRunner(result: HermesAdminResult(
+            exitCode: 2,
+            stdout: "",
+            stderr: "boom\n"
+        ))
+        do {
+            _ = try await HermesDoctor.runFix(runner: runner)
+            #expect(Bool(false), "runFix should have thrown")
+        } catch let error as HermesDoctorError {
+            if case .commandFailed = error {
+                // ok
+            } else {
+                #expect(Bool(false), "expected commandFailed, got \(error)")
+            }
+        } catch {
+            #expect(Bool(false), "unexpected error type \(error)")
+        }
+    }
+}
+
+/// Records the commands it receives so tests can assert on the arguments
+/// `HermesDoctor` issues, while returning canned output.
+private final class RecordingAdminRunner: HermesAdminRunning, @unchecked Sendable {
+    let result: HermesAdminResult
+    private(set) var received: [[String]] = []
+
+    init(result: HermesAdminResult) {
+        self.result = result
+    }
+
+    func run(_ command: HermesAdminCommand) async throws -> HermesAdminResult {
+        received.append(command.arguments)
+        return result
+    }
 }
