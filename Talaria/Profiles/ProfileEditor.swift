@@ -360,8 +360,26 @@ struct ProfileEditor: View {
         }
     }
 
+    /// Single source of truth for whether the current draft can be saved,
+    /// shared by the Save button's disabled state and `save()`.
+    ///
+    /// Password-auth profiles need a password available — either freshly typed
+    /// (`passwordInput`) or already stored in the Keychain
+    /// (`passwordKeychainReference`). They're saveable when content diverged
+    /// (`baseCanSave`) or a new password was entered (covers rotating just the
+    /// password on an otherwise-unchanged profile, which doesn't touch the
+    /// `ServerProfile`). Non-password drafts fall through to `baseCanSave`.
+    static func isSaveable(_ draft: ServerProfile, passwordInput: String, baseCanSave: Bool) -> Bool {
+        if draft.kind == .ssh, draft.authMethod == .password {
+            let hasPassword = !passwordInput.isEmpty || draft.passwordKeychainReference != nil
+            return hasPassword && (baseCanSave || !passwordInput.isEmpty)
+        }
+        return baseCanSave
+    }
+
     private func save(passwordInput: String = "") {
-        guard var draft = state.draft, canSave(draft) else { return }
+        guard var draft = state.draft,
+              Self.isSaveable(draft, passwordInput: passwordInput, baseCanSave: canSave(draft)) else { return }
         #if os(iOS)
         // Persist the typed password into the Keychain when the user opted
         // into password auth and entered a value. The draft only ever holds
@@ -524,7 +542,7 @@ private struct ProfileDetailView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Save") { onSave(passwordInput) }
-                    .disabled(!canSave && passwordInput.isEmpty)
+                    .disabled(!ProfileEditor.isSaveable(draft, passwordInput: passwordInput, baseCanSave: canSave))
                     .fontWeight(.semibold)
             }
         }
