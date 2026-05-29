@@ -33,11 +33,7 @@ final class ProfileDirectory {
     /// `Process` / no `OneShotProcess`), so the bundled local profile is
     /// hidden there to keep it out of profile lists and the launch fallback.
     var allProfiles: [ServerProfile] {
-        #if os(macOS)
-        return [Self.localProfile] + profiles
-        #else
-        return profiles
-        #endif
+        Platform.supportsLocalProfile ? [Self.localProfile] + profiles : profiles
     }
 
     func reload() async {
@@ -85,11 +81,7 @@ final class ProfileDirectory {
 
     func profile(id: UUID) -> ServerProfile? {
         if id == Self.localProfileID {
-            #if os(macOS)
-            return Self.localProfile
-            #else
-            return nil
-            #endif
+            return Platform.supportsLocalProfile ? Self.localProfile : nil
         }
         return profiles.first(where: { $0.id == id })
     }

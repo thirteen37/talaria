@@ -164,7 +164,8 @@ struct SessionsSidebar: View {
 
     /// Sidebar row showing the active profile's name with a menu that
     /// lists every known profile. Selecting one swaps the window's harness
-    /// in-place via the closure passed in from `ServerWindow`.
+    /// in-place via the closure passed in from the host window
+    /// (`DesktopServerWindow` / `PhoneServerWindow`).
     private struct ProfileHeader: View {
         let current: ServerProfile
         let profiles: [ServerProfile]

@@ -261,7 +261,6 @@ struct DoctorView: View {
     }
 
     private func copyBundle(_ report: DoctorReport) {
-        #if os(macOS)
         let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         let summary = """
         Talaria \(appVersion)
@@ -270,8 +269,6 @@ struct DoctorView: View {
 
         \(report.raw)
         """
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(summary, forType: .string)
-        #endif
+        Pasteboard.copy(summary)
     }
 }

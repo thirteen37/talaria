@@ -62,6 +62,49 @@ public func buildHermesRemoteCommand(profile: ServerProfile) -> String {
     )
 }
 
+/// Builds the **fully wrapped** remote shell line that launches a `hermes`
+/// *admin* subcommand (`sessions`, `doctor`, `tools`, …) over SSH. This is the
+/// single source of truth shared by the system-ssh `RemoteHermesAdminRunner`
+/// (macOS) and the `#if`-free `NIOSSHHermesAdminRunner`, so both transports
+/// send byte-identical command lines.
+///
+/// The shape is `env COLUMNS=400 [HERMES_HOME=…] <hermesPath> <args…>` then
+/// run through the profile's shell wrapper. `COLUMNS=400` is always set: Rich
+/// on the remote falls back to an 80-col layout under non-interactive ssh,
+/// which truncates table cells (skill names, tool descriptions) into
+/// ellipsis-suffixed strings the parsers can't recover from. Folding COLUMNS
+/// into the same env prefix `HERMES_HOME` uses keeps the quoting in one place.
+public func buildHermesAdminRemoteCommand(
+    hermesPath: String,
+    hermesHome: String?,
+    arguments: [String],
+    remoteShellMode: RemoteShellMode,
+    remoteShellPrefix: String?
+) -> String {
+    var envAssignments: [String] = ["COLUMNS=400"]
+    if let hermesHome, !hermesHome.isEmpty {
+        envAssignments.append("HERMES_HOME=\(hermesHome)")
+    }
+    var remoteParts: [String] = ["env"]
+    remoteParts += envAssignments.map { ShellQuoting.shellQuote($0) }
+    remoteParts.append(ShellQuoting.shellQuote(hermesPath))
+    remoteParts += arguments.map { ShellQuoting.shellQuote($0) }
+    let inner = remoteParts.joined(separator: " ")
+    return remoteShellMode.wrap(command: inner, customPrefix: remoteShellPrefix)
+}
+
+/// Convenience overload that pulls the admin-command knobs off a
+/// ``ServerProfile`` and a ``HermesAdminCommand``.
+public func buildHermesAdminRemoteCommand(profile: ServerProfile, command: HermesAdminCommand) -> String {
+    buildHermesAdminRemoteCommand(
+        hermesPath: profile.hermesPath,
+        hermesHome: profile.hermesHome,
+        arguments: command.arguments,
+        remoteShellMode: profile.remoteShellMode,
+        remoteShellPrefix: profile.remoteShellPrefix
+    )
+}
+
 /// Returns the shell expression that, when evaluated by the remote shell,
 /// resolves to the Hermes home directory the Logs view should tail. The
 /// returned string is meant to be embedded inside a double-quoted shell

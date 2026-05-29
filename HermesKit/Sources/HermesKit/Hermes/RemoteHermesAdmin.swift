@@ -95,25 +95,10 @@ public struct RemoteHermesAdminRunner: HermesAdminRunning {
         let destination = profile.user.map { "\($0)@\(host)" } ?? host
         sshArgs += ["--", destination]
 
-        // Always start with `env COLUMNS=400 …`. Rich on the remote falls back
-        // to an 80-col layout under non-interactive ssh, which truncates table
-        // cells (skill names, tool descriptions) into ellipsis-suffixed strings
-        // the parsers can't recover from. Folding COLUMNS into the same env
-        // prefix HERMES_HOME uses keeps the quoting logic in one place.
-        var envAssignments: [String] = ["COLUMNS=400"]
-        if let hermesHome = profile.hermesHome, !hermesHome.isEmpty {
-            envAssignments.append("HERMES_HOME=\(hermesHome)")
-        }
-        var remoteParts: [String] = ["env"]
-        remoteParts += envAssignments.map { SSHTransport.shellQuote($0) }
-        remoteParts.append(SSHTransport.shellQuote(profile.hermesPath))
-        remoteParts += command.arguments.map { SSHTransport.shellQuote($0) }
-        let inner = remoteParts.joined(separator: " ")
-        // Honor the profile's shell mode so users on hosts where ssh's
-        // non-interactive PATH doesn't see `hermes` can opt into a login
-        // shell wrapper (`bash -lc '...'`).
-        let wrapped = profile.remoteShellMode.wrap(command: inner, customPrefix: profile.remoteShellPrefix)
-        sshArgs.append(wrapped)
+        // The wrapped `env COLUMNS=400 [HERMES_HOME=…] <hermesPath> <args…>`
+        // remote line is built by the shared `buildHermesAdminRemoteCommand`
+        // so the NIO-SSH admin runner sends a byte-identical command.
+        sshArgs.append(buildHermesAdminRemoteCommand(profile: profile, command: command))
         return sshArgs
     }
 }

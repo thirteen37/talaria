@@ -85,7 +85,7 @@ final class SessionsStore {
         manager: SessionManager,
         adminRunner: HermesAdminRunning? = nil,
         dashboardClient: DashboardClient? = nil,
-        defaultCwd: String = SessionsStore.defaultHomeDirectory(),
+        defaultCwd: String = Platform.defaultHomeDirectory(),
         cwdStore: SessionsCwdStore = SessionsCwdStore(),
         isAwaitingUserInput: @escaping @MainActor @Sendable () -> Bool = { false }
     ) {
@@ -95,19 +95,6 @@ final class SessionsStore {
         self.defaultCwd = defaultCwd
         self.cwdStore = cwdStore
         self.isAwaitingUserInput = isAwaitingUserInput
-    }
-
-    /// `FileManager.homeDirectoryForCurrentUser` is unavailable on iOS — the
-    /// app sandbox makes a per-user home meaningless there. iOS is remote-only,
-    /// so the cwd lives on the remote host: returning `"~"` lets the remote
-    /// shell expand it to whichever home the SSH login lands in, rather than
-    /// shipping a local sandbox path the remote can't `cd` into.
-    static func defaultHomeDirectory() -> String {
-        #if os(macOS)
-        return FileManager.default.homeDirectoryForCurrentUser.path
-        #else
-        return "~"
-        #endif
     }
 
     /// Upper bound on opening a session. The SSH connect already has its own

@@ -23,9 +23,9 @@ public enum HermesProbeError: Error, Equatable, Sendable {
 
 #if os(macOS)
 public enum HermesProbe {
-    /// Minimum Hermes version we consider ACP-capable. Sprint 6 finalizes the
-    /// real pin; for Sprint 4 we just record what we observed.
-    public static let minimumACPVersion = HermesVersion(major: 0, minor: 0, patch: 0)
+    /// Minimum Hermes version we consider ACP-capable. Canonical value lives in
+    /// the shared ``HermesProbeOutputParser`` so the NIO path agrees.
+    public static let minimumACPVersion = HermesProbeOutputParser.minimumACPVersion
 
     public static func probe(profile: ServerProfile, timeout: TimeInterval = 10) async throws -> HermesProbeResult {
         let result: OneShotProcess.Result
@@ -48,33 +48,16 @@ public enum HermesProbe {
         return try parse(stdout: result.stdout)
     }
 
-    /// Visible for testing — parses the captured stdout produced by
-    /// `command -v hermes; hermes --version` (or the SSH equivalent).
+    /// Visible for testing — forwards to the shared ``HermesProbeOutputParser``
+    /// so macOS and the NIO path parse identically.
     static func parse(stdout: String) throws -> HermesProbeResult {
-        let lines = stdout
-            .split(whereSeparator: { $0.isNewline })
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        guard lines.count >= 2 else {
-            throw HermesProbeError.versionUnparseable(stdout)
-        }
-        let binaryPath = lines[0]
-        let versionLine = lines[1]
-        guard let version = HermesVersion(versionLine) else {
-            throw HermesProbeError.versionUnparseable(versionLine)
-        }
-        return HermesProbeResult(
-            binaryPath: binaryPath,
-            version: version,
-            versionRaw: versionLine,
-            acpSupported: version >= minimumACPVersion
-        )
+        try HermesProbeOutputParser.parse(stdout: stdout)
     }
 
     private static func runLocal(profile: ServerProfile, timeout: TimeInterval) async throws -> OneShotProcess.Result {
         // Run via the user's login shell so PATH-resolution / shell-builtins
         // behave the same way the user would expect from Terminal.
-        let script = makeProbeScript(hermesPath: profile.hermesPath)
+        let script = HermesProbeOutputParser.makeProbeScript(hermesPath: profile.hermesPath)
         do {
             return try await OneShotProcess.run(
                 executableURL: URL(fileURLWithPath: "/bin/sh"),
@@ -91,7 +74,7 @@ public enum HermesProbe {
         guard let host = profile.host, !host.isEmpty else {
             throw HermesProbeError.probeFailed("profile has no host")
         }
-        let script = makeProbeScript(hermesPath: profile.hermesPath)
+        let script = HermesProbeOutputParser.makeProbeScript(hermesPath: profile.hermesPath)
         var arguments = [
             "-T",
             "-o", "BatchMode=yes",
@@ -125,15 +108,6 @@ public enum HermesProbe {
         } catch let failure as OneShotProcess.Failure {
             throw HermesProbeError.probeFailed(String(describing: failure))
         }
-    }
-
-    private static func makeProbeScript(hermesPath: String) -> String {
-        // `command -v` prints the resolved path; `<bin> --version` prints e.g.
-        // "hermes 0.4.2". Output lands on stdout in that order, separated by a
-        // newline. `set -e` keeps us from reporting a parseable version when
-        // the binary wasn't found.
-        let quoted = SSHTransport.shellQuote(hermesPath)
-        return "set -e; command -v \(quoted); \(quoted) --version"
     }
 }
 #endif

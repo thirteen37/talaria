@@ -7,20 +7,9 @@ struct PermissionPrompt: View {
     let cancel: () -> Void
 
     var body: some View {
-        #if os(macOS)
-        promptBody
-            .padding(20)
-            .frame(minWidth: 460, idealWidth: 560, maxWidth: 680)
-        #else
-        // On iPhone the fixed 460pt minimum overflows the ~390pt screen and
-        // clips the prompt. Fill the sheet width and scroll vertically so a
-        // tall diff/content payload stays reachable.
-        ScrollView {
-            promptBody
-                .padding(20)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        #endif
+        // macOS: fixed comfortably-wide frame. iOS: scrollable, fills the sheet
+        // width so a tall payload stays reachable on a phone-sized screen.
+        promptBody.permissionPromptLayout()
     }
 
     private var promptBody: some View {

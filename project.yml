@@ -19,6 +19,10 @@ targets:
       - path: Talaria
         excludes:
           - "Info-iOS.plist"
+          # Convention: any `iOS/` folder under Talaria/ is iOS-target-only.
+          # Lets seam files define the same symbol in macOS/ and iOS/ folders
+          # without a collision (only one compiles per target) — no `#if`.
+          - "**/iOS/**"
     dependencies:
       - package: HermesKit
       - package: Sparkle
@@ -53,6 +57,9 @@ targets:
         excludes:
           - "Info.plist"
           - "Talaria.entitlements"
+          # Convention: any `macOS/` folder under Talaria/ is macOS-target-only.
+          # Mirror of the macOS target's `**/iOS/**` exclude — see that note.
+          - "**/macOS/**"
     dependencies:
       - package: HermesKit
     scheme:
