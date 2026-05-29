@@ -15,10 +15,18 @@ final class LogsHarness {
     /// Server-side level filter applied via `/api/logs?level=`. Empty string
     /// means "all levels" — the dashboard treats absent / blank as no filter.
     var levelFilter: String = ""
-    /// Server-side component filter, sent as `component=`.
+    /// Draft component filter bound to the text field. Free text, so it's
+    /// only applied to the poll on submit (see `appliedComponentFilter`) —
+    /// applying mid-type would let a background poll fetch a partially-typed
+    /// filter's tail and corrupt the diff against the last snapshot.
     var componentFilter: String = ""
-    /// Server-side substring search, sent as `search=`.
+    /// Draft substring search bound to the text field; applied on submit.
     var searchFilter: String = ""
+    /// Committed filters the poll actually sends. Updated from the drafts by
+    /// `applyTextFilters()` on submit. The Level picker commits immediately
+    /// instead because it's a discrete menu, not free text.
+    private var appliedComponentFilter: String = ""
+    private var appliedSearchFilter: String = ""
     /// Active log file name, defaults to whatever the dashboard returns
     /// (typically `agent`). Surfaced read-only because Hermes' log layout
     /// isn't user-configurable today.
@@ -61,6 +69,13 @@ final class LogsHarness {
         lastSnapshotLines.removeAll()
     }
 
+    /// Promotes the draft component/search text to the committed filters the
+    /// poll sends. Call on submit, paired with `clear()` + a refresh.
+    func applyTextFilters() {
+        appliedComponentFilter = componentFilter
+        appliedSearchFilter = searchFilter
+    }
+
     func refreshNow() async {
         await poll()
     }
@@ -72,8 +87,8 @@ final class LogsHarness {
                 file: nil,
                 lines: tailLines,
                 level: levelFilter.isEmpty ? nil : levelFilter,
-                component: componentFilter.isEmpty ? nil : componentFilter,
-                search: searchFilter.isEmpty ? nil : searchFilter
+                component: appliedComponentFilter.isEmpty ? nil : appliedComponentFilter,
+                search: appliedSearchFilter.isEmpty ? nil : appliedSearchFilter
             )
             file = response.file
             // The dashboard returns the most-recent tail on every poll. Diff
@@ -81,7 +96,7 @@ final class LogsHarness {
             // time is "new" and gets appended. This handles both append-only
             // (steady state) and log-rotated (full reset) cases without
             // round-trips for cursor state.
-            let newLines = Self.suffix(of: response.lines, after: lastSnapshotLines)
+            let newLines = TailDiff.newSuffix(of: response.lines, after: lastSnapshotLines)
             for raw in newLines {
                 entries.append(Entry(id: nextID, text: raw))
                 nextID += 1
@@ -96,27 +111,6 @@ final class LogsHarness {
         }
     }
 
-    /// Returns the lines from `current` that weren't already in `previous`,
-    /// accounting for the dashboard returning a fixed-size tail window that
-    /// slides as new lines land. Algorithm: find the largest `offset` such
-    /// that `previous.dropFirst(offset)` equals `current.prefix(of the same
-    /// length)`; new lines are everything in `current` after that. Falls
-    /// back to "treat as full reset" when no overlap is found (log rotation,
-    /// filter change, fresh start).
-    static func suffix(of current: [String], after previous: [String]) -> [String] {
-        if previous.isEmpty { return current }
-        if current.isEmpty { return [] }
-        for offset in 0..<previous.count {
-            let trailingLen = previous.count - offset
-            if current.count < trailingLen { continue }
-            let previousTail = previous[offset...]
-            let currentHead = current[..<trailingLen]
-            if Array(previousTail) == Array(currentHead) {
-                return Array(current[trailingLen...])
-            }
-        }
-        return current
-    }
 }
 
 struct LogsView: View {
@@ -227,6 +221,7 @@ struct LogsView: View {
             .textFieldStyle(.roundedBorder)
             .frame(maxWidth: 180)
             .onSubmit {
+                harness.applyTextFilters()
                 harness.clear()
                 Task { await harness.refreshNow() }
             }
@@ -238,6 +233,7 @@ struct LogsView: View {
             .textFieldStyle(.roundedBorder)
             .frame(maxWidth: 200)
             .onSubmit {
+                harness.applyTextFilters()
                 harness.clear()
                 Task { await harness.refreshNow() }
             }

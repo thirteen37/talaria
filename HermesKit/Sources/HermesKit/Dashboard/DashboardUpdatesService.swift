@@ -52,20 +52,22 @@ public struct DashboardUpdatesService: Sendable {
             let task = Task {
                 do {
                     // Seed from the pre-start tail so a previous run's leftover
-                    // lines aren't replayed as if they belonged to this run —
-                    // `POST /api/hermes/update` doesn't necessarily clear the
-                    // action buffer. Best-effort: if the pre-start probe fails
-                    // we start from 0 and accept the (rare) replay rather than
-                    // aborting the update.
-                    var seenLineCount = (try? await client.getUpdateActionStatus())?.lines.count ?? 0
+                    // lines aren't replayed as if they belonged to this run.
+                    // Diff against the previous full snapshot rather than a fixed
+                    // offset: `POST /api/hermes/update` may either append to the
+                    // existing buffer or reset it for the new run. `TailDiff`
+                    // handles both — a reset shows up as no overlap and emits the
+                    // new run's lines from the start instead of stalling until
+                    // the line count climbs past the old total.
+                    var previousLines = (try? await client.getUpdateActionStatus())?.lines ?? []
                     try await client.startHermesUpdate()
                     while !Task.isCancelled {
                         let status = try await client.getUpdateActionStatus()
-                        let newLines = Array(status.lines.dropFirst(seenLineCount))
+                        let newLines = TailDiff.newSuffix(of: status.lines, after: previousLines)
                         if !newLines.isEmpty {
                             continuation.yield(.logLines(newLines))
-                            seenLineCount = status.lines.count
                         }
+                        previousLines = status.lines
                         if !status.running {
                             let code = status.exitCode.map { Int32($0) }
                             continuation.yield(.finished(exitCode: code))

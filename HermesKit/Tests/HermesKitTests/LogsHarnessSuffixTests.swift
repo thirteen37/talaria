@@ -1,18 +1,17 @@
-// This file lives in the HermesKit test bundle for test-runner convenience
-// (the Talaria target doesn't ship Swift Testing yet), and re-implements
-// the `suffix(of:after:)` algorithm so the unit tests don't need to import
-// the Talaria module. If the algorithm in `LogsHarness` drifts, update the
-// copy here in lockstep.
+// Tests the shared `TailDiff.newSuffix(of:after:)` used by both the Logs tail
+// poll (`LogsHarness`) and the update-action log poll
+// (`DashboardUpdatesService`).
 import Foundation
 import Testing
+@testable import HermesKit
 
 @Suite
-struct LogsHarnessSuffixTests {
+struct TailDiffTests {
     @Test
     func steadyStateAppendReturnsOnlyNewTail() {
         let previous = ["A", "B", "C", "D", "E"]
         let current = ["A", "B", "C", "D", "E", "F"]
-        #expect(suffix(of: current, after: previous) == ["F"])
+        #expect(TailDiff.newSuffix(of: current, after: previous) == ["F"])
     }
 
     @Test
@@ -23,53 +22,46 @@ struct LogsHarnessSuffixTests {
         // on every poll.
         let previous = ["A", "B", "C", "D", "E"]
         let current = ["B", "C", "D", "E", "F"]
-        #expect(suffix(of: current, after: previous) == ["F"])
+        #expect(TailDiff.newSuffix(of: current, after: previous) == ["F"])
     }
 
     @Test
     func slidingWindowWithMultipleNewLines() {
         let previous = ["A", "B", "C", "D", "E"]
         let current = ["C", "D", "E", "F", "G"]
-        #expect(suffix(of: current, after: previous) == ["F", "G"])
+        #expect(TailDiff.newSuffix(of: current, after: previous) == ["F", "G"])
     }
 
     @Test
     func noChangeReturnsEmpty() {
         let lines = ["A", "B", "C"]
-        #expect(suffix(of: lines, after: lines) == [])
+        #expect(TailDiff.newSuffix(of: lines, after: lines) == [])
     }
 
     @Test
     func unrelatedTailIsTreatedAsFullReset() {
         let previous = ["X", "Y", "Z"]
         let current = ["A", "B", "C"]
-        #expect(suffix(of: current, after: previous) == ["A", "B", "C"])
+        #expect(TailDiff.newSuffix(of: current, after: previous) == ["A", "B", "C"])
+    }
+
+    @Test
+    func bufferResetToShorterRunEmitsTheNewRunFromStart() {
+        // The update-action case: a new run resets the buffer to fewer lines
+        // than the previous run had. A fixed `dropFirst(oldCount)` would yield
+        // nothing; the overlap diff treats it as a reset and emits the new run.
+        let previous = ["old1", "old2", "old3", "old4", "old5"]
+        let current = ["new1", "new2"]
+        #expect(TailDiff.newSuffix(of: current, after: previous) == ["new1", "new2"])
     }
 
     @Test
     func emptyPreviousReturnsAllOfCurrent() {
-        #expect(suffix(of: ["A", "B"], after: []) == ["A", "B"])
+        #expect(TailDiff.newSuffix(of: ["A", "B"], after: []) == ["A", "B"])
     }
 
     @Test
     func emptyCurrentReturnsEmpty() {
-        #expect(suffix(of: [], after: ["A", "B"]) == [])
-    }
-
-    // Mirror of `Talaria.LogsHarness.suffix(of:after:)` — kept here so the
-    // algorithm is unit-testable without importing the app target.
-    private func suffix(of current: [String], after previous: [String]) -> [String] {
-        if previous.isEmpty { return current }
-        if current.isEmpty { return [] }
-        for offset in 0..<previous.count {
-            let trailingLen = previous.count - offset
-            if current.count < trailingLen { continue }
-            let previousTail = previous[offset...]
-            let currentHead = current[..<trailingLen]
-            if Array(previousTail) == Array(currentHead) {
-                return Array(current[trailingLen...])
-            }
-        }
-        return current
+        #expect(TailDiff.newSuffix(of: [], after: ["A", "B"]) == [])
     }
 }

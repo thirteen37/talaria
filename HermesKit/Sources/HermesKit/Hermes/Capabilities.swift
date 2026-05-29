@@ -5,11 +5,13 @@ public enum HermesCapability: String, CaseIterable, Codable, Sendable {
     case permissions
     case diffs
     case toolsEnablePerPlatform
-    /// `hermes dashboard` HTTP API on `127.0.0.1`. Hard prerequisite for
-    /// every non-chat surface (Sessions, Updates, Skills, Cron, Logs) since
-    /// dashboard mode is mandatory in this release. Older Hermes installs
-    /// are refused at profile-load with a clear upgrade message; a fallback
-    /// to the CLI/SQLite scrapers no longer exists.
+    /// `hermes dashboard` HTTP API on `127.0.0.1`. Prerequisite for every
+    /// non-chat surface (Sessions, Updates, Skills, Cron, Logs) since dashboard
+    /// mode is mandatory in this release — there's no CLI/SQLite scraper
+    /// fallback. Not enforced at profile-load: a profile on older Hermes still
+    /// loads and chat still works over ACP, but the dashboard surfaces show a
+    /// `capabilityBanner` warning and remain on their "connecting…" placeholder
+    /// because the spawn fails. (No hard upgrade gate today.)
     case requiresDashboard
 }
 
@@ -50,8 +52,9 @@ public struct CapabilityTable: Sendable {
         .toolsEnablePerPlatform: HermesVersion(major: 0, minor: 4, patch: 0),
         // FastAPI dashboard (`hermes dashboard` / `web_server.py`) verified
         // live against a running instance reporting version 0.14.0 / release
-        // 2026.5.16. Hard prerequisite — Talaria refuses to load profiles
-        // running older Hermes.
+        // 2026.5.16. Consulted only by `capabilityBanner` for the per-surface
+        // warning — not a profile-load gate; an older-Hermes profile still
+        // loads, its dashboard surfaces just won't come online.
         .requiresDashboard: HermesVersion(major: 0, minor: 14, patch: 0),
     ]
 }
