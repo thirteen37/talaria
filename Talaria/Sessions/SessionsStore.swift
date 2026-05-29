@@ -42,19 +42,25 @@ final class SessionsStore {
     /// decide whether a completion should invalidate the snapshot.
     private var toolKinds: [SessionId: [ToolCallId: ToolKind]] = [:]
     private let cwdStore: SessionsCwdStore
+    /// Returns true while the open is blocked on interactive user input (the
+    /// host-key trust prompt). The open timeout pauses while this is true so
+    /// a slow fingerprint comparison doesn't trip the "handshake" deadline.
+    private let isAwaitingUserInput: @MainActor @Sendable () -> Bool
 
     init(
         manager: SessionManager,
         adminRunner: HermesAdminRunning? = nil,
         snapshot: RemoteSnapshot? = nil,
         defaultCwd: String = SessionsStore.defaultHomeDirectory(),
-        cwdStore: SessionsCwdStore = SessionsCwdStore()
+        cwdStore: SessionsCwdStore = SessionsCwdStore(),
+        isAwaitingUserInput: @escaping @MainActor @Sendable () -> Bool = { false }
     ) {
         self.manager = manager
         self.adminRunner = adminRunner
         self.snapshot = snapshot
         self.defaultCwd = defaultCwd
         self.cwdStore = cwdStore
+        self.isAwaitingUserInput = isAwaitingUserInput
     }
 
     /// `FileManager.homeDirectoryForCurrentUser` is unavailable on iOS — the
@@ -84,7 +90,7 @@ final class SessionsStore {
         openingCount += 1
         defer { openingCount -= 1 }
         do {
-            let state = try await Self.withTimeout(Self.openTimeout) {
+            let state = try await Self.withTimeout(Self.openTimeout, isPaused: isAwaitingUserInput) {
                 try await self.manager.openNew(cwd: workingDir)
             }
             cwdStore.record(id: state.id, cwd: state.cwd)
@@ -113,14 +119,28 @@ final class SessionsStore {
     /// cancelled (HermesClient's request path honors cancellation) and a
     /// descriptive error is thrown so the UI shows something actionable
     /// instead of spinning silently.
+    ///
+    /// `isPaused` lets the deadline stop advancing while the open is blocked on
+    /// interactive input (the host-key trust prompt) — otherwise a user who
+    /// takes >`seconds` to compare a fingerprint would trip the timeout and
+    /// tear down a connection they're about to trust.
     static func withTimeout<T: Sendable>(
         _ seconds: TimeInterval,
+        isPaused: @escaping @MainActor @Sendable () -> Bool = { false },
         _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         try await withThrowingTaskGroup(of: T.self) { group in
             group.addTask { try await operation() }
             group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                let tick: TimeInterval = 0.25
+                var remaining = seconds
+                while remaining > 0 {
+                    try await Task.sleep(nanoseconds: UInt64(tick * 1_000_000_000))
+                    // Don't count time spent waiting on the user's trust
+                    // decision — that's interactive wait, not a stalled host.
+                    if await isPaused() { continue }
+                    remaining -= tick
+                }
                 throw TransportError.processDidNotStart(
                     "Connected, but the server didn't complete the Hermes handshake within \(Int(seconds))s. "
                     + "Check that `hermes acp` runs on the server for this profile's shell."
@@ -150,7 +170,7 @@ final class SessionsStore {
 
         let workingDir = cwdStore.cwd(for: summary.id) ?? summary.cwd ?? defaultCwd
         do {
-            let state = try await Self.withTimeout(Self.openTimeout) {
+            let state = try await Self.withTimeout(Self.openTimeout, isPaused: isAwaitingUserInput) {
                 try await self.manager.openExisting(id: summary.id, cwd: workingDir)
             }
             cwdStore.record(id: state.id, cwd: state.cwd)

@@ -44,9 +44,13 @@ struct ServerWindow: View {
             await rebuildHarness()
         }
         #if os(iOS)
-        // React when servers are added/removed/edited so a freshly saved
-        // server becomes the active one without an app relaunch.
+        // Auto-build only when no server is active yet (the no-server empty
+        // state), so saving the first server connects without a relaunch.
+        // Rebuilding while a harness is live would construct a fresh store
+        // with no open sessions and drop the in-progress chat, so an existing
+        // harness is left in place; profile edits apply on next launch.
         .onChange(of: directory.profiles) { _, _ in
+            guard harness == nil else { return }
             Task { await rebuildHarness() }
         }
         // Attached at body level so the no-server empty state (which has no
@@ -608,7 +612,14 @@ final class ServerWindowHarness {
         let admin = remoteAdminRunner(for: profile)
         let snapshot = RemoteSnapshot(profile: profile, transfer: snapshotTransfer, commandRunner: snapshotCommandRunner)
         let snapshotPath = snapshot.localPath()
-        let store = SessionsStore(manager: manager, adminRunner: admin, snapshot: snapshot)
+        let store = SessionsStore(
+            manager: manager,
+            adminRunner: admin,
+            snapshot: snapshot,
+            // Pause the open timeout while the trust prompt is up so a slow
+            // fingerprint comparison doesn't tear down the pending connection.
+            isAwaitingUserInput: { hostKeyCoordinator.pending != nil }
+        )
         // Open the DB only if the snapshot file already exists from a prior
         // session. Otherwise wait for `refreshDB()` after the first fetch.
         let db: HermesDB?
