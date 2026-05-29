@@ -40,6 +40,14 @@ final class LogsHarness {
     private var nextID: Int = 0
     private var lastSnapshotLines: [String] = []
     private var task: Task<Void, Never>?
+    /// Single-flight epoch. The background loop and `refreshNow()` (Refresh
+    /// button, Level picker, filter submits) are independent pollers; without
+    /// this, two polls overlapping across the `getLogs` round-trip can both
+    /// diff against the same snapshot and double-append, and a poll resolving
+    /// after a `clear()` can re-append lines fetched under the old filter.
+    /// Each poll bumps this at start and discards its result if a newer poll
+    /// (or a `clear()`) bumped it again — latest wins.
+    private var pollGeneration: Int = 0
     private let client: DashboardClient
     private let pollInterval: TimeInterval
 
@@ -67,6 +75,9 @@ final class LogsHarness {
     func clear() {
         entries.removeAll()
         lastSnapshotLines.removeAll()
+        // Invalidate any in-flight poll so its (now stale, possibly
+        // old-filter) result doesn't repopulate the just-cleared buffer.
+        pollGeneration += 1
     }
 
     /// Promotes the draft component/search text to the committed filters the
@@ -82,6 +93,8 @@ final class LogsHarness {
 
     private func poll() async {
         if paused { return }
+        pollGeneration += 1
+        let generation = pollGeneration
         do {
             let response = try await client.getLogs(
                 file: nil,
@@ -90,6 +103,10 @@ final class LogsHarness {
                 component: appliedComponentFilter.isEmpty ? nil : appliedComponentFilter,
                 search: appliedSearchFilter.isEmpty ? nil : appliedSearchFilter
             )
+            // A newer poll (or a clear()) superseded us while awaiting — drop
+            // this result rather than diff/append against a snapshot that's
+            // moved on, which is what produces duplicate / stale-filter rows.
+            guard generation == pollGeneration else { return }
             file = response.file
             // The dashboard returns the most-recent tail on every poll. Diff
             // against the last snapshot — anything that wasn't there last
@@ -107,6 +124,9 @@ final class LogsHarness {
             lastSnapshotLines = response.lines
             lastError = nil
         } catch {
+            // Same single-flight guard: don't let a superseded poll's error
+            // overwrite the latest poll's state.
+            guard generation == pollGeneration else { return }
             lastError = error.localizedDescription
         }
     }
