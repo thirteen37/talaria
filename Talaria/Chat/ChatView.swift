@@ -52,6 +52,11 @@ struct ChatView: View {
             )
         }
         .navigationTitle("Chat")
+        #if os(iOS)
+        // Inline title keeps the chat's vertical space for the transcript
+        // instead of the tall large-title header.
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .sheet(item: $viewModel.pendingPermission) { permission in
             PermissionPrompt(
                 state: permission,

@@ -81,17 +81,20 @@ struct SessionsSidebar: View {
         Button {
             store.selection = session.id
         } label: {
-            HStack(spacing: 8) {
-                statusDot(for: session.id)
-                VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 8) {
+                    statusDot(for: session.id)
                     Text(session.title ?? shortId(session.id))
                         .lineLimit(1)
-                    Text((session.cwd as NSString).lastPathComponent)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    Spacer()
                 }
-                Spacer()
+                Text((session.cwd as NSString).lastPathComponent)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    // Indent under the title (dot width + HStack spacing) so
+                    // the subtitle lines up with the session name, not the dot.
+                    .padding(.leading, 16)
             }
             .contentShape(Rectangle())
         }
