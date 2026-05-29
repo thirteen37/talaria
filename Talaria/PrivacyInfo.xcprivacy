@@ -12,20 +12,6 @@
 	<array>
 		<dict>
 			<key>NSPrivacyAccessedAPIType</key>
-			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
-			<key>NSPrivacyAccessedAPITypeReasons</key>
-			<array>
-				<!-- 0A2A.1 — "Display to person, with active intent."
-				     state.db mtime is read from the user-configured hermesHome
-				     path (e.g. ~/.local/share/hermes) and rendered as the
-				     snapshot age badge in the Sessions sidebar. C617.1
-				     would imply the path is inside the app container,
-				     which is not true here. -->
-				<string>0A2A.1</string>
-			</array>
-		</dict>
-		<dict>
-			<key>NSPrivacyAccessedAPIType</key>
 			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
 			<key>NSPrivacyAccessedAPITypeReasons</key>
 			<array>

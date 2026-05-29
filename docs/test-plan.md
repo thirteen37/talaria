@@ -10,31 +10,30 @@ Run this script before a v1 release candidate.
 6. Resume the same session from the sessions browser.
 7. Rename and delete a session through the app.
 8. **Doctor view**: open Manage → Doctor, click *Run Doctor*. Confirm:
+   - Prerequisite cards show Hermes `>= 0.14.0` and dashboard reachability.
    - Output renders in collapsible sections (headers recognised: `== Title ==`, `--- Title ---`, ALL-CAPS standalone titles).
    - Exit code is displayed next to the title bar.
    - *Copy bundle* puts raw report + Talaria version + profile summary on the clipboard.
 9. **Skills view**: open Manage → Skills. Confirm:
-   - Rows from `hermes skills list` render in the table with name, enabled toggle, path.
+   - Rows from the dashboard render in the table with name, enabled toggle, and path/source metadata.
    - Toggling a skill flips the enabled state on the next refresh.
-   - Selecting a row populates the right-hand markdown preview with `hermes skills show <name>`.
 10. **Tools view**: open Manage → Tools. Confirm:
     - Rows from `hermes tools list` render with name, platform, enabled toggle.
     - Toggling persists across a manual *Refresh*.
 11. **Cron view**: open Manage → Cron. Confirm:
-    - `hermes cron list` rows appear left, editor right.
+    - Dashboard cron rows appear left, editor right.
     - *Add* creates a job; editor saves a change; *Pause/Resume* toggle works; *Run Now* succeeds; *Delete* removes the row.
-    - If `hermes cron add/update/delete` returns `unknown command`, the banner reads "Cron CRUD unavailable in this Hermes version." and no `jobs.json` side-write occurs.
+    - Profiles below Hermes `0.14.0` show the dashboard-required banner instead of a broken editor.
 12. **Logs view**: open Manage → Logs. Confirm:
-    - With another chat turn running in a different window, lines arrive live.
+    - With another chat turn running in a different window, polled dashboard log lines arrive.
     - Level + component filters narrow the view.
-    - *Pause* halts the stream; resuming continues from the live tail.
-    - Closing the view terminates the underlying child process — verify with `ps` that no orphan `tail -F` (remote) or polling task (local) lingers.
+    - *Pause* halts polling; resuming continues from the latest tail window without duplicating old lines.
 13. **Updates view**: open Manage → Updates. Confirm:
-    - Banner reflects `hermes update --check` (gray = up to date, accent = available).
-    - *Install update* streams progress lines into the scrolling log and ends with the exit-code summary.
+    - Banner reflects dashboard `/api/status` update state.
+    - *Install update* starts the dashboard update action, polls action status, and appends only new log lines.
     - Button is disabled when no update is available.
-14. **Snapshot invalidation**: with a remote profile open, toggle a skill/tool (admin write) and confirm the SSH snapshot age badge does **not** refresh (skills/tools writes don't touch `state.db`); rename or delete a session and confirm the badge resets.
-15. Open an SSH profile, refresh the remote SQLite snapshot, and confirm the snapshot age badge updates. Repeat steps 8–13 against the remote profile and confirm `SSHTransport.classifyStderr` surfaces "Permission denied" / "Connection timed out" correctly when the host is misconfigured.
+14. **Dashboard lifecycle**: open two windows for the same profile and confirm they share one `hermes dashboard` process. Close both and verify the child exits.
+15. Open an SSH profile and repeat steps 8–13 against the remote profile. Confirm dashboard startup failures surface useful messages for missing `[web]`, auth failure, and connection timeout.
 
 ## Release artifact verification
 

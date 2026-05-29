@@ -1,6 +1,6 @@
 # Security
 
-Talaria must spawn `hermes`, `ssh`, `sqlite3`, `sftp`, and log-tail commands, so the Mac App Sandbox is not part of the v1 distribution model. Hardened Runtime, Developer-ID signing, and notarisation are still required for release artifacts.
+Talaria must spawn `hermes dashboard`, `hermes doctor`, `hermes tools`, `hermes sessions rename`, and `ssh` for remote profiles, so the Mac App Sandbox is not part of the v1 distribution model. Hardened Runtime, Developer-ID signing, and notarisation are still required for release artifacts.
 
 ## Entitlements
 
@@ -8,16 +8,15 @@ Talaria must spawn `hermes`, `ssh`, `sqlite3`, `sftp`, and log-tail commands, so
 
 ## Privacy manifest
 
-`Talaria/PrivacyInfo.xcprivacy` declares the two reportable API categories the app actually touches:
+`Talaria/PrivacyInfo.xcprivacy` declares the reportable API category the app actually touches:
 
-- `NSPrivacyAccessedAPICategoryFileTimestamp` (reason `0A2A.1`, "display to person, with active intent") — reading `state.db` mtime for the Sessions sidebar snapshot-age badge. The path is the user-configured `hermesHome` rather than the app container, so the in-container reason (`C617.1`) would be inaccurate.
 - `NSPrivacyAccessedAPICategoryUserDefaults` (reason `CA92.1`) — `RecentServers` persists open-profile history.
 
 No tracking, no third-party SDKs, no data collected from the user.
 
 ## Rules
 
-- Do not store SSH passphrases. SSH authentication is delegated to the system `ssh` binary, ssh-agent, and `~/.ssh/config`.
+- Do not store SSH passphrases. macOS remote dashboard startup and CLI fallbacks delegate authentication to the system `ssh` binary, ssh-agent, and `~/.ssh/config`.
 - Do not write Hermes SQLite files directly.
 - Keep profile secrets out of `profiles.json`; use Keychain only when a future feature needs stored tokens.
 - Prefer explicit executable paths captured during profile probing to avoid shell PATH surprises.
@@ -25,7 +24,7 @@ No tracking, no third-party SDKs, no data collected from the user.
 
 ## Key material and host-key trust on iOS
 
-When `HermesKit.useNIOSSHTransport` is enabled (mandatory on iOS, opt-in on macOS), HermesKit uses a pure-Swift SSH client (`swift-nio-ssh`) instead of the system `ssh` binary for the ACP transport and the snapshot fetch. The flag does **not** cover the snapshot backup (`sqlite3 .backup`) or remote cleanup (`rm -f`) steps — those still shell out to `/usr/bin/ssh` on macOS even with the flag on, because the NIO-`exec` command runner that would replace them is deferred to the iOS app target sprint. Consequence: on macOS with the flag enabled, host-key trust is evaluated by **two** verifiers per refresh — system-ssh's `~/.ssh/known_hosts` for backup/cleanup, ``HostKeyStore`` for ACP + fetch. They can disagree on first connect (system-ssh may TOFU-accept silently into `known_hosts` while the NIO path raises `.hostKeyUnknown`, or vice versa). On iOS the flag covers fetch only — backup/cleanup are unsupported and `RemoteSnapshot.refresh()` throws.
+When `HermesKit.useNIOSSHTransport` is enabled (mandatory on iOS, opt-in on macOS), HermesKit uses a pure-Swift SSH client (`swift-nio-ssh`) instead of the system `ssh` binary for the ACP transport. Dashboard mode still uses system `ssh -L` on macOS, and iOS dashboard mode is deferred until NIO-based port forwarding exists. Consequence: on macOS with the flag enabled, host-key trust can be evaluated by both system-ssh and HermesKit's ``HostKeyStore`` depending on the surface. They can disagree on first connect, so UI must surface the exact transport error instead of silently retrying through a different path.
 
 This path has materially different trust semantics that callers must honor:
 

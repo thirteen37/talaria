@@ -6,14 +6,14 @@ Talaria is a native macOS front-end for Hermes Agent. The app is built with Swif
 
 Download the latest signed DMG from the [Releases page](https://github.com/thirteen37/talaria/releases), drag `Talaria.app` to `/Applications`, and launch it from Finder. Updates land via in-app **Talaria → Check for Updates…** (Sparkle).
 
-Talaria drives the [Hermes Agent](https://github.com/NousResearch/hermes-agent) CLI — install `hermes` separately and point Talaria at it via the local profile.
+Talaria drives [Hermes Agent](https://github.com/NousResearch/hermes-agent). Install `hermes` separately, include the dashboard web extra (`pip install -U 'hermes-agent[web]'`), and point Talaria at it via the local profile.
 
 ## Current Status
 
-This repository contains the Sprint 6 (v1.0) build:
+This repository contains the Sprint 7 dashboard-mode build:
 
-- `Talaria`: macOS SwiftUI app — chat, sessions, profiles, six Manage surfaces (Skills / Tools / Cron / Logs / Doctor / Updates), Sparkle auto-update.
-- `HermesKit`: Swift package for ACP/JSON-RPC, transports, client/admin scaffolding, profile models, and capability gates.
+- `Talaria`: macOS SwiftUI app — ACP chat, dashboard-backed sessions, profiles, Manage surfaces (Skills / Tools / Cron / Logs / Doctor / Updates), Sparkle auto-update.
+- `HermesKit`: Swift package for ACP/JSON-RPC, transports, dashboard HTTP client/supervisor, CLI fallbacks, profile models, and capability gates.
 - `docs`: architecture, security, release, ACP coverage, roadmap, and manual test-plan notes.
 
 ## References
@@ -26,8 +26,8 @@ This repository contains the Sprint 6 (v1.0) build:
 Hermes Agent is the runtime Talaria targets. Talaria should treat Hermes as the source of truth for:
 
 - ACP behavior and live session protocol details.
-- CLI command surfaces such as `hermes doctor`, `hermes update`, `hermes skills`, `hermes tools`, and cron management.
-- On-disk state layout under `HERMES_HOME`, especially read-only SQLite session data.
+- Dashboard HTTP behavior for sessions, logs, skills, cron jobs, and updates.
+- CLI command surfaces that do not have dashboard routes yet: `hermes sessions rename`, `hermes tools enable/disable`, and `hermes doctor`.
 - Version and capability gates for features that land after the MVP baseline.
 
 ### Scarf
@@ -37,8 +37,8 @@ Hermes Agent is the runtime Talaria targets. Talaria should treat Hermes as the 
 Scarf is a reference for product shape and information architecture, not an implementation model. Talaria borrows useful workflow ideas from Scarf while keeping a stricter implementation boundary:
 
 - Native SwiftUI rendering over Hermes ACP instead of TUI embedding as the primary surface.
-- SQLite reads are read-only; writes go through ACP or Hermes CLI commands.
-- Remote support uses either the system SSH binary (macOS default) or a pure-Swift NIO-SSH transport (opt-in on macOS via the `HermesKit.useNIOSSHTransport` defaults key, mandatory on iOS), with explicit snapshot refresh semantics either way. The flag covers the ACP transport and the snapshot fetch only — backup/cleanup commands still use system-ssh on macOS until the future NIO-`exec` runner lands.
+- Non-chat surfaces use `hermes dashboard` on loopback; Talaria does not read or write Hermes SQLite files directly.
+- Remote support uses system SSH on macOS for ACP, dashboard port forwarding, and remaining CLI fallbacks. The pure-Swift NIO-SSH transport remains available for ACP experimentation and future iOS work.
 - Release, signing, sandbox, and Sparkle constraints are documented before packaging work begins.
 
 ## Development

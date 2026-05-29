@@ -4,7 +4,7 @@ This document preserves the larger product surface from the Scarf parity researc
 
 ## MVP Boundary
 
-Talaria v1 is a native macOS front-end for Hermes using ACP for live chat, read-only SQLite for session browsing, and Hermes CLI commands for administrative writes. Local subprocess and SSH-backed servers are both in scope. Anything below marked "Deferred" is intentionally out of v1 unless it becomes necessary to make the MVP coherent.
+Talaria v1 is a native macOS front-end for Hermes using ACP for live chat and `hermes dashboard` for sessions, logs, skills, cron jobs, and updates. A small set of operations remain on CLI fallbacks until Hermes exposes dashboard routes for them: session rename, tools enable/disable, and doctor reports. Local subprocess and SSH-backed servers are both in scope. Anything below marked "Deferred" is intentionally out of v1 unless it becomes necessary to make the MVP coherent.
 
 ## Deferred Chat And Interaction
 
@@ -36,6 +36,7 @@ Talaria v1 is a native macOS front-end for Hermes using ACP for live chat, read-
 - Delivery-failure dashboard for scheduled runs.
 - Structured log explorer with session-id pills and deep links.
 - Component drill-down inspectors for `hermes doctor`.
+- Dashboard routes for session rename, tools enable/disable, and doctor reports.
 - Inline release notes and update channel selection.
 - Hermes Proxy and gateway process control.
 - Project dashboards.
@@ -43,7 +44,7 @@ Talaria v1 is a native macOS front-end for Hermes using ACP for live chat, read-
 ## Deferred Packaging And Distribution
 
 - Mac App Store distribution.
-- iOS companion app (no longer blocked on transport — `NIOSSHTransport` lands the iOS-capable transport seam; the remaining work is the iOS UI target, Keychain-backed identity, and a NIO-`exec`-backed admin runner).
+- iOS companion app. ACP has a pure-Swift transport seam, but dashboard mode still needs NIO-backed port forwarding, Keychain-backed identity, and an iOS UI target.
 - Relay transport for sshd-less environments (containers without sshd). Plain iOS no longer needs a relay.
 - Import/export tooling for full application state.
 
