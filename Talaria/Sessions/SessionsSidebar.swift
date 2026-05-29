@@ -82,25 +82,25 @@ struct SessionsSidebar: View {
             store.selection = session.id
         } label: {
             VStack(alignment: .leading, spacing: 2) {
-                // The status dot is an SF Symbol inside the title text run so
-                // the text layout engine aligns it to the name's optical
-                // center (a sibling Circle in an HStack centers on the line
-                // box instead, which reads low).
-                (
-                    Text(Image(systemName: "circle.fill"))
-                        .font(.system(size: 9))
-                        .foregroundColor(statusColor(for: session.id))
-                    + Text("  ")
-                    + Text(session.title ?? shortId(session.id))
-                )
-                .lineLimit(1)
-
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    // Pin the dot to the title's cap-height center rather than
+                    // the line-box center (which reads low against the
+                    // cap-height digits in session IDs). The baseline guide
+                    // floats the dot just above the baseline so its center
+                    // lands on the glyphs' optical middle.
+                    Circle()
+                        .fill(statusColor(for: session.id))
+                        .frame(width: 9, height: 9)
+                        .alignmentGuide(.firstTextBaseline) { $0.height + 2 }
+                    Text(session.title ?? shortId(session.id))
+                        .lineLimit(1)
+                    Spacer()
+                }
                 Text((session.cwd as NSString).lastPathComponent)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    // Indent under the title text (past the dot + spaces) so
-                    // the subtitle lines up with the session name.
+                    // Indent under the title (dot width + HStack spacing).
                     .padding(.leading, 17)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
