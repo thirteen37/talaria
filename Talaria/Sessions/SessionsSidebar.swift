@@ -58,6 +58,8 @@ struct SessionsSidebar: View {
                     if store.isOpening {
                         HStack(spacing: 8) {
                             ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 16, height: 16)
                             Text("Connecting…")
                                 .foregroundStyle(.secondary)
                         }
