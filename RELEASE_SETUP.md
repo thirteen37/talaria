@@ -116,10 +116,8 @@ semver at each calver tag:
 | `acp` | `0.3.0` | `v2026.3.17` | PR #1254 (ACP adapter) |
 | `permissions` | `0.3.0` | `v2026.3.17` | ships with ACP adapter |
 | `diffs` | `0.3.0` | `v2026.3.17` | ships with ACP adapter |
-| `cronCRUD` | `0.3.0` | `v2026.3.17` | `cron add/update/delete/pause/resume/run` verbs |
-| `skillsToggle` | `0.2.0` | `v2026.3.12` | PR #642 |
 | `toolsEnablePerPlatform` | `0.4.0` | `v2026.3.23` | PR #1652 |
-| `updateCheck` | `0.12.0` | `v2026.4.30` | PR #10318 |
+| `requiresDashboard` | `0.14.0` | `v2026.5.16` | FastAPI dashboard verified live |
 
 If Hermes ships a future release that changes any of these guarantees,
 re-resolve with:
@@ -134,16 +132,15 @@ git show v2026.X.Y:pyproject.toml | grep '^version'
 
 ## 7. Wire `CapabilityTable` consumers in Manage views — DONE
 
-`CronView`, `ToolsView`, and `UpdatesView` now consume
+Dashboard-backed Manage views consume
 `capabilityBanner(.<cap>, feature:, version:)` (defined in
 `Talaria/Manage/ManageHarness.swift`) and surface an orange `.warning`
-banner when the probed profile's Hermes version is below the pin. Hard
+banner when the probed profile's Hermes version is below the dashboard pin. `ToolsView` still checks `toolsEnablePerPlatform` because enable/disable remains on the CLI path. Hard
 runtime errors still take precedence (red `.error` banner).
 
-`SkillsView` is intentionally skipped: Talaria 1.0 renders skills
-read-only (no scriptable toggle UI), so a pre-emptive gate would be
-banner noise. Wire it back in if/when Talaria starts calling
-`hermes skills enable/disable`.
+`SkillsView`, `CronView`, `LogsView`, and `UpdatesView` use the
+dashboard gate. `ToolsView` uses `toolsEnablePerPlatform` until Hermes
+ships dashboard tool-toggle routes.
 
 Banners only show when `ServerProfile.version` is non-nil (i.e. the user
 has run the probe in the profile editor at least once). Unprobed profiles

@@ -3,7 +3,6 @@ import SwiftUI
 
 struct SessionsSidebar: View {
     @Bindable var store: SessionsStore
-    let snapshot: RemoteSnapshot?
     let profile: ServerProfile
     let profiles: [ServerProfile]
     let onSwitchProfile: (UUID) -> Void
@@ -16,7 +15,6 @@ struct SessionsSidebar: View {
 
     init(
         store: SessionsStore,
-        snapshot: RemoteSnapshot? = nil,
         profile: ServerProfile,
         profiles: [ServerProfile] = [],
         onSwitchProfile: @escaping (UUID) -> Void = { _ in },
@@ -24,7 +22,6 @@ struct SessionsSidebar: View {
         onOpenNotifications: @escaping () -> Void = {}
     ) {
         self.store = store
-        self.snapshot = snapshot
         self.profile = profile
         self.profiles = profiles
         self.onSwitchProfile = onSwitchProfile

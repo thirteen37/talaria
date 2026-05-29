@@ -1,6 +1,300 @@
 import HermesKit
 import SwiftUI
 
+#if os(macOS)
+/// Per-profile dashboard lifecycle for the Talaria app. Owns one
+/// `DashboardSupervisor` per profile, reference-counted so multiple windows
+/// scoped to the same profile share a single `hermes dashboard` process.
+/// Inlined here (rather than its own file) to avoid pbxproj surgery; promote
+/// to a standalone Talaria/Dashboard/ group when more dashboard coordination
+/// code lands.
+@MainActor
+final class DashboardCoordinator {
+    static let shared = DashboardCoordinator()
+
+    private var supervisors: [UUID: DashboardSupervisor] = [:]
+    private let http: any DashboardHTTP = URLSession.shared
+
+    /// Acquires the dashboard for `profile`, returning the endpoint and the
+    /// supervisor that owns it. Callers hold the returned supervisor and pass
+    /// it back to ``release(_:)`` rather than re-looking-up by id — the cached
+    /// supervisor for an id can be swapped out from under them by a profile
+    /// edit, so id-keyed release would target the wrong instance.
+    func acquire(profile: ServerProfile) async throws -> (DashboardEndpoint, DashboardSupervisor) {
+        let supervisor = ensure(profile: profile)
+        let endpoint = try await supervisor.acquire()
+        return (endpoint, supervisor)
+    }
+
+    func release(_ supervisor: DashboardSupervisor) async {
+        await supervisor.release()
+        // Evict once fully released so the next acquire rebuilds against the
+        // current profile config — but only if this instance is still the
+        // cached one (a profile edit may have already replaced it).
+        if supervisors[supervisor.profile.id] === supervisor, await supervisor.isFullyReleased {
+            supervisors[supervisor.profile.id] = nil
+        }
+    }
+
+    private func ensure(profile: ServerProfile) -> DashboardSupervisor {
+        // Reuse only when the cached supervisor was built from the same profile
+        // config. A profile edit keeps the id but changes hermesPath / host /
+        // port / dashboardPort, so an id-only match would spawn the dashboard
+        // with stale settings (or reuse a process started with them). The
+        // displaced supervisor is still held + released by the harness that
+        // acquired it, so its process is torn down — no leak.
+        if let existing = supervisors[profile.id], existing.profile == profile {
+            return existing
+        }
+        let supervisor = DashboardSupervisor(
+            profile: profile,
+            launcher: launcher(for: profile),
+            http: http,
+            portAllocator: {
+                if let port = profile.dashboardPort {
+                    return port
+                }
+                return try DashboardPortAllocator.allocate()
+            }
+        )
+        supervisors[profile.id] = supervisor
+        return supervisor
+    }
+
+    /// Local profiles need the login-shell PATH injected (a Finder/Dock-launched
+    /// app's environment lacks Homebrew dirs), or `/usr/bin/env hermes dashboard`
+    /// can't find a non-absolute `hermes` and the spawn exits before reachable.
+    /// Mirrors `PathAwareHermesAdminRunner` for the admin path.
+    private func launcher(for profile: ServerProfile) -> any DashboardProcessLauncher {
+        switch profile.kind {
+        case .local:
+            return PathAugmentingDashboardLauncher(
+                inner: SystemDashboardProcessLauncher(),
+                resolver: LoginShellPATHResolver.shared
+            )
+        case .ssh:
+            return SystemDashboardProcessLauncher()
+        }
+    }
+}
+
+/// Wraps a `DashboardProcessLauncher` to merge the resolved login-shell
+/// environment (PATH, etc.) under the spec's own environment before launch.
+/// The spec's values win, so an explicit `HERMES_HOME` / `profile.env` still
+/// takes precedence over the login-shell PATH.
+struct PathAugmentingDashboardLauncher: DashboardProcessLauncher {
+    let inner: any DashboardProcessLauncher
+    let resolver: LoginShellPATHResolver
+
+    func launch(spec: DashboardSpawnSpec) async throws -> any DashboardProcess {
+        var environment = await resolver.extraEnv()
+        for (key, value) in spec.environment {
+            environment[key] = value
+        }
+        let augmented = DashboardSpawnSpec(
+            executable: spec.executable,
+            arguments: spec.arguments,
+            environment: environment
+        )
+        return try await inner.launch(spec: augmented)
+    }
+}
+#endif
+
+// MARK: - Notifications
+
+/// Aggregates cross-cutting per-window issues that warrant attention.
+/// Owned by ``ServerWindowHarness``; polls in the background until
+/// ``stop()`` is called from `tearDown()`. The bell view in the sidebar
+/// observes ``issues`` and lights up when any are present.
+@MainActor
+@Observable
+final class WindowNotificationCenter {
+    struct Issue: Identifiable, Equatable {
+        enum Kind: String, Equatable {
+            case doctorFailure
+        }
+        let id: Kind
+        let title: String
+        let detail: String?
+        /// Sidebar destination the row's action button navigates to.
+        let destination: BrowseDestination
+    }
+
+    private(set) var issues: [Issue] = []
+
+    private let adminRunner: HermesAdminRunning?
+    private var doctorTask: Task<Void, Never>?
+
+    /// Cadence for admin polls. 30 minutes balances freshness against
+    /// shell-out cost on remote profiles.
+    private static let adminPollInterval: Duration = .seconds(30 * 60)
+
+    init(adminRunner: HermesAdminRunning?) {
+        self.adminRunner = adminRunner
+    }
+
+    func start() {
+        startDoctorTask()
+    }
+
+    func stop() {
+        doctorTask?.cancel(); doctorTask = nil
+    }
+
+    /// Re-run the admin polls immediately (e.g. when the user opens the
+    /// notifications page and wants a fresh read). Existing polling tasks
+    /// keep running on their cadence.
+    func refreshAdminChecks() {
+        Task { await pollDoctor() }
+    }
+
+    private func startDoctorTask() {
+        guard adminRunner != nil else { return }
+        doctorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.pollDoctor()
+                try? await Task.sleep(for: Self.adminPollInterval)
+            }
+        }
+    }
+
+    private func pollDoctor() async {
+        guard let runner = adminRunner else { return }
+        do {
+            let report = try await HermesDoctor.run(runner: runner)
+            if report.exitCode != 0 {
+                let firstSection = report.sections.first.map(\.title)
+                upsert(Issue(
+                    id: .doctorFailure,
+                    title: "Doctor reports issues",
+                    detail: firstSection.map { "\($0) (exit \(report.exitCode))" }
+                        ?? "Exit \(report.exitCode)",
+                    destination: .doctor
+                ))
+            } else {
+                remove(.doctorFailure)
+            }
+        } catch {
+            // Preserve the last known doctor verdict across transient
+            // network or SSH failures.
+        }
+    }
+
+    private func upsert(_ issue: Issue) {
+        if let idx = issues.firstIndex(where: { $0.id == issue.id }) {
+            if issues[idx] != issue {
+                issues[idx] = issue
+            }
+        } else {
+            issues.append(issue)
+        }
+    }
+
+    private func remove(_ kind: Issue.Kind) {
+        issues.removeAll { $0.id == kind }
+    }
+}
+
+/// Bell shown in the sidebar header. Lights up when the center has any
+/// active issues; tapping navigates the window to the notifications page.
+struct NotificationBell: View {
+    let center: WindowNotificationCenter
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: center.issues.isEmpty ? "bell" : "bell.badge.fill")
+                    .foregroundStyle(center.issues.isEmpty ? .secondary : Color.accentColor)
+                if !center.issues.isEmpty {
+                    Text("\(center.issues.count)")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.red, in: Capsule())
+                        .offset(x: 6, y: -6)
+                }
+            }
+            .frame(width: 22, height: 22)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help(center.issues.isEmpty ? "No notifications" : "\(center.issues.count) notification(s)")
+    }
+}
+
+/// Detail page that lists each active issue with a deep-link button to the
+/// relevant sidebar destination.
+struct NotificationsView: View {
+    let center: WindowNotificationCenter
+    let onOpenDestination: (BrowseDestination) -> Void
+
+    var body: some View {
+        Group {
+            if center.issues.isEmpty {
+                ContentUnavailableView(
+                    "No notifications",
+                    systemImage: "bell.slash",
+                    description: Text("Cross-cutting issues will appear here.")
+                )
+            } else {
+                List {
+                    ForEach(center.issues) { issue in
+                        row(for: issue)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Notifications")
+        .task {
+            // Out-of-band poll so the page reflects current state instead
+            // of waiting up to 30 min for the next scheduled check.
+            center.refreshAdminChecks()
+        }
+    }
+
+    @ViewBuilder
+    private func row(for issue: WindowNotificationCenter.Issue) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon(for: issue.id))
+                .foregroundStyle(color(for: issue.id))
+                .frame(width: 22)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(issue.title).font(.headline)
+                if let detail = issue.detail {
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            actionButton(for: issue)
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func actionButton(for issue: WindowNotificationCenter.Issue) -> some View {
+        switch issue.id {
+        case .doctorFailure:
+            Button("Open Doctor") { onOpenDestination(.doctor) }
+        }
+    }
+
+    private func icon(for kind: WindowNotificationCenter.Issue.Kind) -> String {
+        switch kind {
+        case .doctorFailure: return "stethoscope"
+        }
+    }
+
+    private func color(for kind: WindowNotificationCenter.Issue.Kind) -> Color {
+        switch kind {
+        case .doctorFailure: return .orange
+        }
+    }
+}
+
 enum BrowseDestination: Hashable {
     case sessions
     case skills
@@ -39,9 +333,6 @@ struct ServerWindow: View {
         Group {
             if let harness {
                 content(harness: harness)
-                    .task(id: harness.snapshot?.profile.id) {
-                        await observeSnapshot(harness)
-                    }
             } else if Idiom.isPhone {
                 noServerConfiguredView
             } else {
@@ -134,6 +425,12 @@ struct ServerWindow: View {
         harness = ServerWindowHarness.make(profile: profile)
         previous?.tearDown()
         #endif
+        // Spawn the per-profile dashboard in the background once the previous
+        // harness has released its refcount. Surfaces observe
+        // `harness.dashboardClient` flipping non-nil when ready (no-op on iOS
+        // until dashboard-over-SSH lands). Done after `tearDown()` so the old
+        // profile's supervisor is released before the new one acquires.
+        harness?.startDashboard()
     }
 
     /// In-place profile swap: tears the old harness down before swapping
@@ -146,36 +443,6 @@ struct ServerWindow: View {
         harness = nil
         browse = .sessions
         activeProfileId = newId
-    }
-
-    /// Opens / replaces / closes the `HermesDB` handle as the remote snapshot
-    /// lands or disappears. We must (re)open after every successful refresh:
-    /// `sftp` overwrites `state.db` in place, and a SQLite handle held across
-    /// that write would read torn pages or `database disk image is malformed`.
-    /// We don't recycle the handle on every state change though — invalidate
-    /// emits `.stale` without changing file contents, so the open handle is
-    /// still good there. The distinguishing signal is a transition out of
-    /// `.refreshing`.
-    private func observeSnapshot(_ harness: ServerWindowHarness) async {
-        guard let snapshot = harness.snapshot else { return }
-        var previous: SnapshotState?
-        for await state in await snapshot.subscribe() {
-            switch state {
-            case .fresh, .stale:
-                let justRefetched: Bool
-                if case .refreshing = previous {
-                    justRefetched = true
-                } else {
-                    justRefetched = false
-                }
-                if harness.db == nil || justRefetched {
-                    await harness.refreshDB()
-                }
-            case .missing, .refreshing, .error:
-                break
-            }
-            previous = state
-        }
     }
 
     @ViewBuilder
@@ -249,7 +516,6 @@ struct ServerWindow: View {
         List {
             SessionsSidebar(
                 store: harness.store,
-                snapshot: harness.snapshot,
                 profile: harness.profile,
                 profiles: directory.allProfiles,
                 onSwitchProfile: switchProfile,
@@ -278,6 +544,21 @@ struct ServerWindow: View {
                                 .buttonStyle(.borderless)
                                 .controlSize(.mini)
                         }
+                    }
+                }
+            }
+
+            // Surface a failed dashboard spawn window-wide. Without this the
+            // dashboard surfaces sit on a perpetual "connecting…" placeholder
+            // (their `client` never flips non-nil) with no hint as to why.
+            if let dashboardError = harness.dashboardError {
+                Section {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text(dashboardError)
+                            .font(.caption)
+                            .foregroundStyle(.primary)
                     }
                 }
             }
@@ -335,7 +616,7 @@ struct ServerWindow: View {
             NavigationStack {
                 SessionsBrowser(
                     store: harness.store,
-                    db: harness.db,
+                    client: harness.dashboardClient,
                     onOpen: { showingAllSessions = false }
                 )
                 .navigationTitle("Sessions")
@@ -378,32 +659,24 @@ struct ServerWindow: View {
         } else {
             switch browse ?? .sessions {
             case .sessions:
-                SessionsBrowser(store: harness.store, db: harness.db)
-            case .skills: SkillsView(runner: harness.store.adminRunner)
+                SessionsBrowser(store: harness.store, client: harness.dashboardClient)
+            case .skills: SkillsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
             case .tools: ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
-            case .cron: CronView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
+            case .cron: CronView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
             case .profiles: ProfilesView(runner: harness.store.adminRunner, profile: harness.profile, transfer: harness.snapshotTransfer)
             case .logs:
-                LogsView(
+                LogsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            case .doctor:
+                DoctorView(
                     runner: harness.store.adminRunner,
                     profile: harness.profile,
-                    provider: { [weak harness] in
-                        // Lambda captures the window-scoped harness so the
-                        // LogsHarness it returns outlives any single view
-                        // instance. Built lazily — the first sidebar click on
-                        // Logs spawns the tailer; subsequent clicks reuse it.
-                        guard let harness else { return nil }
-                        return harness.ensureLogsHarness(factory: {
-                            LogsView.makeTailing(profile: harness.profile)
-                        })
-                    }
+                    client: harness.dashboardClient,
+                    hermesVersion: harness.profile.version
                 )
-            case .doctor: DoctorView(runner: harness.store.adminRunner, profile: harness.profile)
-            case .updates: UpdatesView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
+            case .updates: UpdatesView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
             case .notifications:
                 NotificationsView(
                     center: harness.notifications,
-                    snapshot: harness.snapshot,
                     onOpenDestination: { dest in browse = dest }
                 )
             }
@@ -437,19 +710,13 @@ struct ServerWindow: View {
 }
 
 /// Bundles the per-window state so we can rebuild it cleanly when the
-/// window swaps profiles. SessionsStore and HermesDB hold long-lived
-/// resources (live ACP transport, SQLite handle) — making a fresh harness
-/// guarantees the previous profile's ones tear down before the new one boots.
-///
-/// `db` is `@Observable` and mutates: for remote profiles it starts nil and
-/// flips to a real `HermesDB` once the snapshot file lands on disk. Without
-/// this the first remote window opens against a missing SQLite file and the
-/// browser surfaces a raw open error.
+/// window swaps profiles. The `SessionsStore` holds the live ACP transport;
+/// making a fresh harness guarantees the previous profile's one tears down
+/// before the new one boots.
 @MainActor
 @Observable
 final class ServerWindowHarness {
     let store: SessionsStore
-    let snapshot: RemoteSnapshot?
     let profile: ServerProfile
     /// The SSH transfer built by `makeRemote` with this window's transport
     /// selection (NIO + keychain/host-key store when NIO is active or on iOS;
@@ -461,66 +728,206 @@ final class ServerWindowHarness {
     /// Drives the trust-on-first-use prompt for unknown SSH host keys. Always
     /// present for SSH profiles; nil for the bundled local profile.
     let hostKeyCoordinator: HostKeyConfirmationCoordinator?
-    /// Aggregates cross-cutting issues (stale snapshot, update available,
-    /// doctor failure) for the bell + notifications detail page. Built once
-    /// per harness; cancelled in `tearDown()`.
+    /// Aggregates cross-cutting issues (update available, doctor failure)
+    /// for the bell + notifications detail page. Built once per harness;
+    /// cancelled in `tearDown()`.
     let notifications: WindowNotificationCenter
-    private(set) var db: HermesDB?
-    /// Persistent log tailer. Lives at the window level so the Logs view's
-    /// buffered lines survive sidebar tab switches — when the user navigates
-    /// away from Logs and back, SwiftUI tears down LogsView and recreates it,
-    /// but the underlying ring buffer here continues to accumulate lines.
-    /// Lazily created on first access; nil for windows where the profile
-    /// doesn't expose a resolvable HERMES_HOME.
-    private(set) var logsHarness: LogsHarness?
+    /// Live `DashboardClient` once the per-profile supervisor's process has
+    /// come online. `nil` until acquired (or while a teardown is in flight),
+    /// non-nil for the lifetime of the window's interest in the profile.
+    /// Surfaces render a "connecting…" state while this is nil; the window
+    /// sidebar surfaces `dashboardError` if acquisition failed.
+    var dashboardClient: DashboardClient?
+    var dashboardError: String?
+    private var dashboardTask: Task<Void, Never>?
+    private var dashboardStarted = false
+    private var dashboardReleased = false
+    #if os(macOS)
+    /// The supervisor this harness acquired from `DashboardCoordinator`. Held
+    /// so `tearDown()` releases the exact instance it acquired — a profile edit
+    /// can swap the coordinator's cached supervisor for the id, so releasing by
+    /// id could hit the wrong one.
+    private var macDashboardSupervisor: DashboardSupervisor?
+    #else
+    /// iOS owns its dashboard supervisor directly (one window per profile, no
+    /// cross-window refcount sharing as on macOS). Built lazily in
+    /// `acquireDashboard()`; released in `tearDown()`.
+    private var iosDashboardSupervisor: DashboardSupervisor?
+    #endif
 
     private init(
         store: SessionsStore,
-        db: HermesDB?,
-        snapshot: RemoteSnapshot?,
         profile: ServerProfile,
         snapshotTransfer: RemoteSnapshotTransfer? = nil,
         hostKeyCoordinator: HostKeyConfirmationCoordinator? = nil
     ) {
         self.store = store
-        self.db = db
-        self.snapshot = snapshot
         self.profile = profile
         self.snapshotTransfer = snapshotTransfer
         self.hostKeyCoordinator = hostKeyCoordinator
-        self.notifications = WindowNotificationCenter(
-            snapshot: snapshot,
-            adminRunner: store.adminRunner,
-            store: store
-        )
+        self.notifications = WindowNotificationCenter(adminRunner: store.adminRunner)
         self.notifications.start()
     }
 
-    /// Returns the cached log tailer, or builds one when `factory` produces a
-    /// usable tailing implementation. LogsView calls this on appear; the
-    /// returned harness keeps streaming even after LogsView is dismissed.
-    func ensureLogsHarness(factory: () -> HermesLogTailing?) -> LogsHarness? {
-        if let logsHarness { return logsHarness }
-        guard let tailing = factory() else { return nil }
-        let harness = LogsHarness(tailing: tailing)
-        harness.start()
-        logsHarness = harness
-        return harness
-    }
-
     /// Cancels long-lived per-window resources when the SwiftUI window
-    /// disappears. Currently this is just the log tailer — for SSH profiles
-    /// it spawns a real `ssh tail -F` subprocess, which would otherwise
-    /// outlive its window if the remote logs are quiet. ServerWindow calls
-    /// this from `.onDisappear`; the explicit hook is preferred over a
-    /// `deinit` because Swift 6 makes MainActor deinits nonisolated, which
-    /// would force us to thread the cleanup through a detached Task with
-    /// no guarantee about ordering relative to window close.
+    /// disappears. Releases this window's refcount on the per-profile
+    /// dashboard supervisor — the last release terminates the spawned
+    /// `hermes dashboard` process. Explicit hook (rather than `deinit`)
+    /// because Swift 6 makes MainActor deinits nonisolated, which would
+    /// force the teardown through a detached Task with no ordering
+    /// guarantee relative to window close.
     func tearDown() {
-        logsHarness?.stop()
-        logsHarness = nil
+        #if os(macOS)
+        if dashboardStarted, !dashboardReleased {
+            dashboardReleased = true
+            // Chain release behind the acquire task. Cancelling it doesn't stop
+            // the supervisor's in-flight spawn (that inner Task doesn't inherit
+            // cancellation), so if teardown beats the acquire task to
+            // `DashboardCoordinator.acquire`, an independent release would find
+            // no registered supervisor, no-op, and leak the spawned process.
+            // Awaiting the acquire task first guarantees the supervisor is
+            // registered (refcount 1) before we drop our refcount.
+            let acquireTask = dashboardTask
+            acquireTask?.cancel()
+            dashboardTask = nil
+            dashboardClient = nil
+            store.dashboardClient = nil
+            // Await the acquire task first so `macDashboardSupervisor` is set
+            // (acquire stores it before returning), then release that exact
+            // instance. Strong `self` keeps the harness alive for the brief
+            // release so the refcount actually drops.
+            Task {
+                await acquireTask?.value
+                if let supervisor = self.macDashboardSupervisor {
+                    await DashboardCoordinator.shared.release(supervisor)
+                }
+            }
+        }
+        #else
+        if dashboardStarted, !dashboardReleased {
+            dashboardReleased = true
+            // Same chained-release reasoning as macOS, but the supervisor lives
+            // on the harness rather than a shared coordinator. Await the acquire
+            // task first so the supervisor has finished spawning (refcount 1)
+            // before we release and tear down the SSH connection.
+            let acquireTask = dashboardTask
+            acquireTask?.cancel()
+            dashboardTask = nil
+            dashboardClient = nil
+            store.dashboardClient = nil
+            // Read `iosDashboardSupervisor` *after* the acquire task finishes —
+            // the acquire body assigns it before spawning, so capturing it
+            // synchronously here (teardown runs before that body) would miss it
+            // and leak the SSH connection + remote process. Mirrors the macOS
+            // branch above.
+            Task {
+                await acquireTask?.value
+                await self.iosDashboardSupervisor?.release()
+                self.iosDashboardSupervisor = nil
+            }
+        }
+        #endif
         notifications.stop()
     }
+
+    func startDashboard() {
+        guard !dashboardStarted else { return }
+        #if os(macOS)
+        dashboardStarted = true
+        dashboardTask = Task { [weak self] in
+            await self?.acquireDashboard()
+        }
+        #else
+        // iOS reaches the dashboard over NIO-SSH, so it requires a remote
+        // server. Local profiles can't run hermes on-device.
+        guard profile.kind == .ssh else {
+            dashboardError = "Dashboard mode requires a remote (SSH) server."
+            return
+        }
+        dashboardStarted = true
+        dashboardTask = Task { [weak self] in
+            await self?.acquireDashboard()
+        }
+        #endif
+    }
+
+    /// Acquires the dashboard endpoint for this profile, publishing the
+    /// resulting `DashboardClient` so views can observe it. Spawning the
+    /// dashboard process can take a moment (Python boot + uvicorn) so
+    /// callers should drive this from `.task` and render a loading state
+    /// while `dashboardClient` is nil.
+    func acquireDashboard() async {
+        #if os(macOS)
+        do {
+            let (endpoint, supervisor) = try await DashboardCoordinator.shared.acquire(profile: profile)
+            // Store before the cancellation check so `tearDown()` can release
+            // the acquired refcount even if we bail out right after.
+            macDashboardSupervisor = supervisor
+            try Task.checkCancellation()
+            guard !dashboardReleased else { return }
+            dashboardClient = endpoint.session.client()
+            store.dashboardClient = dashboardClient
+            dashboardError = nil
+        } catch {
+            guard !Task.isCancelled, !dashboardReleased else { return }
+            dashboardClient = nil
+            store.dashboardClient = nil
+            dashboardError = error.localizedDescription
+        }
+        #else
+        let supervisor = makeIOSDashboardSupervisor()
+        iosDashboardSupervisor = supervisor
+        do {
+            let endpoint = try await supervisor.acquire()
+            try Task.checkCancellation()
+            guard !dashboardReleased else { return }
+            dashboardClient = endpoint.session.client()
+            store.dashboardClient = dashboardClient
+            dashboardError = nil
+        } catch {
+            guard !Task.isCancelled, !dashboardReleased else { return }
+            dashboardClient = nil
+            store.dashboardClient = nil
+            dashboardError = error.localizedDescription
+        }
+        #endif
+    }
+
+    #if !os(macOS)
+    /// Builds the iOS dashboard supervisor: a NIO-SSH connection that both
+    /// execs `hermes dashboard` on the remote host and tunnels its HTTP over a
+    /// `direct-tcpip` channel. Reuses the window's host-key trust coordinator
+    /// and the shared pinned host-key store so the dashboard connection
+    /// doesn't re-prompt for a key the chat transport already trusted.
+    private func makeIOSDashboardSupervisor() -> DashboardSupervisor {
+        var confirmer: HostKeyConfirmer?
+        if let coordinator = hostKeyCoordinator {
+            confirmer = { host, port, fingerprint in
+                await coordinator.confirm(host: host, port: port, fingerprint: fingerprint)
+            }
+        }
+        let connection = NIOSSHDashboardConnection(
+            profile: profile,
+            credentialProvider: FileIdentityProvider(),
+            hostKeyStore: Self.defaultHostKeyStore(),
+            hostKeyConfirmer: confirmer
+        )
+        let profile = profile
+        return DashboardSupervisor(
+            profile: profile,
+            launcher: NIOSSHDashboardProcessLauncher(connection: connection),
+            http: NIOSSHDashboardHTTP(connection: connection),
+            portAllocator: {
+                // No local forward on iOS, so this is purely the remote bind
+                // port. Honor an explicit profile port; otherwise pick a high
+                // ephemeral port (collisions surface as the supervisor's
+                // not-reachable error).
+                if let port = profile.dashboardPort { return port }
+                return Int.random(in: 40000...60000)
+            }
+        )
+    }
+    #endif
 
     /// Builds a harness backed by an in-process ``MockACPTransport`` for UI
     /// tests — no SSH, no admin runner, no snapshot.
@@ -528,7 +935,7 @@ final class ServerWindowHarness {
         let manager = SessionManager { MockACPTransport() }
         let store = SessionsStore(manager: manager, adminRunner: nil)
         let profile = ServerProfile(name: "Mock Server", kind: .ssh, host: "mock.local")
-        return ServerWindowHarness(store: store, db: nil, snapshot: nil, profile: profile)
+        return ServerWindowHarness(store: store, profile: profile)
     }
 
     static func make(profile: ServerProfile) -> ServerWindowHarness {
@@ -537,44 +944,14 @@ final class ServerWindowHarness {
             #if os(macOS)
             return makeLocal(profile: profile)
             #else
-            // Per the iOS transport plan, decision #3: iOS is remote-only.
-            // Surface a typed error from the factory so the chat surface
-            // can render an actionable empty state instead of crashing.
             let manager = SessionManager { throw TransportError.unsupportedPlatform }
             return ServerWindowHarness(
                 store: SessionsStore(manager: manager, adminRunner: nil),
-                db: nil,
-                snapshot: nil,
                 profile: profile
             )
             #endif
         case .ssh:
             return makeRemote(profile: profile)
-        }
-    }
-
-    /// Re-checks the snapshot path and (re)opens `HermesDB` against the
-    /// current file on disk. Called from `ServerWindow` whenever the snapshot
-    /// transitions out of `.refreshing` so we never keep an open handle
-    /// across the sftp in-place overwrite.
-    func refreshDB() async {
-        let previous = db
-        let config: HermesDBConfiguration
-        if let snapshot {
-            config = HermesDBConfiguration.forProfile(profile, remoteSnapshotPath: snapshot.localPath())
-        } else {
-            config = HermesDBConfiguration.forProfile(profile)
-        }
-        if FileManager.default.fileExists(atPath: config.databaseURL.path) {
-            db = HermesDB(configuration: config)
-        } else {
-            db = nil
-        }
-        // Close the previous handle after publishing the new one so observers
-        // never see a nil gap. The actor's queue serializes pending queries
-        // before close() takes effect.
-        if let previous {
-            await previous.close()
         }
     }
 
@@ -617,37 +994,32 @@ final class ServerWindowHarness {
             resolver: resolver
         )
         let store = SessionsStore(manager: manager, adminRunner: adminRunner)
-        let config = HermesDBConfiguration.forProfile(profile)
-        let db = FileManager.default.fileExists(atPath: config.databaseURL.path)
-            ? HermesDB(configuration: config)
-            : nil
-        return ServerWindowHarness(store: store, db: db, snapshot: nil, profile: profile)
+        return ServerWindowHarness(store: store, profile: profile)
     }
 
     #endif
 
-    /// `UserDefaults` key honored on macOS to opt the **ACP transport
-    /// and the snapshot fetch** into the pure-Swift NIO-SSH path instead
-    /// of the default system-ssh subprocess. The snapshot **backup**
-    /// (`sqlite3 .backup`) and **remote cleanup** (`rm -f`) steps in
-    /// `RemoteSnapshot` still shell out to `/usr/bin/ssh` even when the
-    /// flag is on — closing that gap requires the future NIO-`exec`
-    /// command runner that lands with the iOS app target. Host-key
-    /// trust therefore consults two verifiers when the flag is enabled:
-    /// system-ssh's `known_hosts` for backup/cleanup, ``HostKeyStore``
-    /// for ACP + fetch. See `docs/security.md`. iOS always uses NIO
-    /// regardless of this flag — system-ssh isn't available there.
-    /// Flip the default in a later release and delete system-ssh one
-    /// release after that.
+    /// `UserDefaults` key honored on macOS to opt the ACP transport into
+    /// the pure-Swift NIO-SSH path instead of the default system-ssh
+    /// subprocess. Host-key trust consults `HostKeyStore` for the NIO
+    /// path; system-ssh defers to `~/.ssh/known_hosts`. See
+    /// `docs/security.md`. iOS always uses NIO regardless of this flag —
+    /// system-ssh isn't available there. Flip the default in a later
+    /// release and delete system-ssh one release after that.
     static let useNIOSSHTransportDefaultsKey = "HermesKit.useNIOSSHTransport"
 
     private static func makeRemote(profile: ServerProfile) -> ServerWindowHarness {
         let useNIO = preferNIOSSHTransport()
         let manager: SessionManager
+        // Transport-appropriate remote-file reader for surfaces that read
+        // files off the host (Profiles' config comparison). NIO `cat` with the
+        // keychain/host-key wiring when NIO is active or on iOS; nil on the
+        // system-ssh macOS path, where `HermesConfigReader` falls back to
+        // `SFTPSubprocessTransfer`. Keeps config reads on the same auth +
+        // host-key-trust policy as the chat transport.
         let snapshotTransfer: RemoteSnapshotTransfer?
 
         let hostKeyCoordinator = HostKeyConfirmationCoordinator()
-        var snapshotCommandRunner: RemoteCommandRunning?
         if useNIO {
             let credentialProvider: SSHCredentialProvider = FileIdentityProvider()
             let hostKeyStore = defaultHostKeyStore()
@@ -670,14 +1042,6 @@ final class ServerWindowHarness {
                 hostKeyStore: hostKeyStore,
                 hostKeyConfirmer: confirmer
             )
-            // Drive the remote `sqlite3 .backup` + cleanup over NIO so
-            // snapshot/history works without `/usr/bin/ssh` (required on iOS).
-            snapshotCommandRunner = NIOSSHCommandRunner(
-                profile: profile,
-                credentialProvider: credentialProvider,
-                hostKeyStore: hostKeyStore,
-                hostKeyConfirmer: confirmer
-            )
         } else {
             #if os(macOS)
             manager = SessionManager {
@@ -694,7 +1058,8 @@ final class ServerWindowHarness {
                 try transport.start()
                 return transport
             }
-            snapshotTransfer = nil // RemoteSnapshot picks SFTPSubprocessTransfer by default
+            // nil → HermesConfigReader falls back to SFTPSubprocessTransfer.
+            snapshotTransfer = nil
             #else
             // Defensive: iOS never falls into this branch because
             // `preferNIOSSHTransport()` always returns true off-macOS.
@@ -704,29 +1069,15 @@ final class ServerWindowHarness {
         }
 
         let admin = remoteAdminRunner(for: profile)
-        let snapshot = RemoteSnapshot(profile: profile, transfer: snapshotTransfer, commandRunner: snapshotCommandRunner)
-        let snapshotPath = snapshot.localPath()
         let store = SessionsStore(
             manager: manager,
             adminRunner: admin,
-            snapshot: snapshot,
             // Pause the open timeout while the trust prompt is up so a slow
             // fingerprint comparison doesn't tear down the pending connection.
             isAwaitingUserInput: { hostKeyCoordinator.pending != nil }
         )
-        // Open the DB only if the snapshot file already exists from a prior
-        // session. Otherwise wait for `refreshDB()` after the first fetch.
-        let db: HermesDB?
-        if FileManager.default.fileExists(atPath: snapshotPath.path) {
-            let config = HermesDBConfiguration.forProfile(profile, remoteSnapshotPath: snapshotPath)
-            db = HermesDB(configuration: config)
-        } else {
-            db = nil
-        }
         return ServerWindowHarness(
             store: store,
-            db: db,
-            snapshot: snapshot,
             profile: profile,
             snapshotTransfer: snapshotTransfer,
             hostKeyCoordinator: hostKeyCoordinator
@@ -776,356 +1127,5 @@ final class ServerWindowHarness {
         // bringing up an admin runner backed by NIO `exec` requests.
         return nil
         #endif
-    }
-}
-
-// MARK: - Notifications
-
-/// Aggregates cross-cutting per-window issues that warrant attention:
-/// stale or errored remote snapshot, available hermes update, doctor
-/// non-zero exit. Owned by ``ServerWindowHarness``; polls in the
-/// background until ``stop()`` is called from `tearDown()`. The bell view
-/// in the sidebar observes ``issues`` and lights up when any are present.
-@MainActor
-@Observable
-final class WindowNotificationCenter {
-    struct Issue: Identifiable, Equatable {
-        enum Kind: String, Equatable {
-            case staleSnapshot
-            case snapshotError
-            case updateAvailable
-            case doctorFailure
-        }
-        let id: Kind
-        let title: String
-        let detail: String?
-        /// Sidebar destination the row's action button navigates to. When
-        /// nil the row exposes a local action (e.g. snapshot refresh) instead.
-        let destination: BrowseDestination?
-    }
-
-    private(set) var issues: [Issue] = []
-    /// True while a snapshot refresh is in flight. Surfaced in the
-    /// notifications detail page so the user knows a fix is already
-    /// underway when they tap on a stale-snapshot row.
-    private(set) var snapshotRefreshing: Bool = false
-
-    private let snapshot: RemoteSnapshot?
-    private let adminRunner: HermesAdminRunning?
-    /// Held only to bump `browserRefreshToken` when a snapshot becomes
-    /// `.fresh` — this used to live in the sidebar's own subscription which
-    /// the bell replaces.
-    private weak var store: SessionsStore?
-
-    private var snapshotTask: Task<Void, Never>?
-    private var updateTask: Task<Void, Never>?
-    private var doctorTask: Task<Void, Never>?
-
-    /// Cadence for admin polls. 30 minutes is a guess balancing freshness
-    /// against shell-out cost on remote profiles; revisit if doctor turns
-    /// out to be expensive enough to gate behind a snapshot signal.
-    private static let adminPollInterval: Duration = .seconds(30 * 60)
-
-    init(snapshot: RemoteSnapshot?, adminRunner: HermesAdminRunning?, store: SessionsStore?) {
-        self.snapshot = snapshot
-        self.adminRunner = adminRunner
-        self.store = store
-    }
-
-    func start() {
-        startSnapshotTask()
-        startUpdateTask()
-        startDoctorTask()
-    }
-
-    func stop() {
-        snapshotTask?.cancel(); snapshotTask = nil
-        updateTask?.cancel(); updateTask = nil
-        doctorTask?.cancel(); doctorTask = nil
-    }
-
-    /// Kick off an out-of-band refresh from the notifications page's
-    /// "Refresh snapshot" action. Errors surface through the snapshot
-    /// state stream as `.error`, so we don't need to plumb them here.
-    func refreshSnapshot() {
-        guard let snapshot else { return }
-        Task { try? await snapshot.refresh() }
-    }
-
-    /// Re-run the admin polls immediately (e.g. when the user opens the
-    /// notifications page and wants a fresh read). Existing polling tasks
-    /// keep running on their cadence.
-    func refreshAdminChecks() {
-        Task { await pollUpdates() }
-        Task { await pollDoctor() }
-    }
-
-    private func startSnapshotTask() {
-        guard let snapshot else { return }
-        snapshotTask = Task { [weak self] in
-            let initial = await snapshot.currentState()
-            await MainActor.run { self?.apply(snapshotState: initial) }
-            // Kick off a fetch when no snapshot exists yet — without this,
-            // a freshly opened remote window with no cache shows an empty
-            // browser indefinitely. Used to live in the sidebar's task.
-            if case .missing = initial {
-                try? await snapshot.refresh()
-            }
-            for await state in await snapshot.subscribe() {
-                if Task.isCancelled { return }
-                await MainActor.run { self?.apply(snapshotState: state) }
-            }
-        }
-    }
-
-    private func apply(snapshotState state: SnapshotState) {
-        snapshotRefreshing = false
-        switch state {
-        case .fresh:
-            store?.browserRefreshToken &+= 1
-            remove(.staleSnapshot)
-            remove(.snapshotError)
-        case let .stale(age):
-            remove(.snapshotError)
-            upsert(Issue(
-                id: .staleSnapshot,
-                title: "Snapshot stale",
-                detail: "Last refreshed \(Self.formatAge(age)). Browsing may show outdated state.",
-                destination: nil
-            ))
-        case let .error(message):
-            remove(.staleSnapshot)
-            upsert(Issue(
-                id: .snapshotError,
-                title: "Snapshot refresh failed",
-                detail: message,
-                destination: nil
-            ))
-        case .refreshing:
-            snapshotRefreshing = true
-        case .missing:
-            remove(.staleSnapshot)
-            remove(.snapshotError)
-        }
-    }
-
-    private func startUpdateTask() {
-        guard adminRunner != nil else { return }
-        updateTask = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.pollUpdates()
-                try? await Task.sleep(for: Self.adminPollInterval)
-            }
-        }
-    }
-
-    private func pollUpdates() async {
-        guard let runner = adminRunner else { return }
-        do {
-            let status = try await HermesUpdates.check(runner: runner)
-            if status.available {
-                let detail = subtitle(for: status)
-                upsert(Issue(
-                    id: .updateAvailable,
-                    title: "Hermes update available",
-                    detail: detail,
-                    destination: .updates
-                ))
-            } else {
-                remove(.updateAvailable)
-            }
-        } catch {
-            // Polling errors are silent — we don't want to spam the bell
-            // with transient `hermes update --check` failures (network
-            // glitches, command-unavailable on old hermes builds). We
-            // also don't *clear* a previously-recorded valid issue here:
-            // an SSH drop mid-poll would otherwise flicker the bell off
-            // until the next 30-min poll re-adds it.
-        }
-    }
-
-    private func subtitle(for status: UpdateStatus) -> String? {
-        if let current = status.current, let latest = status.latest {
-            return "\(formatVersion(current)) → \(formatVersion(latest))"
-        }
-        return status.detail
-    }
-
-    private func formatVersion(_ v: HermesVersion) -> String {
-        var s = "\(v.major).\(v.minor).\(v.patch)"
-        if let pre = v.prerelease { s += "-\(pre)" }
-        return s
-    }
-
-    private func startDoctorTask() {
-        guard adminRunner != nil else { return }
-        doctorTask = Task { [weak self] in
-            while !Task.isCancelled {
-                await self?.pollDoctor()
-                try? await Task.sleep(for: Self.adminPollInterval)
-            }
-        }
-    }
-
-    private func pollDoctor() async {
-        guard let runner = adminRunner else { return }
-        do {
-            let report = try await HermesDoctor.run(runner: runner)
-            if report.exitCode != 0 {
-                let firstSection = report.sections.first.map(\.title)
-                upsert(Issue(
-                    id: .doctorFailure,
-                    title: "Doctor reports issues",
-                    detail: firstSection.map { "\($0) (exit \(report.exitCode))" }
-                        ?? "Exit \(report.exitCode)",
-                    destination: .doctor
-                ))
-            } else {
-                remove(.doctorFailure)
-            }
-        } catch {
-            // Same rationale as `pollUpdates`: preserve the last known
-            // doctor verdict across transient failures so the bell stays
-            // stable when SSH is flaky.
-        }
-    }
-
-    private func upsert(_ issue: Issue) {
-        if let idx = issues.firstIndex(where: { $0.id == issue.id }) {
-            if issues[idx] != issue {
-                issues[idx] = issue
-            }
-        } else {
-            issues.append(issue)
-        }
-    }
-
-    private func remove(_ kind: Issue.Kind) {
-        issues.removeAll { $0.id == kind }
-    }
-
-    static func formatAge(_ seconds: Int) -> String {
-        if seconds < 60 { return "\(seconds)s ago" }
-        if seconds < 3600 { return "\(seconds / 60)m ago" }
-        return "\(seconds / 3600)h ago"
-    }
-}
-
-/// Bell shown in the sidebar header. Lights up when the center has any
-/// active issues; tapping navigates the window to the notifications page.
-struct NotificationBell: View {
-    let center: WindowNotificationCenter
-    let onOpen: () -> Void
-
-    var body: some View {
-        Button(action: onOpen) {
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: center.issues.isEmpty ? "bell" : "bell.badge.fill")
-                    .foregroundStyle(center.issues.isEmpty ? .secondary : Color.accentColor)
-                if !center.issues.isEmpty {
-                    Text("\(center.issues.count)")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Color.red, in: Capsule())
-                        .offset(x: 6, y: -6)
-                }
-            }
-            .frame(width: 22, height: 22)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.borderless)
-        .help(center.issues.isEmpty ? "No notifications" : "\(center.issues.count) notification(s)")
-    }
-}
-
-/// Detail page that lists each active issue with a deep-link button to
-/// the relevant sidebar destination (Updates / Doctor) or a local action
-/// (refresh snapshot). Mirrors the bell — when the center is empty this
-/// page shows a "no issues" placeholder.
-struct NotificationsView: View {
-    let center: WindowNotificationCenter
-    let snapshot: RemoteSnapshot?
-    let onOpenDestination: (BrowseDestination) -> Void
-
-    var body: some View {
-        Group {
-            if center.issues.isEmpty {
-                ContentUnavailableView(
-                    "No notifications",
-                    systemImage: "bell.slash",
-                    description: Text(center.snapshotRefreshing
-                        ? "A snapshot refresh is in progress."
-                        : "Cross-cutting issues will appear here.")
-                )
-            } else {
-                List {
-                    ForEach(center.issues) { issue in
-                        row(for: issue)
-                    }
-                }
-            }
-        }
-        .navigationTitle("Notifications")
-        .task {
-            // Out-of-band poll so the page reflects current state instead
-            // of waiting up to 30 min for the next scheduled check.
-            center.refreshAdminChecks()
-        }
-    }
-
-    @ViewBuilder
-    private func row(for issue: WindowNotificationCenter.Issue) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: icon(for: issue.id))
-                .foregroundStyle(color(for: issue.id))
-                .frame(width: 22)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(issue.title).font(.headline)
-                if let detail = issue.detail {
-                    Text(detail).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-            actionButton(for: issue)
-        }
-        .padding(.vertical, 4)
-    }
-
-    @ViewBuilder
-    private func actionButton(for issue: WindowNotificationCenter.Issue) -> some View {
-        switch issue.id {
-        case .staleSnapshot, .snapshotError:
-            Button {
-                center.refreshSnapshot()
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-            .disabled(center.snapshotRefreshing || snapshot == nil)
-        case .updateAvailable:
-            Button("Open Updates") { onOpenDestination(.updates) }
-        case .doctorFailure:
-            Button("Open Doctor") { onOpenDestination(.doctor) }
-        }
-    }
-
-    private func icon(for kind: WindowNotificationCenter.Issue.Kind) -> String {
-        switch kind {
-        case .staleSnapshot: return "clock.badge.exclamationmark"
-        case .snapshotError: return "exclamationmark.triangle.fill"
-        case .updateAvailable: return "arrow.down.circle.fill"
-        case .doctorFailure: return "stethoscope"
-        }
-    }
-
-    private func color(for kind: WindowNotificationCenter.Issue.Kind) -> Color {
-        switch kind {
-        case .staleSnapshot: return .yellow
-        case .snapshotError: return .red
-        case .updateAvailable: return .accentColor
-        case .doctorFailure: return .orange
-        }
     }
 }

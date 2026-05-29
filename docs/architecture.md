@@ -7,20 +7,32 @@ Talaria is a SwiftUI macOS app backed by a shared `HermesKit` Swift package. The
 - `ACP`: Codable JSON-RPC and ACP schema types.
 - `Transport`: bidirectional byte streams for local processes, SSH processes, and in-memory tests.
 - `Client`: request correlation and session lifecycle orchestration.
-- `Hermes`: CLI admin wrappers, read-only database access, version parsing, and capability gates.
+- `Dashboard`: HTTP client, token/session handling, dashboard process supervision, spawn specs, and update polling.
+- `Hermes`: CLI fallbacks, version parsing, doctor/tool parsers, and capability gates.
 - `Profiles`: local and SSH server profiles.
 
 ## Read And Write Model
 
-Hermes state reads come from SQLite opened read-only. Writes go through ACP or the Hermes CLI only. The app never mutates Hermes database files directly.
+Live chat stays on ACP over newline-delimited JSON-RPC. Non-chat surfaces are backed by the Hermes dashboard HTTP API (`hermes dashboard --host 127.0.0.1 --port <port>`). Talaria allocates an ephemeral loopback port by default, but profiles can pin a dashboard port when the automatic choice conflicts with local or remote host policy. Talaria never reads or writes Hermes SQLite files directly.
 
-Remote state is read from a snapshot created with `sqlite3 .backup` and fetched through one of two interchangeable transfer implementations:
+Each window acquires a dashboard endpoint for its `ServerProfile` through `DashboardSupervisor`. The supervisor starts `hermes dashboard`, polls `/api/status`, caches the session token scraped from the dashboard SPA, reference-counts consumers, and terminates the child when the last window releases it.
 
-- `SFTPSubprocessTransfer` (macOS default) shells out to `/usr/bin/sftp` and is byte-identical to the original v1 path.
-- `NIOSSHCatTransfer` (opt-in on macOS via `HermesKit.useNIOSSHTransport`, mandatory on iOS) runs `cat -- '<remotePath>'` over a fresh `swift-nio-ssh` connection. Integrity is covered by SSH MACs on the wire plus the downstream SQLite `PRAGMA integrity_check`; a 256 MiB cap rejects misconfigured remote paths.
+Dashboard-backed surfaces today:
 
-The `HermesKit.useNIOSSHTransport` flag only routes the **ACP transport** and the snapshot **fetch** through NIO. The snapshot **backup** (`ssh ... sqlite3 .backup`) and **cleanup** (`ssh ... rm -f`) steps in `RemoteSnapshot` still shell out to `/usr/bin/ssh` on macOS regardless of the flag, because the NIO-`exec` command runner that would replace them is deferred to the iOS app target sprint. The UI must surface snapshot age wherever remote SQLite data is displayed.
+- Sessions browse/search/read/delete: `/api/sessions`, `/api/sessions/search`, `/api/sessions/{id}`.
+- Skills: `/api/skills`, `/api/skills/toggle`.
+- Cron: `/api/cron/jobs` plus pause/resume/trigger subroutes.
+- Logs: polled `/api/logs`.
+- Updates: `/api/status`, `/api/hermes/update`, `/api/actions/hermes-update/status`.
+
+Three operations remain on CLI fallbacks because Hermes does not expose dashboard routes for them yet:
+
+- Sessions rename: `hermes sessions rename`.
+- Tools enable/disable/list: `hermes tools ...`.
+- Doctor report: `hermes doctor`.
+
+Remote dashboard access on macOS is provided by spawning system `ssh` with a loopback `-L <local>:127.0.0.1:<remote>` forward and running `hermes dashboard` on the remote host. The pure-Swift NIO-SSH transport remains the iOS-capable ACP transport seam, but dashboard mode on iOS is deferred until NIO-based port forwarding lands.
 
 ## Window Model
 
-Each app window is scoped to one `ServerProfile`. The window owns its session clients, admin runner, database snapshot, version cache, and capability table.
+Each app window is scoped to one `ServerProfile`. The window owns its ACP session clients, dashboard client reference, CLI fallback runner, version cache, and capability table. `DashboardCoordinator` shares one dashboard supervisor per profile across windows.

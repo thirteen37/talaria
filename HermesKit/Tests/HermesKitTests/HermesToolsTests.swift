@@ -11,10 +11,14 @@ struct HermesToolsTests {
         // The previous parser fell through to the bare "name only" arm
         // because nothing matched `[x]` brackets, leaving `name = "✓"` for
         // every row and rolling the rest into the platform column.
-        let url = try #require(Bundle.module.url(forResource: "Fixtures/tools-rich", withExtension: "txt"))
-        let text = try String(contentsOf: url, encoding: .utf8)
+        let text = """
+        Built-in toolsets (cli):
+          ✓ enabled   web     🔍 Web Search & Scraping
+          ✗ disabled  video   🎬 Video Analysis
+          ✓ enabled   shell   🐚 Shell Commands
+        """
         let rows = HermesTools.parse(text)
-        #expect(rows.count == 24)
+        #expect(rows.count == 3)
         let web = try #require(rows.first(where: { $0.name == "web" }))
         #expect(web.enabled == true)
         #expect(web.platform == "🔍 Web Search & Scraping")

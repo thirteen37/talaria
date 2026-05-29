@@ -659,6 +659,7 @@ private struct ProfileDetailView: View {
         Section("Hermes") {
             TextField("Hermes binary", text: $draft.hermesPath)
             TextField("HERMES_HOME (optional)", text: bindingString(\.hermesHome))
+            TextField("Dashboard port (optional)", text: bindingInt(\.dashboardPort))
         }
 
         if draft.kind == .ssh {

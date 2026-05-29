@@ -85,7 +85,7 @@ public enum HermesProfiles {
         var columnMap: [String: Int] = [:]
         for raw in lines {
             if !raw.contains("│") && !raw.contains("┃") { continue }
-            let cells = HermesSkills.splitRichCells(raw)
+            let cells = CLIFieldParsing.splitRichCells(raw)
             if cells.isEmpty { continue }
             if cells.allSatisfy({ $0.isEmpty }) { continue }
             if columnMap.isEmpty {
@@ -100,7 +100,7 @@ public enum HermesProfiles {
             if name.isEmpty { continue }
             let defaultCell = columnMap["default"].flatMap { $0 < cells.count ? cells[$0] : nil }
             let statusCell = columnMap["status"].flatMap { $0 < cells.count ? cells[$0] : nil }
-            let isDefault = (defaultCell.flatMap(HermesSkills.parseBool) ?? false)
+            let isDefault = (defaultCell.flatMap(CLIFieldParsing.parseBool) ?? false)
                 || name.lowercased() == defaultProfileName
             let status = statusCell.flatMap { $0.isEmpty ? nil : $0 }
             rows.append(HermesProfileInfo(name: name, isDefault: isDefault, status: status))
@@ -111,7 +111,7 @@ public enum HermesProfiles {
     private static let defaultMarkers: Set<String> = ["*", "(default)", "[default]", "default*"]
 
     private static func parseLine(_ line: String) -> HermesProfileInfo? {
-        var fields = HermesSkills.splitFields(line)
+        var fields = CLIFieldParsing.splitFields(line)
         guard !fields.isEmpty else { return nil }
         var isDefault = false
         if fields.first == "*" {

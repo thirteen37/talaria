@@ -3,34 +3,41 @@ import SwiftUI
 
 struct SessionsBrowser: View {
     let store: SessionsStore
-    let db: HermesDB?
+    let client: DashboardClient?
     /// Called after a session is opened. The iOS Settings/browser sheet uses
     /// this to dismiss itself so the chat (which pushes via the selection)
     /// becomes visible. macOS shows the browser in the detail pane and leaves
     /// this nil.
     var onOpen: (() -> Void)?
 
+    enum SortOrder: String, CaseIterable, Identifiable {
+        case recent
+        case title
+
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .recent: return "Recent"
+            case .title: return "Title"
+            }
+        }
+    }
+
     @State private var query: String = ""
-    @State private var sort: HermesDBSortOrder = .updatedDescending
+    @State private var sort: SortOrder = .recent
     @State private var sessions: [HermesSessionSummary] = []
     @State private var errorMessage: String?
     @State private var isLoading = false
 
     var body: some View {
         Group {
-            if let db {
-                content(db: db)
-            } else if store.snapshot != nil {
-                ContentUnavailableView(
-                    "Snapshot not fetched yet",
-                    systemImage: "arrow.down.circle.dotted",
-                    description: Text("Pull the remote SQLite snapshot from the sidebar to browse sessions.")
-                )
+            if let client {
+                content(client: client)
             } else {
                 ContentUnavailableView(
-                    "No Hermes sessions yet",
-                    systemImage: "externaldrive.badge.questionmark",
-                    description: Text("~/.hermes/state.db doesn't exist. Run `hermes` once to create it, then relaunch Talaria.")
+                    "Dashboard not ready",
+                    systemImage: "arrow.triangle.2.circlepath",
+                    description: Text("Waiting for the Hermes dashboard to come online.")
                 )
             }
         }
@@ -38,7 +45,7 @@ struct SessionsBrowser: View {
     }
 
     @ViewBuilder
-    private func content(db: HermesDB) -> some View {
+    private func content(client: DashboardClient) -> some View {
         Group {
             if sessions.isEmpty && !isLoading {
                 ContentUnavailableView(
@@ -69,28 +76,25 @@ struct SessionsBrowser: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Picker("Sort", selection: $sort) {
-                    Text("Recent").tag(HermesDBSortOrder.updatedDescending)
-                    Text("Title").tag(HermesDBSortOrder.titleAscending)
+                    ForEach(SortOrder.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented)
             }
         }
         .task(id: TaskKey(query: query, sort: sort, refresh: store.browserRefreshToken)) {
-            await reload(db: db)
+            await reload(client: client)
         }
     }
 
-    private func reload(db: HermesDB) async {
+    private func reload(client: DashboardClient) async {
         isLoading = true
-        // Only flip the indicator off when this task ran to completion. If we
-        // were cancelled (rapid typing), the next .task(id:) has already set
-        // isLoading = true and we'd flicker by overwriting it.
         defer {
             if !Task.isCancelled {
                 isLoading = false
             }
         }
 
+        // Small debounce so rapid typing doesn't fire a request per keystroke.
         do {
             try await Task.sleep(for: .milliseconds(150))
         } catch {
@@ -99,11 +103,33 @@ struct SessionsBrowser: View {
 
         do {
             let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            let results: [HermesSessionSummary]
+            var results: [HermesSessionSummary]
             if trimmed.isEmpty {
-                results = try await db.listSessions(sort: sort)
+                let response = try await client.listSessions(limit: 200)
+                results = response.sessions.map(HermesSessionSummary.init)
             } else {
-                results = try await db.searchSessions(query: trimmed, sort: sort)
+                let response = try await client.searchSessions(query: trimmed, limit: 200)
+                // `/api/sessions/search` returns one hit per matching message, so
+                // a session matching in several messages appears multiple times.
+                // Keep the first hit per session to give `List` stable, unique IDs.
+                var seen = Set<String>()
+                results = response.results.compactMap { hit in
+                    guard seen.insert(hit.sessionId).inserted else { return nil }
+                    return HermesSessionSummary(
+                        id: hit.sessionId,
+                        title: hit.displaySnippet ?? "",
+                        updatedAt: hit.sessionStarted.map { Date(timeIntervalSince1970: $0) },
+                        cwd: nil
+                    )
+                }
+            }
+            // Title sort is client-side over the fetched window only. The server
+            // returns at most `limit` sessions recency-first, so beyond that cap
+            // this reorders a recency-windowed subset rather than all sessions —
+            // an older session whose title sorts first won't appear. Accurate
+            // ordering past the cap needs server-side title sort or pagination.
+            if sort == .title {
+                results.sort { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
             }
             sessions = results
             errorMessage = nil
@@ -115,7 +141,7 @@ struct SessionsBrowser: View {
 
     private struct TaskKey: Hashable {
         var query: String
-        var sort: HermesDBSortOrder
+        var sort: SortOrder
         var refresh: Int
     }
 }
@@ -129,17 +155,12 @@ private struct SessionRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(summary.title.isEmpty ? SessionIdFormatter.short(summary.id) : summary.title)
                     .font(.body)
-                HStack(spacing: 8) {
-                    if let cwd = summary.cwd {
-                        Label((cwd as NSString).lastPathComponent, systemImage: "folder")
-                            .labelStyle(.titleAndIcon)
-                    }
-                    if let updatedAt = summary.updatedAt {
-                        Text(updatedAt, style: .relative)
-                    }
+                    .lineLimit(2)
+                if let updatedAt = summary.updatedAt {
+                    Text(updatedAt, style: .relative)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
@@ -147,4 +168,3 @@ private struct SessionRow: View {
         .buttonStyle(.plain)
     }
 }
-

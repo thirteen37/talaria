@@ -117,21 +117,12 @@ struct HermesAdminTests {
         """
 
         let stream = runner.runStream(HermesAdminCommand(arguments: ["-c", script]))
-        var iterator = stream.makeAsyncIterator()
-        // Pull a few lines, then drop the iterator — the continuation's
-        // onTermination handler should fire and SIGTERM the child.
         var pulled = 0
-        while pulled < 3 {
-            let event = try await iterator.next()
+        for try await event in stream {
             if case .stdoutLine = event { pulled += 1 }
-            if event == nil { break }
+            if pulled == 3 { break }
         }
         #expect(pulled == 3)
-
-        // Drop the iterator; if cancellation didn't propagate, the child would
-        // run forever and the swift test process would hang on teardown.
-        iterator = stream.makeAsyncIterator()
-        _ = iterator
     }
 }
 #endif

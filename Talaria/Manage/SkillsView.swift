@@ -1,22 +1,69 @@
 import HermesKit
 import SwiftUI
 
-struct SkillsView: View {
-    let runner: HermesAdminRunning?
+@MainActor
+@Observable
+final class SkillsHarness {
+    var rows: [DashboardSkill] = []
+    var isLoading: Bool = false
+    var lastError: String?
+    var selectionID: String?
+    var toggling: Set<String> = []
 
-    @State private var harness: ManageListHarness<SkillRow>?
-    @State private var preview: String?
-    @State private var previewError: String?
-    @State private var loadingPreview = false
-    @State private var previewTask: Task<Void, Never>?
+    private let client: DashboardClient
+
+    init(client: DashboardClient) {
+        self.client = client
+    }
+
+    var selected: DashboardSkill? {
+        guard let id = selectionID else { return nil }
+        return rows.first(where: { $0.name == id })
+    }
+
+    func refresh() async {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            rows = try await client.listSkills()
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func setEnabled(_ name: String, enabled: Bool) async {
+        toggling.insert(name)
+        defer { toggling.remove(name) }
+        do {
+            try await client.toggleSkill(name: name, enabled: enabled)
+            // Refresh so the row reflects what the server actually persisted —
+            // dashboard returns 200 on toggle without a body, so we read back.
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+}
+
+struct SkillsView: View {
+    let client: DashboardClient?
+    let hermesVersion: HermesVersion?
+
+    @State private var harness: SkillsHarness?
+
+    init(client: DashboardClient?, hermesVersion: HermesVersion? = nil) {
+        self.client = client
+        self.hermesVersion = hermesVersion
+    }
 
     var body: some View {
         Group {
-            if runner == nil {
+            if client == nil {
                 ContentUnavailableView(
-                    "Admin runner unavailable",
+                    "Dashboard not ready",
                     systemImage: "wand.and.stars",
-                    description: Text("Open a server with a Hermes binary to manage skills.")
+                    description: Text("Waiting for the Hermes dashboard to come online.")
                 )
             } else if let harness {
                 content(harness: harness)
@@ -25,53 +72,44 @@ struct SkillsView: View {
             }
         }
         .navigationTitle("Skills")
-        .task {
-            if runner == nil {
-                harness = nil
-                return
-            }
+        // Keyed on client availability so the harness is built when the
+        // dashboard finishes booting and `client` flips non-nil, not only on
+        // first appear (a bare `.task` on the Group never re-runs for that flip).
+        .task(id: client != nil) {
+            guard let client else { harness = nil; return }
             if harness != nil { return }
-            // No toggler — hermes (as of 0.14) exposes only an interactive
-            // `skills config` UI for enable/disable, with no scriptable
-            // enable/disable subcommand. The Skills column is rendered as a
-            // read-only status indicator below; if a future hermes adds a
-            // scriptable toggle, swap this back to call HermesSkills.enable/
-            // disable and restore the Toggle column.
-            let h = ManageListHarness<SkillRow>(
-                runner: runner,
-                lister: { try await HermesSkills.list(runner: $0) },
-                toggler: { _, _, _ in }
-            )
+            let h = SkillsHarness(client: client)
             harness = h
             await h.refresh()
         }
     }
 
     @ViewBuilder
-    private func content(harness: ManageListHarness<SkillRow>) -> some View {
-        // Attach `manageBanner` directly to the HSplitView (matching CronView)
-        // rather than to a wrapping VStack. The earlier VStack wrapper caused
-        // the safe-area inset banner to render only above the left pane —
-        // the table column headers ("Enabled", "Path") bled through on the
-        // right where the banner had no width.
+    private func content(harness: SkillsHarness) -> some View {
         #if os(macOS)
         HSplitView {
-            Table(harness.rows, selection: Binding(get: { harness.selectionID }, set: { harness.selectionID = $0 })) {
+            Table(harness.rows, selection: Binding(
+                get: { harness.selectionID },
+                set: { harness.selectionID = $0 }
+            )) {
                 TableColumn("Name") { row in
                     Text(row.name)
                 }
-                // Read-only enabled indicator. Hermes 0.14 doesn't expose a
-                // CLI to flip the value, so showing a Toggle just sets the
-                // user up to hit an "invalid choice" error. A glyph still
-                // communicates the on-disk state at a glance.
                 TableColumn("Enabled") { row in
-                    Image(systemName: row.enabled ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(row.enabled ? .green : .secondary)
-                        .help(row.enabled ? "Enabled" : "Disabled")
+                    Toggle("", isOn: Binding(
+                        get: { row.enabled },
+                        set: { newValue in
+                            Task { await harness.setEnabled(row.name, enabled: newValue) }
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .disabled(harness.toggling.contains(row.name))
                 }
-                .width(60)
-                TableColumn("Path") { row in
-                    Text(row.path ?? "")
+                .width(70)
+                TableColumn("Category") { row in
+                    Text(row.category ?? "")
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -83,6 +121,7 @@ struct SkillsView: View {
                 }
             }
             .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+            .id(harness.rows.map(\.name).joined())
 
             previewPane(harness: harness)
                 .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
@@ -98,10 +137,14 @@ struct SkillsView: View {
                 .disabled(harness.isLoading)
             }
         }
-        .onChange(of: harness.selectionID) { _, newValue in
-            loadPreview(for: newValue, harness: harness)
-        }
-        .manageBanner(harness.lastError)
+        .manageBanner(
+            harness.lastError ?? capabilityBanner(
+                .requiresDashboard,
+                feature: "Skills via Hermes dashboard",
+                version: hermesVersion
+            ),
+            severity: harness.lastError != nil ? .error : .warning
+        )
         #else
         // The Skills surface is only reachable on macOS/iPad's full sidebar.
         // On iOS the runner is always nil so this branch never renders;
@@ -111,53 +154,36 @@ struct SkillsView: View {
     }
 
     @ViewBuilder
-    private func previewPane(harness: ManageListHarness<SkillRow>) -> some View {
-        if loadingPreview {
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if let previewError {
-            ContentUnavailableView("Couldn't load preview", systemImage: "exclamationmark.triangle", description: Text(previewError))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if let preview, !preview.isEmpty {
-            ScrollView {
-                MarkdownText(text: preview)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
+    private func previewPane(harness: SkillsHarness) -> some View {
+        if let skill = harness.selected {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(skill.name)
+                    .font(.headline)
+                HStack(spacing: 8) {
+                    Image(systemName: skill.enabled ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(skill.enabled ? .green : .secondary)
+                    Text(skill.enabled ? "Enabled" : "Disabled")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let category = skill.category, !category.isEmpty {
+                        Text("· \(category)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let description = skill.description, !description.isEmpty {
+                    Divider()
+                    Text(description)
+                        .font(.body)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                Spacer()
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding()
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
             ContentUnavailableView("Select a skill", systemImage: "sidebar.right")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    private func loadPreview(for id: SkillRow.ID?, harness: ManageListHarness<SkillRow>) {
-        // Cancel any in-flight load so an older `show` response can't land
-        // after a newer one and overwrite the visible preview.
-        previewTask?.cancel()
-        preview = nil
-        previewError = nil
-        guard let id, let runner else {
-            previewTask = nil
-            loadingPreview = false
-            return
-        }
-        let source = harness.rows.first(where: { $0.id == id })?.source
-        loadingPreview = true
-        previewTask = Task {
-            defer { loadingPreview = false }
-            do {
-                let body = try await HermesSkills.show(runner: runner, name: id, source: source)
-                // Belt-and-braces: even if cancellation lost the race, only
-                // apply the result when the selection is still on this row.
-                guard !Task.isCancelled, harness.selectionID == id else { return }
-                preview = body
-            } catch is CancellationError {
-                return
-            } catch {
-                guard !Task.isCancelled, harness.selectionID == id else { return }
-                previewError = error.localizedDescription
-            }
         }
     }
 }

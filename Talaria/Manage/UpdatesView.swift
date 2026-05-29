@@ -9,73 +9,65 @@ final class UpdatesHarness {
         let text: String
     }
 
-    var status: UpdateStatus?
-    var isChecking: Bool = false
+    var state: DashboardUpdateState?
+    var isLoading: Bool = false
     var isApplying: Bool = false
     var applyLog: [LogEntry] = []
     var applyExitCode: Int32?
     var lastError: String?
 
-    let runner: HermesAdminRunning?
-
+    private let service: DashboardUpdatesService
     private var nextLogID: Int = 0
     private var applyTask: Task<Void, Never>?
 
-    init(runner: HermesAdminRunning?) {
-        self.runner = runner
+    init(service: DashboardUpdatesService) {
+        self.service = service
     }
 
-    private func appendLog(_ text: String) {
-        applyLog.append(LogEntry(id: nextLogID, text: text))
-        nextLogID += 1
+    private func appendLines(_ lines: [String]) {
+        for line in lines {
+            applyLog.append(LogEntry(id: nextLogID, text: line))
+            nextLogID += 1
+        }
         if applyLog.count > 5000 {
             applyLog.removeFirst(applyLog.count - 5000)
         }
     }
 
-    func check() async {
-        guard let runner else { return }
-        isChecking = true
-        defer { isChecking = false }
+    func refresh() async {
+        isLoading = true
+        defer { isLoading = false }
         lastError = nil
         do {
-            status = try await HermesUpdates.check(runner: runner)
+            state = try await service.currentState()
         } catch {
             lastError = error.localizedDescription
         }
     }
 
     func apply() {
-        guard let runner, !isApplying else { return }
+        guard !isApplying else { return }
         isApplying = true
         applyLog.removeAll()
         applyExitCode = nil
         lastError = nil
-        let stream = HermesUpdates.apply(runner: runner)
+        let stream = service.apply()
         applyTask = Task { [weak self] in
             defer { Task { @MainActor in self?.isApplying = false } }
             do {
-                var exit: Int32?
                 for try await event in stream {
                     guard let self else { return }
                     switch event {
-                    case .stdoutLine(let line), .stderrLine(let line):
-                        self.appendLog(line)
-                    case .exit(let code):
+                    case .logLines(let lines):
+                        self.appendLines(lines)
+                    case .finished(let code):
                         self.applyExitCode = code
-                        exit = code
                     }
                 }
-                // Refresh the status banner once the update applies cleanly
-                // so the "Install update" button disables itself and the
-                // "X commits behind"/version subtitle reflects post-update
-                // reality. On non-zero exits the previous status is still
-                // accurate, so leave it alone.
-                if exit == 0 {
-                    await self?.check()
-                }
+                // Re-read the version banner so it reflects the post-update
+                // state.
+                await self?.refresh()
             } catch is CancellationError {
-                // User tapped Cancel — normal exit path, no banner.
                 return
             } catch {
                 self?.lastError = error.localizedDescription
@@ -90,23 +82,23 @@ final class UpdatesHarness {
 }
 
 struct UpdatesView: View {
-    let runner: HermesAdminRunning?
+    let client: DashboardClient?
     let hermesVersion: HermesVersion?
 
     @State private var harness: UpdatesHarness?
 
-    init(runner: HermesAdminRunning?, hermesVersion: HermesVersion? = nil) {
-        self.runner = runner
+    init(client: DashboardClient?, hermesVersion: HermesVersion? = nil) {
+        self.client = client
         self.hermesVersion = hermesVersion
     }
 
     var body: some View {
         Group {
-            if runner == nil {
+            if client == nil {
                 ContentUnavailableView(
-                    "Admin runner unavailable",
+                    "Dashboard not ready",
                     systemImage: "arrow.triangle.2.circlepath",
-                    description: Text("Open a server with a Hermes binary to check for updates.")
+                    description: Text("Waiting for the Hermes dashboard to come online.")
                 )
             } else if let harness {
                 content(harness: harness)
@@ -115,12 +107,15 @@ struct UpdatesView: View {
             }
         }
         .navigationTitle("Updates")
-        .task {
-            if runner == nil { harness = nil; return }
+        // Keyed on client availability so the harness is built when the
+        // dashboard finishes booting and `client` flips non-nil, not only on
+        // first appear (a bare `.task` on the Group never re-runs for that flip).
+        .task(id: client != nil) {
+            guard let client else { harness = nil; return }
             if harness != nil { return }
-            let h = UpdatesHarness(runner: runner)
+            let h = UpdatesHarness(service: DashboardUpdatesService(client: client))
             harness = h
-            await h.check()
+            await h.refresh()
         }
     }
 
@@ -130,27 +125,24 @@ struct UpdatesView: View {
             statusBanner(harness: harness)
             HStack(spacing: 8) {
                 Button {
-                    Task { await harness.check() }
+                    Task { await harness.refresh() }
                 } label: {
-                    Label("Check", systemImage: "arrow.clockwise")
+                    Label("Refresh", systemImage: "arrow.clockwise")
                 }
-                .disabled(harness.isChecking)
+                .disabled(harness.isLoading || harness.isApplying)
 
                 Button {
                     harness.apply()
                 } label: {
-                    Label("Install update", systemImage: "arrow.down.circle.fill")
+                    Label("Update Hermes", systemImage: "arrow.down.circle.fill")
                 }
-                .disabled(
-                    harness.isApplying
-                    || harness.status?.available != true
-                )
+                .disabled(harness.isApplying)
 
                 if harness.isApplying {
                     Button("Cancel") { harness.cancelApply() }
                 }
 
-                if harness.isChecking || harness.isApplying {
+                if harness.isLoading || harness.isApplying {
                     ProgressView().controlSize(.small)
                 }
                 Spacer()
@@ -168,8 +160,8 @@ struct UpdatesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .manageBanner(
             harness.lastError ?? capabilityBanner(
-                .updateCheck,
-                feature: "`hermes update --check`",
+                .requiresDashboard,
+                feature: "Hermes dashboard (`pip install hermes-agent[web]`)",
                 version: hermesVersion
             ),
             severity: harness.lastError != nil ? .error : .warning
@@ -178,15 +170,20 @@ struct UpdatesView: View {
 
     @ViewBuilder
     private func statusBanner(harness: UpdatesHarness) -> some View {
-        if let status = harness.status {
+        if let state = harness.state {
+            // Neutral presentation: the dashboard `/api/status` reports the
+            // installed version but no "is an update available" flag, so we
+            // can't honestly render an up-to-date checkmark. Show an info
+            // glyph with just the version; the user decides whether to run
+            // "Update Hermes".
             HStack(spacing: 8) {
-                Image(systemName: status.available ? "arrow.down.circle.fill" : "checkmark.circle.fill")
-                    .foregroundStyle(status.available ? Color.accentColor : .green)
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(status.available ? "Update available" : "Up to date")
+                    Text("Hermes \(state.version)")
                         .font(.headline)
-                    if let subtitle = subtitle(for: status) {
-                        Text(subtitle)
+                    if let release = state.releaseDate {
+                        Text("Release \(release)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -195,21 +192,8 @@ struct UpdatesView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background((status.available ? Color.accentColor : Color.green).opacity(0.12))
+            .background(Color.secondary.opacity(0.1))
         }
-    }
-
-    /// Prefer the semver delta when both versions are known; otherwise
-    /// surface the human-readable detail string (e.g. "122 commits behind
-    /// origin/main") that the source-install update notice provides.
-    private func subtitle(for status: UpdateStatus) -> String? {
-        if status.available, let current = status.current, let latest = status.latest {
-            return "\(formatVersion(current)) → \(formatVersion(latest))"
-        }
-        if let current = status.current, !status.available {
-            return "Current \(formatVersion(current))"
-        }
-        return status.detail
     }
 
     @ViewBuilder
@@ -240,11 +224,5 @@ struct UpdatesView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-    }
-
-    private func formatVersion(_ v: HermesVersion) -> String {
-        var s = "\(v.major).\(v.minor).\(v.patch)"
-        if let pre = v.prerelease { s += "-\(pre)" }
-        return s
     }
 }

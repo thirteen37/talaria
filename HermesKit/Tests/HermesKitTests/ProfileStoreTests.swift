@@ -10,7 +10,13 @@ struct ProfileStoreTests {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let first = ProfileStore(url: url)
-        let profileA = ServerProfile(name: "Box A", kind: .ssh, host: "a.example.com", user: "x")
+        let profileA = ServerProfile(
+            name: "Box A",
+            kind: .ssh,
+            host: "a.example.com",
+            user: "x",
+            dashboardPort: 58123
+        )
         let profileB = ServerProfile(name: "Box B", kind: .local)
         try await first.upsert(profileA)
         try await first.upsert(profileB)
@@ -19,6 +25,7 @@ struct ProfileStoreTests {
         let loaded = try await second.all()
         let ids = Set(loaded.map(\.id))
         #expect(ids == Set([profileA.id, profileB.id]))
+        #expect(loaded.first(where: { $0.id == profileA.id })?.dashboardPort == 58123)
     }
 
     @Test

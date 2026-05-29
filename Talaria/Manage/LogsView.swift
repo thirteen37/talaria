@@ -6,45 +6,63 @@ import SwiftUI
 final class LogsHarness {
     struct Entry: Identifiable, Equatable {
         let id: Int
-        let line: LogLine
+        let text: String
     }
 
     var entries: [Entry] = []
     var paused: Bool = false
     var lastError: String?
-    var levelFilter: LogLevel?  // nil = All
+    /// Server-side level filter applied via `/api/logs?level=`. Empty string
+    /// means "all levels" — the dashboard treats absent / blank as no filter.
+    var levelFilter: String = ""
+    /// Draft component filter bound to the text field. Free text, so it's
+    /// only applied to the poll on submit (see `appliedComponentFilter`) —
+    /// applying mid-type would let a background poll fetch a partially-typed
+    /// filter's tail and corrupt the diff against the last snapshot.
     var componentFilter: String = ""
+    /// Draft substring search bound to the text field; applied on submit.
+    var searchFilter: String = ""
+    /// Committed filters the poll actually sends. Updated from the drafts by
+    /// `applyTextFilters()` on submit. The Level picker commits immediately
+    /// instead because it's a discrete menu, not free text.
+    private var appliedComponentFilter: String = ""
+    private var appliedSearchFilter: String = ""
+    /// Active log file name, defaults to whatever the dashboard returns
+    /// (typically `agent`). Surfaced read-only because Hermes' log layout
+    /// isn't user-configurable today.
+    var file: String = ""
 
-    /// Max lines retained in the ring buffer. Older lines are dropped from the
-    /// front when this is exceeded so the UI doesn't OOM on noisy logs.
-    let ringCapacity: Int
+    /// How many tail lines to request per poll. The dashboard returns the
+    /// full tail buffer each time so we deduplicate against `nextID` rather
+    /// than asking the server for "lines since X".
+    let tailLines: Int
 
     private var nextID: Int = 0
+    private var lastSnapshotLines: [String] = []
     private var task: Task<Void, Never>?
-    private let tailing: HermesLogTailing
+    /// Single-flight epoch. The background loop and `refreshNow()` (Refresh
+    /// button, Level picker, filter submits) are independent pollers; without
+    /// this, two polls overlapping across the `getLogs` round-trip can both
+    /// diff against the same snapshot and double-append, and a poll resolving
+    /// after a `clear()` can re-append lines fetched under the old filter.
+    /// Each poll bumps this at start and discards its result if a newer poll
+    /// (or a `clear()`) bumped it again — latest wins.
+    private var pollGeneration: Int = 0
+    private let client: DashboardClient
+    private let pollInterval: TimeInterval
 
-    init(tailing: HermesLogTailing, ringCapacity: Int = 5000) {
-        self.tailing = tailing
-        self.ringCapacity = ringCapacity
+    init(client: DashboardClient, tailLines: Int = 500, pollInterval: TimeInterval = 2.0) {
+        self.client = client
+        self.tailLines = tailLines
+        self.pollInterval = pollInterval
     }
 
     func start() {
         guard task == nil else { return }
-        let stream = tailing.tail(component: nil)
         task = Task { [weak self] in
-            do {
-                for try await line in stream {
-                    guard let self else { return }
-                    if Task.isCancelled { return }
-                    if self.paused { continue }
-                    self.append(line)
-                }
-            } catch is CancellationError {
-                // stop() was called (onDisappear, view tear-down) — not an
-                // error the user needs to see on next appear.
-                return
-            } catch {
-                self?.lastError = error.localizedDescription
+            while let self, !Task.isCancelled {
+                await self.poll()
+                try? await Task.sleep(nanoseconds: UInt64(self.pollInterval * 1_000_000_000))
             }
         }
     }
@@ -56,122 +74,108 @@ final class LogsHarness {
 
     func clear() {
         entries.removeAll()
+        lastSnapshotLines.removeAll()
+        // Invalidate any in-flight poll so its (now stale, possibly
+        // old-filter) result doesn't repopulate the just-cleared buffer.
+        pollGeneration += 1
     }
 
-    func filtered() -> [Entry] {
-        let component = componentFilter.trimmingCharacters(in: .whitespaces)
-        let level = levelFilter
-        guard !component.isEmpty || level != nil else { return entries }
-        return entries.filter { entry in
-            if let level, entry.line.level != level { return false }
-            if !component.isEmpty,
-               !entry.line.component.localizedCaseInsensitiveContains(component) {
-                return false
+    /// Promotes the draft component/search text to the committed filters the
+    /// poll sends. Call on submit, paired with `clear()` + a refresh.
+    func applyTextFilters() {
+        appliedComponentFilter = componentFilter
+        appliedSearchFilter = searchFilter
+    }
+
+    func refreshNow() async {
+        await poll()
+    }
+
+    private func poll() async {
+        if paused { return }
+        pollGeneration += 1
+        let generation = pollGeneration
+        do {
+            let response = try await client.getLogs(
+                file: nil,
+                lines: tailLines,
+                level: levelFilter.isEmpty ? nil : levelFilter,
+                component: appliedComponentFilter.isEmpty ? nil : appliedComponentFilter,
+                search: appliedSearchFilter.isEmpty ? nil : appliedSearchFilter
+            )
+            // A newer poll (or a clear()) superseded us while awaiting — drop
+            // this result rather than diff/append against a snapshot that's
+            // moved on, which is what produces duplicate / stale-filter rows.
+            guard generation == pollGeneration else { return }
+            file = response.file
+            // The dashboard returns the most-recent tail on every poll. Diff
+            // against the last snapshot — anything that wasn't there last
+            // time is "new" and gets appended. This handles both append-only
+            // (steady state) and log-rotated (full reset) cases without
+            // round-trips for cursor state.
+            let newLines = TailDiff.newSuffix(of: response.lines, after: lastSnapshotLines)
+            for raw in newLines {
+                entries.append(Entry(id: nextID, text: raw))
+                nextID += 1
             }
-            return true
+            if entries.count > 5000 {
+                entries.removeFirst(entries.count - 5000)
+            }
+            lastSnapshotLines = response.lines
+            lastError = nil
+        } catch {
+            // Same single-flight guard: don't let a superseded poll's error
+            // overwrite the latest poll's state.
+            guard generation == pollGeneration else { return }
+            lastError = error.localizedDescription
         }
     }
 
-    private func append(_ line: LogLine) {
-        let entry = Entry(id: nextID, line: line)
-        nextID += 1
-        entries.append(entry)
-        if entries.count > ringCapacity {
-            entries.removeFirst(entries.count - ringCapacity)
-        }
-    }
 }
 
 struct LogsView: View {
-    let runner: HermesAdminRunning?
-    let profile: ServerProfile
-    /// Owns the live tailer at window scope so the buffered ring of log
-    /// lines survives sidebar navigation. Without this, switching tabs and
-    /// coming back would create a fresh @State-owned harness and the user
-    /// would see an empty view until new lines streamed in.
-    let provider: () -> LogsHarness?
+    let client: DashboardClient?
+    let hermesVersion: HermesVersion?
 
     @State private var harness: LogsHarness?
     @State private var autoScroll: Bool = true
-    /// Distinguishes "provider hasn't been called yet" from "provider was
-    /// called and returned nil". Without this the iOS path (where
-    /// `makeTailing` always returns nil) would render a permanent spinner
-    /// in the iPad Browse → Logs surface.
-    @State private var providerAttempted = false
+
+    init(client: DashboardClient?, hermesVersion: HermesVersion? = nil) {
+        self.client = client
+        self.hermesVersion = hermesVersion
+    }
 
     var body: some View {
         Group {
-            if let harness {
-                content(harness: harness)
-            } else if providerAttempted {
+            if client == nil {
                 ContentUnavailableView(
-                    "Logs unavailable",
-                    systemImage: "doc.text",
-                    description: Text("No log tailer is available for this server on this platform.")
+                    "Dashboard not ready",
+                    systemImage: "doc.text.magnifyingglass",
+                    description: Text("Waiting for the Hermes dashboard to come online.")
                 )
+            } else if let harness {
+                content(harness: harness)
             } else {
                 ProgressView()
             }
         }
         .navigationTitle("Logs")
-        .task {
-            // Pull the persistent harness from the window. Calling on every
-            // appear is cheap — `ensureLogsHarness` returns the existing
-            // instance after the first construction and only kicks off a
-            // tailer task once. We deliberately don't `stop()` on disappear:
-            // letting the tailer keep filling the ring buffer is the whole
-            // point of the move out of @State.
-            if harness == nil {
-                harness = provider()
-                providerAttempted = true
-            }
+        // Keyed on client availability so the harness is built when the
+        // dashboard finishes booting and `client` flips non-nil, not only on
+        // first appear (a bare `.task` on the Group never re-runs for that flip).
+        .task(id: client != nil) {
+            guard let client else { harness = nil; return }
+            // Re-appearing after `.onDisappear` left a stopped harness in place:
+            // restart its poll loop (idempotent — `start()` guards on `task ==
+            // nil`) instead of returning early and leaving tailing dead.
+            if let harness { harness.start(); return }
+            let h = LogsHarness(client: client)
+            harness = h
+            h.start()
         }
-    }
-
-    /// Logs root for local profiles, with sensible defaults so the user
-    /// doesn't have to set `HERMES_HOME` on a vanilla local profile. Order
-    /// matches what hermes itself reads: explicit profile override > the
-    /// app's process environment > the user's login-shell HERMES_HOME (cached
-    /// from `LoginShellPATHResolver`) > the `~/.hermes` default. SSH profiles
-    /// are resolved at tail-time on the remote host and return nil here.
-    #if os(macOS)
-    static func resolvedLocalHermesHome(profile: ServerProfile) -> String? {
-        if let value = profile.hermesHome?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !value.isEmpty {
-            return value
+        .onDisappear {
+            harness?.stop()
         }
-        guard profile.kind == .local else { return nil }
-        if let env = ProcessInfo.processInfo.environment["HERMES_HOME"], !env.isEmpty {
-            return env
-        }
-        if let cached = LoginShellPATHResolver.cachedHermesHome() {
-            return cached
-        }
-        return (NSHomeDirectory() as NSString).appendingPathComponent(".hermes")
-    }
-    #endif
-
-    /// Built at window scope so the lazily-created `LogsHarness` outlives
-    /// LogsView instances. For local profiles the path is resolved
-    /// synchronously here; SSH profiles defer resolution to the tailer
-    /// (which runs a short remote command through the profile's shell mode
-    /// when no `profile.hermesHome` was pinned).
-    static func makeTailing(profile: ServerProfile) -> HermesLogTailing? {
-        #if os(macOS)
-        switch profile.kind {
-        case .local:
-            // resolvedLocalHermesHome always returns non-nil for local kind
-            // (worst case: `~/.hermes`). The `?? "~/.hermes"` is just
-            // belt-and-braces — Swift's flow analysis can't see it.
-            let hermesHome = resolvedLocalHermesHome(profile: profile)
-                ?? (NSHomeDirectory() as NSString).appendingPathComponent(".hermes")
-            return LocalLogTailing(hermesHome: hermesHome)
-        case .ssh:
-            return RemoteLogTailing(profile: profile, hermesHome: profile.hermesHome)
-        }
-        #else
-        return nil
-        #endif
     }
 
     @ViewBuilder
@@ -185,7 +189,7 @@ struct LogsView: View {
         .toolbar {
             ToolbarItem {
                 Button {
-                    let text = harness.filtered().map(\.line.raw).joined(separator: "\n")
+                    let text = harness.entries.map(\.text).joined()
                     copyToPasteboard(text)
                 } label: {
                     Label("Copy visible", systemImage: "doc.on.doc")
@@ -194,12 +198,20 @@ struct LogsView: View {
             ToolbarItem {
                 Button {
                     harness.clear()
+                    Task { await harness.refreshNow() }
                 } label: {
-                    Label("Clear", systemImage: "trash")
+                    Label("Refresh", systemImage: "arrow.clockwise")
                 }
             }
         }
-        .manageBanner(harness.lastError)
+        .manageBanner(
+            harness.lastError ?? capabilityBanner(
+                .requiresDashboard,
+                feature: "Logs via Hermes dashboard",
+                version: hermesVersion
+            ),
+            severity: harness.lastError != nil ? .error : .warning
+        )
     }
 
     @ViewBuilder
@@ -207,13 +219,17 @@ struct LogsView: View {
         HStack(spacing: 12) {
             Picker("Level", selection: Binding(
                 get: { harness.levelFilter },
-                set: { harness.levelFilter = $0 }
+                set: { newValue in
+                    harness.levelFilter = newValue
+                    harness.clear()
+                    Task { await harness.refreshNow() }
+                }
             )) {
-                Text("All").tag(LogLevel?.none)
-                Text("Debug").tag(LogLevel?.some(.debug))
-                Text("Info").tag(LogLevel?.some(.info))
-                Text("Warn").tag(LogLevel?.some(.warn))
-                Text("Error").tag(LogLevel?.some(.error))
+                Text("All").tag("")
+                Text("Debug").tag("DEBUG")
+                Text("Info").tag("INFO")
+                Text("Warn").tag("WARNING")
+                Text("Error").tag("ERROR")
             }
             .pickerStyle(.menu)
             .frame(maxWidth: 160)
@@ -223,7 +239,24 @@ struct LogsView: View {
                 set: { harness.componentFilter = $0 }
             ))
             .textFieldStyle(.roundedBorder)
-            .frame(maxWidth: 220)
+            .frame(maxWidth: 180)
+            .onSubmit {
+                harness.applyTextFilters()
+                harness.clear()
+                Task { await harness.refreshNow() }
+            }
+
+            TextField("Search", text: Binding(
+                get: { harness.searchFilter },
+                set: { harness.searchFilter = $0 }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .frame(maxWidth: 200)
+            .onSubmit {
+                harness.applyTextFilters()
+                harness.clear()
+                Task { await harness.refreshNow() }
+            }
 
             Toggle("Pause", isOn: Binding(
                 get: { harness.paused },
@@ -245,19 +278,21 @@ struct LogsView: View {
 
     @ViewBuilder
     private func logList(harness: LogsHarness) -> some View {
-        let visible = harness.filtered()
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
-                    ForEach(visible) { entry in
-                        LogLineRow(entry: entry)
+                    ForEach(harness.entries) { entry in
+                        Text(entry.text.trimmingCharacters(in: .newlines))
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .id(entry.id)
                     }
                 }
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
             }
-            .onChange(of: visible.last?.id) { _, newValue in
+            .onChange(of: harness.entries.last?.id) { _, newValue in
                 guard autoScroll, let newValue else { return }
                 withAnimation(.linear(duration: 0.05)) {
                     proxy.scrollTo(newValue, anchor: .bottom)
@@ -272,52 +307,5 @@ struct LogsView: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
         #endif
-    }
-}
-
-private struct LogLineRow: View {
-    let entry: LogsHarness.Entry
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 6) {
-            if let ts = entry.line.timestamp {
-                Text(ts.formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false)))
-                    .foregroundStyle(.secondary)
-                    .font(.system(.caption, design: .monospaced))
-            }
-            Text(levelLabel)
-                .foregroundStyle(levelColor)
-                .font(.system(.caption, design: .monospaced))
-                .frame(width: 50, alignment: .leading)
-            if !entry.line.component.isEmpty {
-                Text(entry.line.component)
-                    .foregroundStyle(.purple)
-                    .font(.system(.caption, design: .monospaced))
-            }
-            Text(entry.line.message)
-                .font(.system(.body, design: .monospaced))
-                .textSelection(.enabled)
-            Spacer(minLength: 0)
-        }
-    }
-
-    private var levelLabel: String {
-        switch entry.line.level {
-        case .debug: return "DBG"
-        case .info: return "INF"
-        case .warn: return "WRN"
-        case .error: return "ERR"
-        case .unknown: return ""
-        }
-    }
-
-    private var levelColor: Color {
-        switch entry.line.level {
-        case .debug: return .gray
-        case .info: return .blue
-        case .warn: return .orange
-        case .error: return .red
-        case .unknown: return .secondary
-        }
     }
 }
