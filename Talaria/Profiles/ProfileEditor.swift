@@ -483,10 +483,22 @@ private struct ProfileDetailView: View {
     let onDiscard: () -> Void
     let onPickIdentity: () -> Void
 
-    /// Ephemeral password input for iOS. Lives in @State so it never leaks
-    /// into the persisted `ServerProfile`; the parent moves it to the
-    /// Keychain on save and stores only a reference.
+    /// Password input for iOS. Lives in @State so it never leaks into the
+    /// persisted `ServerProfile`; the parent moves it to the Keychain on save
+    /// and stores only a reference. Pre-filled from the Keychain on appear so
+    /// the SecureField shows the saved password as masked dots (matching the
+    /// platform convention), and saving keeps it unless the user edits it.
     @State private var passwordInput: String = ""
+
+    /// Loads any saved password into the field so it renders masked, rather
+    /// than appearing empty when a password is in fact stored.
+    private func loadStoredPassword() {
+        #if os(iOS)
+        guard draft.authMethod == .password, passwordInput.isEmpty,
+              let reference = draft.passwordKeychainReference else { return }
+        passwordInput = PasswordKeychain.get(reference: reference) ?? ""
+        #endif
+    }
 
     var body: some View {
         #if os(iOS)
@@ -508,11 +520,10 @@ private struct ProfileDetailView: View {
                 }
             }
         }
+        .onAppear(perform: loadStoredPassword)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Save") { onSave(passwordInput) }
-                    // Typing a fresh password counts as a saveable change
-                    // even when no other field diverges from disk.
                     .disabled(!canSave && passwordInput.isEmpty)
                     .fontWeight(.semibold)
             }
@@ -576,11 +587,6 @@ private struct ProfileDetailView: View {
                 }
                 if draft.authMethod == .password {
                     SecureField("Password", text: $passwordInput)
-                    if draft.passwordKeychainReference != nil, passwordInput.isEmpty {
-                        Text("A password is stored in the Keychain. Leave blank to keep it, or type a new one to replace it.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
                 } else {
                     TextField("Identity file (optional)", text: bindingString(\.identityFile))
                 }
