@@ -82,20 +82,28 @@ struct SessionsSidebar: View {
             store.selection = session.id
         } label: {
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 8) {
-                    statusDot(for: session.id)
-                    Text(session.title ?? shortId(session.id))
-                        .lineLimit(1)
-                    Spacer()
-                }
+                // The status dot is an SF Symbol inside the title text run so
+                // the text layout engine aligns it to the name's optical
+                // center (a sibling Circle in an HStack centers on the line
+                // box instead, which reads low).
+                (
+                    Text(Image(systemName: "circle.fill"))
+                        .font(.system(size: 9))
+                        .foregroundColor(statusColor(for: session.id))
+                    + Text("  ")
+                    + Text(session.title ?? shortId(session.id))
+                )
+                .lineLimit(1)
+
                 Text((session.cwd as NSString).lastPathComponent)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    // Indent under the title (dot width + HStack spacing) so
-                    // the subtitle lines up with the session name, not the dot.
-                    .padding(.leading, 16)
+                    // Indent under the title text (past the dot + spaces) so
+                    // the subtitle lines up with the session name.
+                    .padding(.leading, 17)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -115,17 +123,12 @@ struct SessionsSidebar: View {
         }
     }
 
-    private func statusDot(for id: SessionId) -> some View {
-        let status = store.statuses[id] ?? .idle
-        let color: Color
-        switch status {
-        case .idle: color = .secondary
-        case .working: color = .green
-        case .error: color = .red
+    private func statusColor(for id: SessionId) -> Color {
+        switch store.statuses[id] ?? .idle {
+        case .idle: return .secondary
+        case .working: return .green
+        case .error: return .red
         }
-        return Circle()
-            .fill(color)
-            .frame(width: 8, height: 8)
     }
 
     private func shortId(_ id: SessionId) -> String {

@@ -64,6 +64,7 @@
 		7E30E462CE94D33676E7C0FA /* ChatNavigationUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDC6CCD5B8F3E1D29743B8A5 /* ChatNavigationUITests.swift */; };
 		7ED741CA98028019107E791C /* SessionsSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13E7B5FE8F2B768093DA0CC8 /* SessionsSidebar.swift */; };
 		83727994132ADEA7D5549C6C /* ReasoningPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3D2C3E35C2AD0E82789D5C9 /* ReasoningPanel.swift */; };
+		8B3E937AF4DB38A217D186F5 /* CaptureSidebarUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5E08CCCED287F4ADFA26F44 /* CaptureSidebarUITests.swift */; };
 		8E559351A3B124847523D0F3 /* SessionIdFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE7C6DE41D3712DB0E94D405 /* SessionIdFormatter.swift */; };
 		91B54214562649BDF9432644 /* SessionsStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FAF0B860CFD0B1772AECD9C /* SessionsStore.swift */; };
 		923AEE54A92630F73015A4E7 /* TranscriptRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC599A81E82D875768DD55B4 /* TranscriptRow.swift */; };
@@ -151,6 +152,7 @@
 		DFE066B74B82DFA8FC5F8F24 /* DiffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffView.swift; sourceTree = "<group>"; };
 		E005ED3BDD366E523AD6E04B /* Talaria.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Talaria.entitlements; sourceTree = "<group>"; };
 		E3EDBB9C99D2FF50800A31BE /* ToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolsView.swift; sourceTree = "<group>"; };
+		E5E08CCCED287F4ADFA26F44 /* CaptureSidebarUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSidebarUITests.swift; sourceTree = "<group>"; };
 		EBD51D628CE76D533C526BAA /* PathAwareHermesAdminRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathAwareHermesAdminRunner.swift; sourceTree = "<group>"; };
 		EC599A81E82D875768DD55B4 /* TranscriptRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptRow.swift; sourceTree = "<group>"; };
 		F60C409BF8E2169D2D41DAEE /* HermesKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = HermesKit; path = HermesKit; sourceTree = SOURCE_ROOT; };
@@ -254,6 +256,7 @@
 		79E5B7197F6A1FE02D0B4B50 /* TalariaUITests */ = {
 			isa = PBXGroup;
 			children = (
+				E5E08CCCED287F4ADFA26F44 /* CaptureSidebarUITests.swift */,
 				DDC6CCD5B8F3E1D29743B8A5 /* ChatNavigationUITests.swift */,
 			);
 			path = TalariaUITests;
@@ -554,6 +557,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8B3E937AF4DB38A217D186F5 /* CaptureSidebarUITests.swift in Sources */,
 				7E30E462CE94D33676E7C0FA /* ChatNavigationUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
