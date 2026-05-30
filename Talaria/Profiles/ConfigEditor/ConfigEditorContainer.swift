@@ -1,13 +1,14 @@
 import HermesKit
 import SwiftUI
 
-/// Desktop-class container for the profile config editor (macOS + iPad). Hosts a
-/// single-profile structured/YAML editor with a toolbar profile picker, a
-/// Structured⇄YAML segmented toggle, a Save action, and a Compare mode that
-/// reveals a second profile picker and switches to the read-only comparison.
+/// Container for the profile config editor. Hosts a single-profile
+/// structured/YAML editor with a toolbar profile picker, a Structured⇄YAML
+/// segmented toggle, a Save action, and (desktop only) a Compare mode that
+/// reveals a second profile picker and the editable two-column comparison.
 ///
-/// The compact (iPhone) variant is intentionally not built here — it would reuse
-/// `ConfigEditorHarness` + the structured/YAML editors without Compare.
+/// The same container backs both the desktop window and the iPhone Browse sheet
+/// (`BrowseDetailView` → `PhoneBrowseSheet`); Compare is gated off on iPhone,
+/// where the two-column layout is unusable.
 struct ConfigEditorContainer: View {
     let windowHarness: ServerWindowHarness
 
@@ -15,6 +16,12 @@ struct ConfigEditorContainer: View {
     @State private var showingExporter = false
     @State private var showingImporter = false
     @State private var pendingRestoreText: String?
+
+    /// Compare needs the room a desktop split has and at least two profiles to
+    /// line up. iPhone reuses this container without it.
+    private func canCompare(_ editor: ConfigEditorHarness) -> Bool {
+        !Idiom.isPhone && editor.profiles.count >= 2
+    }
 
     var body: some View {
         Group {
@@ -61,30 +68,24 @@ struct ConfigEditorContainer: View {
     @ViewBuilder
     private func content(_ editor: ConfigEditorHarness) -> some View {
         Group {
-            if editor.comparing {
-                ProfilesComparisonView(
-                    comparison: editor.comparison,
-                    sourceName: editor.selectedProfile,
-                    destName: editor.compareProfile,
-                    showDifferencesOnly: editor.showDifferencesOnly,
-                    isLoading: editor.isLoading
-                )
+            if editor.comparing, let dest = editor.dest {
+                EditableComparisonView(source: editor.source, dest: dest)
             } else {
-                switch editor.mode {
+                switch editor.source.mode {
                 case .structured:
-                    StructuredConfigEditor(harness: editor)
+                    StructuredConfigEditor(state: editor.source)
                 case .yaml:
-                    YAMLConfigEditor(harness: editor)
+                    YAMLConfigEditor(state: editor.source)
                 }
             }
         }
         .toolbar { toolbar(editor) }
-        .manageBanner(banner(editor), severity: editor.lastError != nil ? .error : .warning)
+        .manageBanner(banner(editor), severity: editor.source.lastError != nil || editor.lastError != nil ? .error : .warning)
         .fileExporter(isPresented: $showingExporter,
-                      document: YAMLFileDocument(text: editor.backupYAML),
+                      document: YAMLFileDocument(text: editor.source.backupYAML),
                       contentType: .hermesYAML,
-                      defaultFilename: editor.backupFilename) { result in
-            if case .failure(let e) = result { editor.lastError = e.localizedDescription }
+                      defaultFilename: editor.source.backupFilename) { result in
+            if case .failure(let e) = result { editor.source.lastError = e.localizedDescription }
         }
         .fileImporter(isPresented: $showingImporter,
                       allowedContentTypes: [.hermesYAML, .text, .data]) { result in
@@ -93,16 +94,16 @@ struct ConfigEditorContainer: View {
                 let scoped = url.startAccessingSecurityScopedResource()
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 do { pendingRestoreText = try String(contentsOf: url, encoding: .utf8) }
-                catch { editor.lastError = error.localizedDescription }
+                catch { editor.source.lastError = error.localizedDescription }
             case .failure(let e):
-                editor.lastError = e.localizedDescription
+                editor.source.lastError = e.localizedDescription
             }
         }
         .alert("Replace live config?", isPresented: Binding(
                 get: { pendingRestoreText != nil },
                 set: { if !$0 { pendingRestoreText = nil } })) {
             Button("Replace", role: .destructive) {
-                if let text = pendingRestoreText { Task { await editor.restore(fromYAML: text) } }
+                if let text = pendingRestoreText { Task { await editor.source.restore(fromYAML: text) } }
                 pendingRestoreText = nil
             }
             Button("Cancel", role: .cancel) { pendingRestoreText = nil }
@@ -123,19 +124,21 @@ struct ConfigEditorContainer: View {
 
             if !editor.comparing {
                 Picker("View", selection: Binding(
-                    get: { editor.mode },
+                    get: { editor.source.mode },
                     set: { editor.setMode($0) }
                 )) {
                     ForEach(ConfigEditorHarness.Mode.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .disabled(editor.dashboardUnavailable)
+                .disabled(editor.source.dashboardUnavailable)
             }
 
-            Button {
-                editor.toggleComparing()
-            } label: {
-                Label("Compare", systemImage: editor.comparing ? "rectangle.on.rectangle.fill" : "rectangle.on.rectangle")
+            if canCompare(editor) {
+                Button {
+                    editor.toggleComparing()
+                } label: {
+                    Label("Compare", systemImage: editor.comparing ? "rectangle.on.rectangle.fill" : "rectangle.on.rectangle")
+                }
             }
 
             if editor.comparing {
@@ -148,27 +151,23 @@ struct ConfigEditorContainer: View {
                         Text($0.name).tag($0.name)
                     }
                 }
-                Toggle("Differences only", isOn: Binding(
-                    get: { editor.showDifferencesOnly },
-                    set: { editor.showDifferencesOnly = $0 }
-                ))
             } else {
                 Button { showingExporter = true } label: {
                     Label("Download", systemImage: "square.and.arrow.down")
                 }
-                .disabled(!editor.canExportBackup)
+                .disabled(!editor.source.canExportBackup)
 
                 Button { showingImporter = true } label: {
                     Label("Upload", systemImage: "square.and.arrow.up")
                 }
-                .disabled(editor.dashboardUnavailable || editor.isLoading)
+                .disabled(editor.source.dashboardUnavailable || editor.isLoading)
 
                 Button {
-                    Task { await editor.save() }
+                    Task { await editor.source.save() }
                 } label: {
                     Label("Save", systemImage: "checkmark.circle")
                 }
-                .disabled(!editor.canSave)
+                .disabled(!editor.source.canSave)
             }
 
             Button {
@@ -181,8 +180,9 @@ struct ConfigEditorContainer: View {
     }
 
     private func banner(_ editor: ConfigEditorHarness) -> String? {
+        if let error = editor.source.lastError { return error }
         if let error = editor.lastError { return error }
-        if editor.dashboardUnavailable {
+        if editor.source.dashboardUnavailable {
             return "Dashboard unavailable — showing the on-disk config read-only. Save is disabled."
         }
         if editor.profilesUnavailable {
