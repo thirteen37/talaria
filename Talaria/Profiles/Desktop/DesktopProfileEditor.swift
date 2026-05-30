@@ -47,6 +47,7 @@ struct DesktopProfileEditor: View {
             if let onDismiss {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done", action: onDismiss)
+                        .help("Close")
                 }
             }
         }
@@ -87,18 +88,24 @@ struct DesktopProfileEditor: View {
                 } label: {
                     Image(systemName: "plus")
                 }
+                .accessibilityLabel("Add server")
+                .help("Add a server")
                 Button {
                     duplicate()
                 } label: {
                     Image(systemName: "plus.square.on.square")
                 }
                 .disabled(!canDuplicate)
+                .accessibilityLabel("Duplicate server")
+                .help("Duplicate the selected server")
                 Button {
                     delete()
                 } label: {
                     Image(systemName: "minus")
                 }
                 .disabled(state.selection == nil)
+                .accessibilityLabel("Delete server")
+                .help("Delete the selected server")
                 Spacer()
             }
             .buttonStyle(.borderless)

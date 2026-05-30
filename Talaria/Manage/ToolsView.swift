@@ -85,6 +85,7 @@ struct ToolsView: View {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 .disabled(harness.isLoading)
+                .help("Refresh the tools list")
             }
         }
         .manageBanner(

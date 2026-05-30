@@ -82,6 +82,7 @@ extension View {
                     Image(systemName: "gearshape")
                 }
                 .accessibilityLabel("Settings")
+                .help("Open settings")
             }
         }
     }

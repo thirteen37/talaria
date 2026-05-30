@@ -59,6 +59,7 @@ struct PhoneBrowseSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done", action: onDismiss)
+                        .help("Close")
                 }
             }
         }
