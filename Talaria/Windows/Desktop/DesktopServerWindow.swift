@@ -53,6 +53,14 @@ struct DesktopServerWindow: View {
         .task(id: harnessKey) {
             await rebuildHarness()
         }
+        // The dashboard comes online async, after `rebuildHarness` already ran
+        // its first (client-less) profile load. Re-run once it lands so the
+        // switcher upgrades from default-only to the live dashboard list,
+        // mirroring the config editor's dashboard-ready re-load.
+        .onChange(of: harness?.dashboardClient != nil) { _, hasClient in
+            guard hasClient, let harness else { return }
+            Task { await loadHermesProfiles(harness: harness) }
+        }
         // iPad: saving the first server (or a profile mutation while no harness
         // is live) connects without a relaunch. Harmless on macOS, which builds
         // a harness eagerly via the local fallback. Rebuilding while a harness
@@ -118,39 +126,22 @@ struct DesktopServerWindow: View {
         }
     }
 
-    /// Populates `hermesProfiles` for the switcher. Prefers the dashboard API
-    /// (clean names + is-default flag); falls back to the CLI `profile list`;
-    /// degrades to `[default]` so the window always has at least the default.
+    /// Populates `hermesProfiles` for the switcher straight from the dashboard
+    /// API (clean names + is-default flag). Stays default-only/hidden until the
+    /// dashboard is online or if the call fails — no CLI `profile list` fallback,
+    /// whose decorated table would leak marker glyphs into the menu. Re-run when
+    /// `dashboardClient` lands (see the `.onChange` below) to upgrade the list.
     @MainActor
     private func loadHermesProfiles(harness: ServerWindowHarness) async {
+        let profiles = await HermesProfiles.selectorProfiles(client: harness.dashboardClient)
         // Drop a stale listing if the window rebuilt its harness (server or
         // Hermes-profile switch) while this read was in flight — otherwise it
         // would overwrite the active harness's profiles with the previous one's,
         // offering `-p <name>`s the server lacks. Identity (not profile id) is
         // the right key: a Hermes-profile switch keeps the server id but builds
         // a fresh harness.
-        func apply(_ profiles: [HermesProfileInfo]) {
-            guard self.harness === harness else { return }
-            hermesProfiles = profiles
-        }
-        if let client = harness.dashboardClient {
-            do {
-                let list = try await client.listProfiles()
-                apply(list.map { HermesProfileInfo(name: $0.name, isDefault: $0.isDefault, status: nil) })
-                return
-            } catch {
-                // Fall through to the CLI source.
-            }
-        }
-        if let runner = harness.store.adminRunner {
-            do {
-                apply(try await HermesProfiles.list(runner: runner))
-                return
-            } catch {
-                // Fall through to the default-only degrade.
-            }
-        }
-        apply([HermesProfileInfo(name: HermesProfiles.defaultProfileName, isDefault: true, status: nil)])
+        guard self.harness === harness else { return }
+        hermesProfiles = profiles
     }
 
     /// In-place profile swap: tears the old harness down before swapping
