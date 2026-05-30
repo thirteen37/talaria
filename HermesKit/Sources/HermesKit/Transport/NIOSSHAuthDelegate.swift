@@ -12,7 +12,14 @@ import NIOSSH
 /// Once everything has been offered, it terminates the auth dance.
 /// `.none` isn't exposed by NIOSSH's available-methods set in this
 /// release, so we never try it.
-final class NIOSSHAuthDelegate: NIOSSHClientUserAuthenticationDelegate {
+///
+/// `@unchecked Sendable`: the only mutable state (`offeredPublicKey` /
+/// `offeredPassword`) is read and written exclusively from
+/// `nextAuthenticationType`, which NIOSSH invokes on the channel's event
+/// loop. Everything else is immutable. The conformance lets the delegate be
+/// captured by the (`@Sendable`) channel initializer that builds the
+/// `SSHClientConfiguration` on the loop.
+final class NIOSSHAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @unchecked Sendable {
     private let username: String
     private let privateKey: NIOSSHPrivateKey?
     private let password: String?

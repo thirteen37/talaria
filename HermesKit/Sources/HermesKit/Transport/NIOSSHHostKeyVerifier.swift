@@ -10,7 +10,11 @@ import NIOSSH
 /// factory. On `.mismatch` we fail with
 /// ``SSHTransportError/hostKeyMismatch(presented:pinned:)`` — never silently
 /// re-pin, since that would defeat the purpose of pinning.
-final class NIOSSHHostKeyVerifier: NIOSSHClientServerAuthenticationDelegate {
+/// `Sendable` (no `@unchecked` needed): every stored property is an immutable
+/// `let` of a `Sendable` type (`HostKeyStore` is `Sendable`, `HostKeyConfirmer`
+/// is a `@Sendable` closure). The conformance lets the verifier be captured by
+/// the `@Sendable` channel initializer that builds the `SSHClientConfiguration`.
+final class NIOSSHHostKeyVerifier: NIOSSHClientServerAuthenticationDelegate, Sendable {
     private let store: HostKeyStore
     private let host: String
     private let port: Int
