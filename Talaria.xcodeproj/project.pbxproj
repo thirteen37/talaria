@@ -39,6 +39,10 @@
 		412453BCEDDA513AC77AECD1 /* Markdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0726E977A155E433A5401996 /* Markdown.swift */; };
 		423A627D990E3525A1210F47 /* DiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFE066B74B82DFA8FC5F8F24 /* DiffView.swift */; };
 		43747B37FD0DC24A5ACCB605 /* ConfigEditingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEB660801AA7110B5EAC2AF8 /* ConfigEditingState.swift */; };
+		AA0100000000000000000001 /* HighlightingTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA01000000000000000000F1 /* HighlightingTextEditor.swift */; };
+		AA0100000000000000000002 /* HighlightingTextEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA01000000000000000000F1 /* HighlightingTextEditor.swift */; };
+		AA0200000000000000000001 /* YAMLHighlightTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA02000000000000000000F2 /* YAMLHighlightTheme.swift */; };
+		AA0200000000000000000002 /* YAMLHighlightTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA02000000000000000000F2 /* YAMLHighlightTheme.swift */; };
 		46DB99C0E7AAE0FB6CA7B107 /* PhoneBrowseSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82AB33DE89BBD4F3D4D28D34 /* PhoneBrowseSheet.swift */; };
 		4AE1CCD2FAA490BDF400EAC4 /* SlashMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7914D7DB63EFCABE5A2D84BA /* SlashMenu.swift */; };
 		4B8E5264D875A01CD6C5AC15 /* ProbeCapabilityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29E4871FCDE4D32F84F4F785 /* ProbeCapabilityView.swift */; };
@@ -223,6 +227,8 @@
 		AB09200C1C83F6EF34A8A307 /* DashboardCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCoordinator.swift; sourceTree = "<group>"; };
 		AD77CC385AAC4DB3C947D6DB /* StructuredConfigEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructuredConfigEditor.swift; sourceTree = "<group>"; };
 		AEB660801AA7110B5EAC2AF8 /* ConfigEditingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigEditingState.swift; sourceTree = "<group>"; };
+		AA01000000000000000000F1 /* HighlightingTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightingTextEditor.swift; sourceTree = "<group>"; };
+		AA02000000000000000000F2 /* YAMLHighlightTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YAMLHighlightTheme.swift; sourceTree = "<group>"; };
 		B001CA285B7593A84B2E5C1E /* PhoneServerWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneServerWindow.swift; sourceTree = "<group>"; };
 		B557A59EF59CBA382E684565 /* SessionHistoryMapperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionHistoryMapperTests.swift; sourceTree = "<group>"; };
 		B71A6200C3475A1788F447EE /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -486,8 +492,10 @@
 				34288494D0F5ABEB4260FA23 /* ConfigEditorHarness.swift */,
 				5E05DB8DF8D9AFD4FE25E26E /* ConfigFieldControl.swift */,
 				0BF654A05F720DAA02C0B069 /* EditableComparisonView.swift */,
+				AA01000000000000000000F1 /* HighlightingTextEditor.swift */,
 				AD77CC385AAC4DB3C947D6DB /* StructuredConfigEditor.swift */,
 				C96EFF9FC070B9FA408E6992 /* YAMLConfigEditor.swift */,
+				AA02000000000000000000F2 /* YAMLHighlightTheme.swift */,
 				40BCC93769E881572E354E67 /* YAMLFileDocument.swift */,
 			);
 			path = ConfigEditor;
@@ -771,6 +779,7 @@
 				B9A1BE8BABCD8D8AC1125F51 /* DiffView.swift in Sources */,
 				4E7061CE24B864B40FE49C0F /* DoctorView.swift in Sources */,
 				F4A61373EAFCA169C0F8696D /* EditableComparisonView.swift in Sources */,
+				AA0100000000000000000001 /* HighlightingTextEditor.swift in Sources */,
 				1A1F3DE30BDCE1C40778F6B4 /* HostKeyConfirmationCoordinator.swift in Sources */,
 				E96EB01A117C0954E4F23C37 /* LogConsole.swift in Sources */,
 				DD58828D88BFA7B322CC374C /* LogConsoleToolbar.swift in Sources */,
@@ -815,6 +824,7 @@
 				5B16B9E3E352309807458920 /* UpdatesView.swift in Sources */,
 				FB088B04AB11EDFADBE94C47 /* WindowNotifications.swift in Sources */,
 				D9B56A732233FE47ED8478A9 /* YAMLConfigEditor.swift in Sources */,
+				AA0200000000000000000001 /* YAMLHighlightTheme.swift in Sources */,
 				C17F8CCB5512C2060C689455 /* YAMLFileDocument.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -840,6 +850,7 @@
 				423A627D990E3525A1210F47 /* DiffView.swift in Sources */,
 				1D86001F1932D4D1C9682798 /* DoctorView.swift in Sources */,
 				B4CCE0645ED3484EDAF2E61F /* EditableComparisonView.swift in Sources */,
+				AA0100000000000000000002 /* HighlightingTextEditor.swift in Sources */,
 				DEFC27063EB9EC591D93D07F /* HostKeyConfirmationCoordinator.swift in Sources */,
 				7A99D0612ADDD652BF6A4E79 /* LogConsole.swift in Sources */,
 				D3CD6F4B48D1E62071D8BD95 /* LogConsoleToolbar.swift in Sources */,
@@ -884,6 +895,7 @@
 				6C73E05ECCB0C0F89AF5B8E5 /* UpdatesView.swift in Sources */,
 				0DAE8E610B4FC72C2D861F04 /* WindowNotifications.swift in Sources */,
 				6BEA541D567D068B856E82F1 /* YAMLConfigEditor.swift in Sources */,
+				AA0200000000000000000002 /* YAMLHighlightTheme.swift in Sources */,
 				6066CFA11D8F136AF73EDC2F /* YAMLFileDocument.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
