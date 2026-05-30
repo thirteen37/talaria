@@ -399,7 +399,14 @@ final class DashboardExecHandler: ChannelDuplexHandler {
 /// `SSHChannelData` envelopes) and fulfills `promise` with the full buffer when
 /// the server closes the connection. We rely on `Connection: close`, so close
 /// is the end-of-response signal.
-final class DirectTCPIPResponseCollector: ChannelInboundHandler {
+///
+/// `@unchecked Sendable` because it is event-loop-confined: after `init` (the
+/// only off-loop touch, a safe handoff) every access — the channel callbacks
+/// and `markTimedOut()` — happens on the connection's single shared event loop.
+/// The marker lets `httpRequest` hand the collector to `eventLoop.execute`
+/// (a `@Sendable` closure) without tripping strict-concurrency capture checks
+/// on Swift 6 toolchains that lack region-based isolation analysis.
+final class DirectTCPIPResponseCollector: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = SSHChannelData
 
     private var promise: EventLoopPromise<ByteBuffer>?
