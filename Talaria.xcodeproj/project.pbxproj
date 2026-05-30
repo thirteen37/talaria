@@ -117,6 +117,7 @@
 		FF4B12C0890FE3A218309E50 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CA01C5F2F7904E83DB29961 /* ChatView.swift */; };
 		FF7410E0865C3DB2A36D6F76 /* SkillsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E5FD3271C03262E8A67B725 /* SkillsView.swift */; };
 		FF9C3268B7A7B1A879C319EE /* ProfileFormSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBCC3AB20959D5AB1E75BEF7 /* ProfileFormSections.swift */; };
+		FFE3053BE0518A6B35809EAB /* DoctorHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F78017EA1F409DD12D2729D /* DoctorHarnessTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -126,6 +127,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 19E2CCC8D5A00B0C4146275A;
 			remoteInfo = TalariaIOS;
+		};
+		9749FE2E7A7A359558DC15F6 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 228D8C57FD8574006AD1BA11 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1E8262A30297B30A6BC1DDAA;
+			remoteInfo = Talaria;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -137,6 +145,7 @@
 		09D9869DC5BF08FEDB227ACF /* ToolCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCard.swift; sourceTree = "<group>"; };
 		0E48D07DCDB76B859B235E8D /* ServerCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerCommands.swift; sourceTree = "<group>"; };
 		13E7B5FE8F2B768093DA0CC8 /* SessionsSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsSidebar.swift; sourceTree = "<group>"; };
+		154B99C2DB8349C94F4C6ECF /* TalariaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TalariaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		16AA89CC111A07C767A69F09 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		1AB3B08C0EC24C29FE4F898B /* TalariaIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = TalariaIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1DD849FF61E9E7FE99C2441B /* ProfilesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfilesView.swift; sourceTree = "<group>"; };
@@ -172,6 +181,7 @@
 		94299301A67348B115A820E1 /* PlatformSeam.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformSeam.swift; sourceTree = "<group>"; };
 		98125E594379F762DEEEBF1A /* Info-iOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Info-iOS.plist"; sourceTree = "<group>"; };
 		9CA01C5F2F7904E83DB29961 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		9F78017EA1F409DD12D2729D /* DoctorHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoctorHarnessTests.swift; sourceTree = "<group>"; };
 		A12A6961B7D8E937263627BB /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
 		A30DFD8DFB5E048EC77638CD /* DoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoctorView.swift; sourceTree = "<group>"; };
 		AB09200C1C83F6EF34A8A307 /* DashboardCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCoordinator.swift; sourceTree = "<group>"; };
@@ -262,6 +272,14 @@
 				1FAF0B860CFD0B1772AECD9C /* SessionsStore.swift */,
 			);
 			path = Sessions;
+			sourceTree = "<group>";
+		};
+		103CFAA4F2279113DEBD72F1 /* TalariaTests */ = {
+			isa = PBXGroup;
+			children = (
+				9F78017EA1F409DD12D2729D /* DoctorHarnessTests.swift */,
+			);
+			path = TalariaTests;
 			sourceTree = "<group>";
 		};
 		15038323A97BF01193E35636 /* macOS */ = {
@@ -409,6 +427,7 @@
 				CF4DD77146A6664BBB6ABC3F /* Talaria.app */,
 				1AB3B08C0EC24C29FE4F898B /* TalariaIOS.app */,
 				568FC0181E0F5E920D11F788 /* TalariaIOSUITests.xctest */,
+				154B99C2DB8349C94F4C6ECF /* TalariaTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -504,6 +523,7 @@
 			children = (
 				D7564DA576AC5D795BFCA34D /* Packages */,
 				DE125BC2E9E0D4673B61BFF7 /* Talaria */,
+				103CFAA4F2279113DEBD72F1 /* TalariaTests */,
 				79E5B7197F6A1FE02D0B4B50 /* TalariaUITests */,
 				A37EFAE62F3229349E34F508 /* Products */,
 			);
@@ -571,6 +591,24 @@
 			productReference = 568FC0181E0F5E920D11F788 /* TalariaIOSUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		F0FA28CB15B9B08CBC809F0D /* TalariaTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AECFAC0B6AF88C2C4D00058E /* Build configuration list for PBXNativeTarget "TalariaTests" */;
+			buildPhases = (
+				9D815F8589BF1F930745A63E /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				65B5749C415BEA86CA20C642 /* PBXTargetDependency */,
+			);
+			name = TalariaTests;
+			packageProductDependencies = (
+			);
+			productName = TalariaTests;
+			productReference = 154B99C2DB8349C94F4C6ECF /* TalariaTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -612,6 +650,7 @@
 				1E8262A30297B30A6BC1DDAA /* Talaria */,
 				19E2CCC8D5A00B0C4146275A /* TalariaIOS */,
 				872C51834B62EF007C72C3F4 /* TalariaIOSUITests */,
+				F0FA28CB15B9B08CBC809F0D /* TalariaTests */,
 			);
 		};
 /* End PBXProject section */
@@ -762,6 +801,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		9D815F8589BF1F930745A63E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FFE3053BE0518A6B35809EAB /* DoctorHarnessTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -769,6 +816,11 @@
 			isa = PBXTargetDependency;
 			target = 19E2CCC8D5A00B0C4146275A /* TalariaIOS */;
 			targetProxy = 418544240F2651F69AFF288F /* PBXContainerItemProxy */;
+		};
+		65B5749C415BEA86CA20C642 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1E8262A30297B30A6BC1DDAA /* Talaria */;
+			targetProxy = 9749FE2E7A7A359558DC15F6 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -815,6 +867,25 @@
 				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_TARGET_NAME = TalariaIOS;
+			};
+			name = Release;
+		};
+		5515B7BAEE7F9580FBEE0DEA /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.talaria.Talaria.tests;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Talaria.app/Contents/MacOS/Talaria";
 			};
 			name = Release;
 		};
@@ -915,6 +986,25 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.talaria.Talaria;
 				SDKROOT = macosx;
 				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		9C829915F4BD8C6F62577A51 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.talaria.Talaria.tests;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Talaria.app/Contents/MacOS/Talaria";
 			};
 			name = Debug;
 		};
@@ -1046,6 +1136,15 @@
 			buildConfigurations = (
 				85E1082CF225C9F702DD8E4B /* Debug */,
 				FD3AF4E09A9F261FEC3568AA /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		AECFAC0B6AF88C2C4D00058E /* Build configuration list for PBXNativeTarget "TalariaTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9C829915F4BD8C6F62577A51 /* Debug */,
+				5515B7BAEE7F9580FBEE0DEA /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
