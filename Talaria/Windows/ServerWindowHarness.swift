@@ -28,6 +28,16 @@ final class ServerWindowHarness {
     /// for the bell + notifications detail page. Built once per harness;
     /// cancelled in `tearDown()`.
     let notifications: WindowNotificationCenter
+    /// Doctor run state. Window-owned (not view-owned) so a "Run Doctor"
+    /// capture survives Browse navigation that destroys `DoctorView`. Built in
+    /// `init` because its dependency (`store.adminRunner`) is ready then.
+    /// Cancelled in the platform `tearDown()`.
+    let doctor: DoctorHarness
+    /// "Update Hermes" apply state. `nil` until the dashboard client is
+    /// acquired (the client arrives async, unlike the admin runner), then built
+    /// once by `makeUpdatesHarness()`. Window-owned so an in-flight apply — and
+    /// its streamed log — survives Browse navigation. Cancelled in `tearDown()`.
+    var updates: UpdatesHarness?
     /// Live `DashboardClient` once the per-profile supervisor's process has
     /// come online. `nil` until acquired (or while a teardown is in flight),
     /// non-nil for the lifetime of the window's interest in the profile.
@@ -57,6 +67,15 @@ final class ServerWindowHarness {
         self.hostKeyCoordinator = hostKeyCoordinator
         self.notifications = WindowNotificationCenter(adminRunner: store.adminRunner)
         self.notifications.start()
+        self.doctor = DoctorHarness(runner: store.adminRunner)
+    }
+
+    /// Builds the window-owned ``UpdatesHarness`` once the dashboard client is
+    /// live (the client arrives async, after `init`). Called by the platform
+    /// `acquireDashboard`; idempotent so repeated calls are harmless.
+    func makeUpdatesHarness() {
+        guard updates == nil, let client = dashboardClient else { return }
+        updates = UpdatesHarness(service: DashboardUpdatesService(client: client))
     }
 
     /// Builds a harness backed by an in-process ``MockACPTransport`` for UI

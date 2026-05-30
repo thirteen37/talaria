@@ -2,7 +2,8 @@ import HermesKit
 import SwiftUI
 
 /// Compact iPhone window: a `NavigationStack` chat push with a top toolbar
-/// (Settings / All-sessions / Logs sheets) and no Browse sidebar. iOS-only.
+/// (Browse / All-sessions / Logs). Browse opens a modal sheet covering the full
+/// manage feature set; Settings is reached via Browse → Settings. iOS-only.
 struct PhoneServerWindow: View {
     let profileId: UUID
 
@@ -12,6 +13,14 @@ struct PhoneServerWindow: View {
     @State private var showingSettings = false
     @State private var showingAllSessions = false
     @State private var showingLogs = false
+    @State private var showingBrowse = false
+    /// Optional surface the Browse sheet should open directly on (set by the
+    /// bell → Notifications deep link; nil for the plain Browse button).
+    @State private var browseDeepLink: BrowseDestination?
+    /// Set when the Browse sheet's Settings row is tapped: the sheet dismisses
+    /// itself, then this defers opening the body-level Settings sheet until
+    /// Browse is fully gone (two sheets can't present at once).
+    @State private var pendingSettings = false
     /// Drives the chat push stack. Selecting/creating a session pushes its id;
     /// popping (back-swipe) clears the selection.
     @State private var chatPath: [SessionId] = []
@@ -157,10 +166,10 @@ struct PhoneServerWindow: View {
                 profiles: directory.allProfiles,
                 onSwitchProfile: switchProfile,
                 notifications: harness.notifications,
-                // iPhone has no Browse/notifications detail surface; the bell
-                // tap just clears any active chat selection.
+                // Bell opens the Browse sheet directly on Notifications.
                 onOpenNotifications: {
-                    harness.store.selection = nil
+                    browseDeepLink = .notifications
+                    showingBrowse = true
                 }
             )
 
@@ -196,11 +205,12 @@ struct PhoneServerWindow: View {
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button {
-                    showingSettings = true
+                    browseDeepLink = nil
+                    showingBrowse = true
                 } label: {
-                    Image(systemName: "gearshape")
+                    Image(systemName: "square.grid.2x2")
                 }
-                .accessibilityLabel("Settings")
+                .accessibilityLabel("Browse")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -218,6 +228,25 @@ struct PhoneServerWindow: View {
                 }
                 .accessibilityLabel("Logs")
             }
+        }
+        // Settings is reached via Browse → Settings: the row dismisses Browse,
+        // then `onDismiss` opens the body-level Settings sheet once Browse is
+        // gone (two sheets can't be presented at the same time).
+        .sheet(isPresented: $showingBrowse, onDismiss: {
+            if pendingSettings {
+                pendingSettings = false
+                showingSettings = true
+            }
+        }) {
+            PhoneBrowseSheet(
+                harness: harness,
+                initial: browseDeepLink,
+                onOpenSettings: {
+                    pendingSettings = true
+                    showingBrowse = false
+                },
+                onDismiss: { showingBrowse = false }
+            )
         }
         .sheet(isPresented: $showingLogs) {
             LogConsoleView(onDismiss: { showingLogs = false })

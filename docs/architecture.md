@@ -32,7 +32,7 @@ Three operations remain on CLI fallbacks because Hermes does not expose dashboar
 - Tools enable/disable/list: `hermes tools ...`.
 - Doctor report: `hermes doctor`.
 
-Remote dashboard access on macOS is provided by spawning system `ssh` with a loopback `-L <local>:127.0.0.1:<remote>` forward and running `hermes dashboard` on the remote host. The pure-Swift NIO-SSH transport remains the iOS-capable ACP transport seam, but dashboard mode on iOS is deferred until NIO-based port forwarding lands.
+Remote dashboard access on macOS is provided by spawning system `ssh` with a loopback `-L <local>:127.0.0.1:<remote>` forward and running `hermes dashboard` on the remote host. iOS reaches the dashboard over the pure-Swift NIO-SSH transport instead: one connection both execs `hermes dashboard` on the remote host and tunnels its HTTP over a `direct-tcpip` channel (no local forward), reusing the window's host-key trust so it doesn't re-prompt for a key the chat transport already trusted.
 
 ## Window Model
 

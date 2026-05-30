@@ -95,6 +95,7 @@ extension ServerWindowHarness {
             guard !dashboardReleased else { return }
             dashboardClient = endpoint.session.client()
             store.dashboardClient = dashboardClient
+            makeUpdatesHarness()
             dashboardError = nil
         } catch {
             guard !Task.isCancelled, !dashboardReleased else { return }
@@ -143,6 +144,9 @@ extension ServerWindowHarness {
             }
         }
         notifications.stop()
+        doctor.cancelRun()
+        updates?.cancelApply()
+        updates = nil
     }
 
     /// Builds the iOS dashboard supervisor: a NIO-SSH connection that both

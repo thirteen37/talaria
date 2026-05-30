@@ -90,7 +90,7 @@ struct SkillsView: View {
         // iPad); the iPhone shell has no Browse, so this never renders there.
         // `PlatformSplit` is a resizable `HSplitView` on macOS and an
         // `HStack`+`Divider` on iPad — no `#if`.
-        PlatformSplit {
+        PlatformSplit(showsSecondary: harness.selected != nil) {
             Table(harness.rows, selection: Binding(
                 get: { harness.selectionID },
                 set: { harness.selectionID = $0 }
@@ -149,6 +149,9 @@ struct SkillsView: View {
         )
     }
 
+    // Rendered only when a skill is selected — `PlatformSplit`'s
+    // `showsSecondary` gate hides this pane entirely otherwise, so there's no
+    // unselected placeholder branch.
     @ViewBuilder
     private func previewPane(harness: SkillsHarness) -> some View {
         if let skill = harness.selected {
@@ -177,9 +180,6 @@ struct SkillsView: View {
             }
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        } else {
-            ContentUnavailableView("Select a skill", systemImage: "sidebar.right")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
