@@ -80,6 +80,7 @@ struct SoulEditorContainer: View {
                 Label("Save", systemImage: "checkmark.circle")
             }
             .disabled(!editor.canSave)
+            .help("Save SOUL.md")
 
             Button {
                 editor.load()
@@ -87,6 +88,7 @@ struct SoulEditorContainer: View {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
             .disabled(editor.isLoading)
+            .help("Reload SOUL.md from disk")
         }
     }
 

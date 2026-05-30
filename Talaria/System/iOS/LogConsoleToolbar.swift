@@ -11,16 +11,19 @@ extension View {
         toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button("Done", action: onDismiss)
+                    .help("Close")
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button(action: onCopy) {
                     Image(systemName: "doc.on.doc")
                 }
                 .accessibilityLabel("Copy logs")
+                .help("Copy the logs")
                 Button(action: onRefresh) {
                     Image(systemName: "arrow.clockwise")
                 }
                 .accessibilityLabel("Refresh logs")
+                .help("Refresh the logs")
             }
         }
     }

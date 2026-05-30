@@ -152,6 +152,7 @@ struct ConfigEditorContainer: View {
                 } label: {
                     Label("Compare", systemImage: editor.comparing ? "rectangle.on.rectangle.fill" : "rectangle.on.rectangle")
                 }
+                .help("Compare this config with another profile")
             }
 
             if editor.comparing {
@@ -176,11 +177,13 @@ struct ConfigEditorContainer: View {
                     Label("Download", systemImage: "square.and.arrow.down")
                 }
                 .disabled(!editor.source.canExportBackup)
+                .help("Download the config as a YAML file")
 
                 Button { showingImporter = true } label: {
                     Label("Upload", systemImage: "square.and.arrow.up")
                 }
                 .disabled(editor.source.dashboardUnavailable || editor.isLoading)
+                .help("Upload a config from a YAML file")
 
                 Button {
                     Task { await editor.source.save() }
@@ -188,6 +191,7 @@ struct ConfigEditorContainer: View {
                     Label("Save", systemImage: "checkmark.circle")
                 }
                 .disabled(!editor.source.canSave)
+                .help("Save the configuration")
             }
 
             Button {
@@ -196,6 +200,7 @@ struct ConfigEditorContainer: View {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
             .disabled(editor.isLoading)
+            .help("Reload the configuration")
         }
     }
 

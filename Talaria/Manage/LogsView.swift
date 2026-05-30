@@ -200,6 +200,7 @@ struct LogsView: View {
                 } label: {
                     Label("Copy visible", systemImage: "doc.on.doc")
                 }
+                .help("Copy the visible log lines")
             }
             ToolbarItem {
                 Button {
@@ -208,6 +209,7 @@ struct LogsView: View {
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
+                .help("Clear and refresh the logs")
             }
         }
         .manageBanner(

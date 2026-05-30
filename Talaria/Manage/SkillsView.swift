@@ -137,6 +137,7 @@ struct SkillsView: View {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 .disabled(harness.isLoading)
+                .help("Refresh the skills list")
             }
         }
         .manageBanner(

@@ -273,6 +273,7 @@ struct PhoneServerWindow: View {
                     Image(systemName: "square.grid.2x2")
                 }
                 .accessibilityLabel("Browse")
+                .help("Browse servers and settings")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -281,6 +282,7 @@ struct PhoneServerWindow: View {
                     Image(systemName: "clock.arrow.circlepath")
                 }
                 .accessibilityLabel("All sessions")
+                .help("View all sessions")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -289,6 +291,7 @@ struct PhoneServerWindow: View {
                     Image(systemName: "ladybug")
                 }
                 .accessibilityLabel("Logs")
+                .help("View logs")
             }
         }
         // Settings is reached via Browse → Settings: the row dismisses Browse,
@@ -326,6 +329,7 @@ struct PhoneServerWindow: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Done") { showingAllSessions = false }
+                            .help("Close all sessions")
                     }
                 }
             }

@@ -11,8 +11,11 @@ extension View {
         toolbar {
             ToolbarItemGroup {
                 Button("Copy", action: onCopy)
+                    .help("Copy the logs")
                 Button("Refresh", action: onRefresh)
+                    .help("Refresh the logs")
                 Button("Done", action: onDismiss)
+                    .help("Close")
             }
         }
     }
