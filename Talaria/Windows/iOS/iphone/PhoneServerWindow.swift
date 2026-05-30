@@ -133,7 +133,9 @@ struct PhoneServerWindow: View {
         if let client = harness.dashboardClient {
             do {
                 let list = try await client.listProfiles()
-                apply(list.map { HermesProfileInfo(name: $0.name, isDefault: $0.isDefault, status: nil) })
+                apply(list.map {
+                    HermesProfileInfo(name: $0.name, isDefault: $0.isDefault, model: $0.model)
+                })
                 return
             } catch {
                 // Fall through to the CLI source.
@@ -148,6 +150,21 @@ struct PhoneServerWindow: View {
             }
         }
         apply([HermesProfileInfo(name: HermesProfiles.defaultProfileName, isDefault: true, status: nil)])
+    }
+
+    /// Re-runs the Hermes-profile listing after a Profiles mutation so the
+    /// switcher reflects the change. If the active `-p <name>` was renamed or
+    /// deleted, falls back to `default` so the window isn't scoped to a dead
+    /// profile.
+    @MainActor
+    private func reconcileHermesProfiles(harness: ServerWindowHarness) {
+        Task {
+            await loadHermesProfiles(harness: harness)
+            guard self.harness === harness else { return }
+            if !hermesProfiles.contains(where: { $0.name == activeHermesProfile }) {
+                switchHermesProfile(to: HermesProfiles.defaultProfileName)
+            }
+        }
     }
 
     /// In-place server swap. Resets the Hermes profile to `default` so a new
@@ -311,6 +328,8 @@ struct PhoneServerWindow: View {
             PhoneBrowseSheet(
                 harness: harness,
                 hermesProfiles: hermesProfiles,
+                activeHermesProfile: activeHermesProfile,
+                onProfilesChanged: { reconcileHermesProfiles(harness: harness) },
                 initial: browseDeepLink,
                 onOpenSettings: {
                     pendingSettings = true

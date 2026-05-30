@@ -136,7 +136,9 @@ struct DesktopServerWindow: View {
         if let client = harness.dashboardClient {
             do {
                 let list = try await client.listProfiles()
-                apply(list.map { HermesProfileInfo(name: $0.name, isDefault: $0.isDefault, status: nil) })
+                apply(list.map {
+                    HermesProfileInfo(name: $0.name, isDefault: $0.isDefault, model: $0.model)
+                })
                 return
             } catch {
                 // Fall through to the CLI source.
@@ -151,6 +153,22 @@ struct DesktopServerWindow: View {
             }
         }
         apply([HermesProfileInfo(name: HermesProfiles.defaultProfileName, isDefault: true, status: nil)])
+    }
+
+    /// Re-runs the Hermes-profile listing after a Profiles mutation (clone /
+    /// rename / delete) so the sidebar switcher reflects the change. If the
+    /// currently-active `-p <name>` no longer exists (it was renamed or
+    /// deleted), falls back to `default` so the window isn't left scoped to a
+    /// dead profile.
+    @MainActor
+    private func reconcileHermesProfiles(harness: ServerWindowHarness) {
+        Task {
+            await loadHermesProfiles(harness: harness)
+            guard self.harness === harness else { return }
+            if !hermesProfiles.contains(where: { $0.name == activeHermesProfile }) {
+                switchHermesProfile(to: HermesProfiles.defaultProfileName)
+            }
+        }
     }
 
     /// In-place profile swap: tears the old harness down before swapping
@@ -305,6 +323,8 @@ struct DesktopServerWindow: View {
                 harness: harness,
                 destination: browse ?? .sessions,
                 hermesProfiles: hermesProfiles,
+                activeHermesProfile: activeHermesProfile,
+                onProfilesChanged: { reconcileHermesProfiles(harness: harness) },
                 onOpenDestination: { dest in browse = dest }
             )
         }

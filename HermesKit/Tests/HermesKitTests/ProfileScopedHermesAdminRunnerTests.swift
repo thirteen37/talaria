@@ -65,6 +65,27 @@ struct ProfileScopedHermesAdminRunnerTests {
     }
 
     @Test
+    func profileWriteSubcommandsStayUnscopedForNamedProfile() async throws {
+        let inner = RecordingAdminRunner()
+        let runner = ProfileScopedHermesAdminRunner(inner: inner, hermesProfileName: "work")
+
+        // Writes (create/rename/delete) act across the profiles directory, so
+        // they must pass through unscoped just like `profile list`. A stray
+        // `-p work` would mis-target the operation to the active profile.
+        _ = try await runner.run(HermesAdminCommand(
+            arguments: ["profile", "create", "office", "--clone", "--clone-from", "default"]
+        ))
+        _ = try await runner.run(HermesAdminCommand(arguments: ["profile", "rename", "office", "studio"]))
+        _ = try await runner.run(HermesAdminCommand(arguments: ["profile", "delete", "studio", "-y"]))
+
+        #expect(inner.runArguments == [
+            ["profile", "create", "office", "--clone", "--clone-from", "default"],
+            ["profile", "rename", "office", "studio"],
+            ["profile", "delete", "studio", "-y"],
+        ])
+    }
+
+    @Test
     func runStreamIsScopedToo() async throws {
         let inner = RecordingAdminRunner()
         let runner = ProfileScopedHermesAdminRunner(inner: inner, hermesProfileName: "work")

@@ -294,6 +294,46 @@ public struct DashboardClient: Sendable {
         return response.profiles
     }
 
+    /// Creates a profile by cloning the default. The dashboard API only clones
+    /// from default (`clone_from_default`); cloning an arbitrary source profile
+    /// has to go through the CLI. `no_skills` skips copying the `skills/` tree.
+    public func createProfile(name: String, cloneFromDefault: Bool = true, noSkills: Bool = false) async throws {
+        let body = ProfileCreateBody(name: name, cloneFromDefault: cloneFromDefault, noSkills: noSkills)
+        try await sendNoContent(method: "POST", path: "/api/profiles", body: body)
+    }
+
+    /// Renames a profile in place. `default` is rejected by the server.
+    public func renameProfile(name: String, newName: String) async throws {
+        let body = ProfileRenameBody(newName: newName)
+        try await sendNoContent(method: "PATCH", path: "/api/profiles/\(name)", body: body)
+    }
+
+    /// Deletes a profile. The server forces `yes=True`, so no extra confirmation
+    /// flag is sent; `default` is rejected.
+    public func deleteProfile(name: String) async throws {
+        try await sendNoContent(method: "DELETE", path: "/api/profiles/\(name)")
+    }
+
+    private struct ProfileCreateBody: Encodable {
+        let name: String
+        let cloneFromDefault: Bool
+        let noSkills: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case name
+            case cloneFromDefault = "clone_from_default"
+            case noSkills = "no_skills"
+        }
+    }
+
+    private struct ProfileRenameBody: Encodable {
+        let newName: String
+
+        enum CodingKeys: String, CodingKey {
+            case newName = "new_name"
+        }
+    }
+
     private struct ProfilesResponse: Decodable {
         let profiles: [DashboardProfile]
     }

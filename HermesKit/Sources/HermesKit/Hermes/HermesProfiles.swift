@@ -9,13 +9,22 @@ public struct HermesProfileInfo: Equatable, Sendable, Identifiable {
     /// Optional runtime status (`running`, `stopped`, …) when the CLI surfaces
     /// one; nil otherwise.
     public let status: String?
+    /// Configured model for the profile (e.g. `anthropic/claude-sonnet-4.6`),
+    /// surfaced by the dashboard's `GET /api/profiles`. Nil when unknown.
+    public let model: String?
 
     public var id: String { name }
 
-    public init(name: String, isDefault: Bool, status: String? = nil) {
+    public init(
+        name: String,
+        isDefault: Bool,
+        status: String? = nil,
+        model: String? = nil
+    ) {
         self.name = name
         self.isDefault = isDefault
         self.status = status
+        self.model = model
     }
 }
 
@@ -61,9 +70,30 @@ public enum HermesProfiles {
         return ensureDefault(parse(result.stdout))
     }
 
-    // The eventual write seam, deferred this iteration:
-    // func configSet(runner: HermesAdminRunning, dest: String, keyPath: String, value: String) async throws
-    //   → HermesAdminCommand(arguments: ["-p", dest, "config", "set", "--", keyPath, value])
+    /// Clones `cloneFrom` into a new profile `name`. `--clone` copies the
+    /// config-level files (`config.yaml`, `.env`, `SOUL.md`, `memories/`,
+    /// `skills/`) — the same set the dashboard's `clone_from_default` copies.
+    /// Pass `cloneFrom: defaultProfileName` to seed from default.
+    public static func create(runner: HermesAdminRunning, name: String, cloneFrom: String) async throws {
+        let result = try await runner.run(HermesAdminCommand(
+            arguments: ["profile", "create", name, "--clone", "--clone-from", cloneFrom]
+        ))
+        try ensureSuccess(result)
+    }
+
+    /// Renames profile `from` to `to`. `default` cannot be renamed (the backend
+    /// rejects it).
+    public static func rename(runner: HermesAdminRunning, from: String, to: String) async throws {
+        let result = try await runner.run(HermesAdminCommand(arguments: ["profile", "rename", from, to]))
+        try ensureSuccess(result)
+    }
+
+    /// Deletes profile `name`. `-y` skips the interactive confirmation (the UI
+    /// gates this behind its own destructive alert). `default` cannot be deleted.
+    public static func delete(runner: HermesAdminRunning, name: String) async throws {
+        let result = try await runner.run(HermesAdminCommand(arguments: ["profile", "delete", name, "-y"]))
+        try ensureSuccess(result)
+    }
 
     /// Tolerant parser modeled on ``HermesSkills/parse(_:)``. Supported shapes:
     ///   * Rich box-drawing tables (`┃ Name ┃ Default ┃ Status ┃`) — header row
