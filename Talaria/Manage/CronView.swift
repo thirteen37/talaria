@@ -152,7 +152,7 @@ struct CronView: View {
         // Reachable only from the desktop window's Browse sidebar (macOS +
         // iPad); the iPhone shell has no Browse. `PlatformSplit` is a resizable
         // `HSplitView` on macOS, an `HStack`+`Divider` on iPad — no `#if`.
-        PlatformSplit {
+        PlatformSplit(showsSecondary: harness.draft != nil || harness.selectedJob != nil) {
             jobsTable(harness: harness)
                 .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
@@ -234,6 +234,9 @@ struct CronView: View {
         }
     }
 
+    // Rendered only while adding a draft or with a job selected —
+    // `PlatformSplit`'s `showsSecondary` gate hides this pane entirely
+    // otherwise, so there's no unselected placeholder branch.
     @ViewBuilder
     private func editorPane(harness: CronHarness) -> some View {
         if harness.draft != nil {
@@ -255,9 +258,6 @@ struct CronView: View {
             }
             .padding()
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        } else {
-            ContentUnavailableView("Select a job", systemImage: "sidebar.right")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
