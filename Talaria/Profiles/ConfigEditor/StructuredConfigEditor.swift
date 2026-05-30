@@ -73,10 +73,12 @@ struct StructuredConfigEditor: View {
                 let current = harness.stringBinding(for: field).wrappedValue
                 let options = field.schema?.options ?? []
                 ForEach(options, id: \.self) { Text($0.isEmpty ? "(none)" : $0).tag($0) }
-                // A value the option list doesn't know about survives as a
-                // custom, selectable entry rather than silently resetting.
-                if !current.isEmpty, !options.contains(current) {
-                    Text("\(current) (custom)").tag(current)
+                // Any current value the option list doesn't include — a custom
+                // entry, or the empty string for a key the config omits — gets a
+                // matching tag so the Picker has a valid selection (otherwise
+                // SwiftUI logs "no associated tag" and shows nothing selected).
+                if !options.contains(current) {
+                    Text(current.isEmpty ? "(none)" : "\(current) (custom)").tag(current)
                 }
             }
         case .number:

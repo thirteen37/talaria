@@ -153,7 +153,17 @@ public struct ProfileConfigForm: Equatable, Sendable {
     ) -> [String: ConfigValue] {
         var result: [String: ConfigValue] = [:]
         for (path, leaf) in flatten(working) where lookup(path, in: base) != leaf {
-            result[path] = configValue(from: leaf, schemaType: schema?.field(for: path)?.type)
+            let type = schema?.field(for: path)?.type
+            let value = configValue(from: leaf, schemaType: type)
+            // A schema-typed scalar that didn't coerce (e.g. empty / non-numeric
+            // text in a number field) is invalid input. Drop it so the PUT leaves
+            // the key at its existing value instead of writing a wrong-typed
+            // scalar. `.raw` for a schema-less key is a legitimate passthrough and
+            // is kept.
+            if let type, type == .number || type == .boolean, case .raw = value {
+                continue
+            }
+            result[path] = value
         }
         return result
     }

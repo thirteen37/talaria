@@ -273,6 +273,40 @@ struct ProfileConfigFormTests {
     }
 
     @Test
+    func editsDropsInvalidNumberInput() throws {
+        let schema = DashboardConfigSchema(
+            fields: ["model_context_length": field("model_context_length", .number, category: "general")],
+            orderedKeys: ["model_context_length"],
+            categoryOrder: ["general"]
+        )
+        let base = JSONValue.object(["model_context_length": .number(0)])
+        // User cleared the number field — the string-bridge left an empty string.
+        let working = JSONValue.object(["model_context_length": .string("")])
+
+        let edits = ProfileConfigForm.edits(from: working, base: base, schema: schema)
+
+        // Non-numeric input must not PUT a string for a numeric key; the key is
+        // left untouched instead.
+        #expect(edits.isEmpty)
+    }
+
+    @Test
+    func editsCoercesValidNumberTypedAsString() throws {
+        let schema = DashboardConfigSchema(
+            fields: ["model_context_length": field("model_context_length", .number, category: "general")],
+            orderedKeys: ["model_context_length"],
+            categoryOrder: ["general"]
+        )
+        let base = JSONValue.object(["model_context_length": .number(0)])
+        // Valid numeric text from the string-bridge still coerces to a number.
+        let working = JSONValue.object(["model_context_length": .string("200000")])
+
+        let edits = ProfileConfigForm.edits(from: working, base: base, schema: schema)
+
+        #expect(edits == ["model_context_length": .number(200000)])
+    }
+
+    @Test
     func editsIsEmptyWhenNothingChanged() throws {
         let config = JSONValue.object(["model": .string("a"), "agent": .object(["timeout": .number(30)])])
 
