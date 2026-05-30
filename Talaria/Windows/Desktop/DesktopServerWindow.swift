@@ -189,14 +189,10 @@ struct DesktopServerWindow: View {
             }
 
             Section("Browse") {
-                browseRow("Sessions", systemImage: "clock.arrow.circlepath", destination: .sessions, store: harness.store)
-                browseRow("Skills", systemImage: "sparkles", destination: .skills, store: harness.store)
-                browseRow("Tools", systemImage: "wrench.and.screwdriver", destination: .tools, store: harness.store)
-                browseRow("Cron", systemImage: "calendar", destination: .cron, store: harness.store)
-                browseRow("Profiles", systemImage: "person.2", destination: .profiles, store: harness.store)
-                browseRow("Logs", systemImage: "doc.text", destination: .logs, store: harness.store)
-                browseRow("Doctor", systemImage: "stethoscope", destination: .doctor, store: harness.store)
-                browseRow("Updates", systemImage: "arrow.down.circle", destination: .updates, store: harness.store)
+                browseRow(.sessions, store: harness.store)
+                ForEach(BrowseDestination.manageOrder.filter { $0 != .notifications }, id: \.self) { destination in
+                    browseRow(destination, store: harness.store)
+                }
             }
         }
         // iPad surfaces a gear to open the editor (no Settings scene there);
@@ -228,29 +224,11 @@ struct DesktopServerWindow: View {
                     .hidden()
                 }
         } else {
-            switch browse ?? .sessions {
-            case .sessions:
-                SessionsBrowser(store: harness.store, client: harness.dashboardClient)
-            case .skills: SkillsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
-            case .tools: ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
-            case .cron: CronView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
-            case .profiles: ProfilesView(runner: harness.store.adminRunner, profile: harness.profile, transfer: harness.snapshotTransfer)
-            case .logs:
-                LogsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
-            case .doctor:
-                DoctorView(
-                    doctor: harness.doctor,
-                    profile: harness.profile,
-                    client: harness.dashboardClient,
-                    hermesVersion: harness.profile.version
-                )
-            case .updates: UpdatesView(updates: harness.updates, hermesVersion: harness.profile.version)
-            case .notifications:
-                NotificationsView(
-                    center: harness.notifications,
-                    onOpenDestination: { dest in browse = dest }
-                )
-            }
+            BrowseDetailView(
+                harness: harness,
+                destination: browse ?? .sessions,
+                onOpenDestination: { dest in browse = dest }
+            )
         }
     }
 
@@ -266,12 +244,12 @@ struct DesktopServerWindow: View {
         return "\(user)\(host)\(port)"
     }
 
-    private func browseRow(_ title: String, systemImage: String, destination: BrowseDestination, store: SessionsStore) -> some View {
+    private func browseRow(_ destination: BrowseDestination, store: SessionsStore) -> some View {
         Button {
             store.selection = nil
             browse = destination
         } label: {
-            Label(title, systemImage: systemImage)
+            Label(destination.title, systemImage: destination.systemImage)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
         }
