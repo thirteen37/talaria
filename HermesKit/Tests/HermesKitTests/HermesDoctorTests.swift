@@ -172,6 +172,40 @@ struct HermesDoctorTests {
     }
 
     @Test
+    func lineStatusClassifiesLeadingGlyphs() {
+        // OK glyph, with the indentation real doctor output uses.
+        #expect(HermesDoctor.lineStatus("  ✓ Python 3.11.15") == .ok)
+        // Warning glyph.
+        #expect(HermesDoctor.lineStatus("  ⚠ discord.py (optional, not installed)") == .warning)
+        // Hint arrow at a deeper indent.
+        #expect(HermesDoctor.lineStatus("    → No Codex credentials stored.") == .hint)
+        // Both failure glyphs doctor may emit.
+        #expect(HermesDoctor.lineStatus("✗ something broke") == .failure)
+        #expect(HermesDoctor.lineStatus("✖ broke") == .failure)
+        // Summary / plain prose carries no leading glyph.
+        #expect(HermesDoctor.lineStatus("Found 1 issue(s) to address:") == .plain)
+        #expect(HermesDoctor.lineStatus("  1. Run 'hermes setup' to configure missing API keys") == .plain)
+        // Empty / whitespace-only.
+        #expect(HermesDoctor.lineStatus("") == .plain)
+        #expect(HermesDoctor.lineStatus("   \t ") == .plain)
+    }
+
+    @Test
+    func lineStatusMatchesRichFixtureLines() throws {
+        // Drive a couple of cases straight from the real fixture so the
+        // classifier stays honest about the glyphs hermes actually prints.
+        let url = try #require(Bundle.module.url(forResource: "Fixtures/doctor-rich", withExtension: "txt"))
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let okLine = try #require(lines.first(where: { $0.contains("Python 3.11.15") }))
+        #expect(HermesDoctor.lineStatus(okLine) == .ok)
+        let warningLine = try #require(lines.first(where: { $0.contains("discord.py (optional, not installed)") }))
+        #expect(HermesDoctor.lineStatus(warningLine) == .warning)
+        let hintLine = try #require(lines.first(where: { $0.contains("No Codex credentials stored") }))
+        #expect(HermesDoctor.lineStatus(hintLine) == .hint)
+    }
+
+    @Test
     func runFixThrowsOnEmptyNonZeroOutput() async {
         let runner = RecordingAdminRunner(result: HermesAdminResult(
             exitCode: 2,
