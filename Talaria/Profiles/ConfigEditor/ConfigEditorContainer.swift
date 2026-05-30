@@ -66,7 +66,7 @@ struct ConfigEditorContainer: View {
     private func content(_ editor: ConfigEditorHarness) -> some View {
         Group {
             if editor.comparing, let dest = editor.dest {
-                EditableComparisonView(source: editor.source, dest: dest)
+                EditableComparisonView(source: editor.source, dest: dest, showDifferencesOnly: editor.showDifferencesOnly)
             } else {
                 switch editor.source.mode {
                 case .structured:
@@ -119,6 +119,10 @@ struct ConfigEditorContainer: View {
                         Text($0.name).tag($0.name)
                     }
                 }
+                Toggle("Differences only", isOn: Binding(
+                    get: { editor.showDifferencesOnly },
+                    set: { editor.showDifferencesOnly = $0 }
+                ))
             } else {
                 Button {
                     Task { await editor.source.save() }

@@ -244,6 +244,16 @@ final class ConfigEditingState: Identifiable {
         return ProfileConfigForm.configValue(from: leaf, schemaType: field.schema?.type)
     }
 
+    /// The field's value from the last load (`original`), not the live `working`
+    /// edit. Used by the comparison's "Differences only" filter so the filter
+    /// reads the loaded baseline — which changes only on load/save — instead of
+    /// `working`, keeping per-keystroke edits from re-running the whole-union
+    /// diff and from filtering a row out from under an active edit.
+    func originalValue(for field: ConfigFormField) -> ConfigValue {
+        guard let original, let leaf = ProfileConfigForm.value(at: field.key, in: original) else { return .missing }
+        return ProfileConfigForm.configValue(from: leaf, schemaType: field.schema?.type)
+    }
+
     private func setWorking(_ key: String, _ json: JSONValue) {
         working = ProfileConfigForm.setValue(json, at: key, in: working)
     }

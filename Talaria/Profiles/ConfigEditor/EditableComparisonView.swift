@@ -11,6 +11,11 @@ import SwiftUI
 struct EditableComparisonView: View {
     let source: ConfigEditingState
     let dest: ConfigEditingState
+    /// Visual-only row filter: when on, rows whose loaded values match on both
+    /// sides are hidden (see `isDifferent` for why the loaded baseline, not the
+    /// live edit, drives the filter). Never touches `working`/dirty/save — purely
+    /// which rows render (see `visibleCategories`).
+    let showDifferencesOnly: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,12 +23,17 @@ struct EditableComparisonView: View {
             Divider()
             content
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             columnHeader(source)
-            Color.clear.frame(width: copyGutterWidth)
+            // Width-only spacer to align the headers with the copy gutter below.
+            // A definite height keeps `Color` (height-greedy by default) from
+            // inflating the header to fill the view and stranding the labels at
+            // the baseline — which left a large blank band above the row.
+            Color.clear.frame(width: copyGutterWidth, height: 0)
             columnHeader(dest)
         }
         .padding(.horizontal, 12)
@@ -58,21 +68,38 @@ struct EditableComparisonView: View {
     @ViewBuilder
     private var content: some View {
         if let sourceForm = source.form, let destForm = dest.form {
-            let categories = alignedComparison(source: sourceForm, dest: destForm)
-            List {
-                ForEach(categories) { category in
-                    Section(category.name.capitalized) {
-                        ForEach(category.rows) { row in
-                            ComparisonRowView(row: row, source: source, dest: dest)
+            let categories = visibleCategories(source: sourceForm, dest: destForm)
+            if categories.isEmpty, showDifferencesOnly {
+                ContentUnavailableView(
+                    "No differences",
+                    systemImage: "equal.circle",
+                    description: Text("The two profiles' configs match on every field.")
+                )
+            } else {
+                ScrollViewReader { proxy in
+                    VStack(spacing: 0) {
+                        if categories.count > 1 {
+                            jumpBar(categories, proxy: proxy)
+                            Divider()
                         }
+                        List {
+                            ForEach(categories) { category in
+                                Section(category.name.capitalized) {
+                                    ForEach(category.rows) { row in
+                                        ComparisonRowView(row: row, source: source, dest: dest)
+                                    }
+                                }
+                                .id(category.name)
+                            }
+                        }
+                        #if os(macOS)
+                        .listStyle(.inset)
+                        #else
+                        .listStyle(.insetGrouped)
+                        #endif
                     }
                 }
             }
-            #if os(macOS)
-            .listStyle(.inset)
-            #else
-            .listStyle(.insetGrouped)
-            #endif
         } else if let unreachable = unreachableProfileName {
             ContentUnavailableView(
                 "Comparison unavailable",
@@ -82,6 +109,55 @@ struct EditableComparisonView: View {
         } else {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// Section dropdown that scroll-anchors the comparison list to a chosen
+    /// category — mirrors the single structured editor's jump bar so the
+    /// many-category union stays navigable.
+    @ViewBuilder
+    private func jumpBar(_ categories: [ComparisonCategory], proxy: ScrollViewProxy) -> some View {
+        HStack {
+            Menu {
+                ForEach(categories) { category in
+                    Button(category.name.capitalized) {
+                        withAnimation { proxy.scrollTo(category.name, anchor: .top) }
+                    }
+                }
+            } label: {
+                Label("Jump to section", systemImage: "list.bullet.indent")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    /// The aligned categories to render, filtered to differing rows when
+    /// `showDifferencesOnly` is on. Empty categories drop out so the list never
+    /// shows a header with no rows. This is purely presentational — the full
+    /// union still backs each side's editing state.
+    private func visibleCategories(source sourceForm: ProfileConfigForm, dest destForm: ProfileConfigForm) -> [ComparisonCategory] {
+        let categories = alignedComparison(source: sourceForm, dest: destForm)
+        guard showDifferencesOnly else { return categories }
+        return categories.compactMap { category in
+            let rows = category.rows.filter(isDifferent)
+            return rows.isEmpty ? nil : ComparisonCategory(name: category.name, rows: rows)
+        }
+    }
+
+    /// A row differs when either side lacks the key (one-sided rows are always a
+    /// difference) or the two sides' **loaded** values aren't equal. Compares
+    /// `originalValue` rather than the live `working` value on purpose: reading
+    /// `working` here would make the whole comparison body re-evaluate (and
+    /// re-run the union diff) on every keystroke, and would yank a row out from
+    /// under an in-progress edit the instant the two sides matched. The filter
+    /// therefore reflects the last load/save baseline, refreshing when a save
+    /// reloads it.
+    private func isDifferent(_ row: ComparisonRow) -> Bool {
+        guard let sourceField = row.sourceField, let destField = row.destField else { return true }
+        return source.originalValue(for: sourceField) != dest.originalValue(for: destField)
     }
 }
 
