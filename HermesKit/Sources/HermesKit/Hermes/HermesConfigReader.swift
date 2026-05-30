@@ -41,27 +41,7 @@ public enum HermesConfigReader {
     /// home stays absolute. Mirrors ``RemoteSnapshot/remoteStateDBPath(hermesHome:)``
     /// but emits relative (not `$HOME/…`) paths for the implicit-home cases.
     public static func remoteConfigPath(hermesHome: String?, profileName: String) -> String {
-        let tail = configRelativePath(profileName: profileName)
-        guard let raw = hermesHome?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else {
-            // Default `~/.hermes`, expressed relative to the SFTP home.
-            return ".hermes/\(tail)"
-        }
-        // Home-relative prefixes that SFTP can't expand (no remote shell):
-        // tilde forms and `$HOME` forms (the latter is a home value
-        // `RemoteSnapshot.remoteStateDBPath` supports because it runs under a
-        // login shell — see its `$HOME/.hermes` test). Strip them to a path the
-        // SFTP server resolves against the login user's home.
-        for prefix in ["~", "$HOME", "${HOME}"] {
-            if raw == prefix {
-                // Hermes home == $HOME → config sits directly under the SFTP home.
-                return tail
-            }
-            if raw.hasPrefix(prefix + "/") {
-                let stripped = String(raw.dropFirst(prefix.count + 1)).trimmingTrailingSlashes()
-                return stripped.isEmpty ? tail : "\(stripped)/\(tail)"
-            }
-        }
-        return "\(raw.trimmingTrailingSlashes())/\(tail)"
+        HermesHomePaths.relativePath(hermesHome: hermesHome, tail: configRelativePath(profileName: profileName))
     }
 
     public static func read(
@@ -133,15 +113,5 @@ public enum HermesConfigReader {
         } catch {
             throw HermesConfigReaderError.readFailed(error.localizedDescription)
         }
-    }
-}
-
-private extension String {
-    func trimmingTrailingSlashes() -> String {
-        var value = self
-        while value.hasSuffix("/") {
-            value.removeLast()
-        }
-        return value
     }
 }
