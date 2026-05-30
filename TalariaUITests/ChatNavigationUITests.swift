@@ -53,6 +53,22 @@ final class ChatNavigationUITests: XCTestCase {
         )
     }
 
+    /// The Browse button opens the manage sheet and drills into Updates.
+    func testBrowseOpensUpdates() {
+        let app = launchApp()
+        XCTAssertTrue(app.buttons["New session"].waitForExistence(timeout: 10))
+        app.buttons["Browse"].tap()
+        XCTAssertTrue(
+            app.navigationBars["Browse"].waitForExistence(timeout: 5),
+            "Browse sheet did not appear"
+        )
+        app.buttons["Updates"].tap()
+        XCTAssertTrue(
+            app.navigationBars["Updates"].waitForExistence(timeout: 5),
+            "Updates surface did not push from the Browse list"
+        )
+    }
+
     /// End-to-end: send a prompt and see the mock agent's reply render.
     func testSendPromptShowsAgentReply() {
         let app = launchApp()

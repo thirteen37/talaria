@@ -60,6 +60,9 @@
 		728C074511EF21DEF1EE05C3 /* ProfileDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = C92A4408751CCA22446EA7AE /* ProfileDirectory.swift */; };
 		73B600A6620523E277E9A28D /* ServerWindowHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9E1E73EC2580CB9D11A92ED /* ServerWindowHarness.swift */; };
 		7621DC3ED55B2069E6CE1F9F /* BrowseDestination.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D9089ABA90F410BC7A0349A /* BrowseDestination.swift */; };
+		A1B2C3D4E5F60718293A4B5D /* BrowseDetail.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* BrowseDetail.swift */; };
+		A1B2C3D4E5F60718293A4B5E /* BrowseDetail.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* BrowseDetail.swift */; };
+		A1B2C3D4E5F60718293A4B60 /* PhoneBrowseSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5F /* PhoneBrowseSheet.swift */; };
 		762AEA4C3482528E246E3A92 /* Composer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82CA47B4FE65F06FAC7B45D9 /* Composer.swift */; };
 		799C1A386BCE91C49D9426F8 /* PhoneProfileEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E164EDD7A34D35C13D632433 /* PhoneProfileEditor.swift */; };
 		7A99D0612ADDD652BF6A4E79 /* LogConsole.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71FE69AC7DA73A5FB9244123 /* LogConsole.swift */; };
@@ -167,6 +170,8 @@
 		7708C07FD33792DB6597C593 /* ChatBubble.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatBubble.swift; sourceTree = "<group>"; };
 		7914D7DB63EFCABE5A2D84BA /* SlashMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SlashMenu.swift; sourceTree = "<group>"; };
 		7D9089ABA90F410BC7A0349A /* BrowseDestination.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowseDestination.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B5C /* BrowseDetail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowseDetail.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B5F /* PhoneBrowseSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneBrowseSheet.swift; sourceTree = "<group>"; };
 		82CA47B4FE65F06FAC7B45D9 /* Composer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Composer.swift; sourceTree = "<group>"; };
 		8AA23ADC5BC8B713EA424CDD /* ProfileEditorRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditorRoot.swift; sourceTree = "<group>"; };
 		94299301A67348B115A820E1 /* PlatformSeam.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformSeam.swift; sourceTree = "<group>"; };
@@ -441,6 +446,7 @@
 			isa = PBXGroup;
 			children = (
 				7D9089ABA90F410BC7A0349A /* BrowseDestination.swift */,
+				A1B2C3D4E5F60718293A4B5C /* BrowseDetail.swift */,
 				4D9036C1EE4E2376B7311222 /* HostKeyConfirmationCoordinator.swift */,
 				4F61968C9D6A00AA0704AE7B /* RecentServers.swift */,
 				B9E1E73EC2580CB9D11A92ED /* ServerWindowHarness.swift */,
@@ -486,6 +492,7 @@
 		E700082832C0C07920B77308 /* iphone */ = {
 			isa = PBXGroup;
 			children = (
+				A1B2C3D4E5F60718293A4B5F /* PhoneBrowseSheet.swift */,
 				B001CA285B7593A84B2E5C1E /* PhoneServerWindow.swift */,
 			);
 			path = iphone;
@@ -644,6 +651,7 @@
 			files = (
 				1EECCDC4AE1FAACFF07BE0AD /* AppLog.swift in Sources */,
 				7621DC3ED55B2069E6CE1F9F /* BrowseDestination.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5D /* BrowseDetail.swift in Sources */,
 				21F863E247E5CFE4FF377689 /* ChatBubble.swift in Sources */,
 				2EE9D69FC8789FCC0DF4B49C /* ChatModels.swift in Sources */,
 				FF4B12C0890FE3A218309E50 /* ChatView.swift in Sources */,
@@ -703,6 +711,7 @@
 			files = (
 				B12C7ACB8C23C086A85E0842 /* AppLog.swift in Sources */,
 				BFCAF447270A3E3C393BA983 /* BrowseDestination.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5E /* BrowseDetail.swift in Sources */,
 				3B99FDA9B595BD75F1A0140B /* ChatBubble.swift in Sources */,
 				4C6846E5305B13218E4647EE /* ChatModels.swift in Sources */,
 				D022CEB819BEC577762C2CF6 /* ChatView.swift in Sources */,
@@ -721,6 +730,7 @@
 				5EC0E7BD239BC0CF5E419732 /* MockACPTransport.swift in Sources */,
 				F0223600063B00912A0FB4F9 /* PermissionPrompt.swift in Sources */,
 				799C1A386BCE91C49D9426F8 /* PhoneProfileEditor.swift in Sources */,
+				A1B2C3D4E5F60718293A4B60 /* PhoneBrowseSheet.swift in Sources */,
 				9792D03B27B3B380039498CD /* PhoneServerWindow.swift in Sources */,
 				E1C3E4A6DD75220E15C54369 /* PlatformSeam.swift in Sources */,
 				4B8E5264D875A01CD6C5AC15 /* ProbeCapabilityView.swift in Sources */,
