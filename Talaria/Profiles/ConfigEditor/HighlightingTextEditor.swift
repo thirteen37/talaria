@@ -85,9 +85,10 @@ extension HighlightingTextEditor {
             if let storage = textView.textStorage { rehighlight(storage, text: text) }
         }
 
+        @MainActor
         final class Coordinator: NSObject, NSTextViewDelegate {
             var parent: Representable
-            private var pending: DispatchWorkItem?
+            private var pending: Task<Void, Never>?
 
             init(_ parent: Representable) { self.parent = parent }
 
@@ -98,18 +99,16 @@ extension HighlightingTextEditor {
                 scheduleHighlight(for: textView)
             }
 
+            // The debounce runs as a main-actor Task (inherited from this
+            // `@MainActor` coordinator), so the text view never crosses an
+            // isolation boundary and its main-actor state is safe to touch.
             private func scheduleHighlight(for textView: NSTextView) {
                 pending?.cancel()
-                let work = DispatchWorkItem { [weak textView] in
-                    // Dispatched onto the main queue, so the text view's
-                    // main-actor state is safe to touch here.
-                    MainActor.assumeIsolated {
-                        guard let textView, let storage = textView.textStorage else { return }
-                        rehighlight(storage, text: textView.string)
-                    }
+                pending = Task { [weak textView] in
+                    try? await Task.sleep(for: .seconds(highlightDebounce))
+                    guard !Task.isCancelled, let textView, let storage = textView.textStorage else { return }
+                    rehighlight(storage, text: textView.string)
                 }
-                pending = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + highlightDebounce, execute: work)
             }
         }
     }
@@ -156,9 +155,10 @@ extension HighlightingTextEditor {
             rehighlight(textView.textStorage, text: text)
         }
 
+        @MainActor
         final class Coordinator: NSObject, UITextViewDelegate {
             var parent: Representable
-            private var pending: DispatchWorkItem?
+            private var pending: Task<Void, Never>?
 
             init(_ parent: Representable) { self.parent = parent }
 
@@ -168,21 +168,19 @@ extension HighlightingTextEditor {
                 scheduleHighlight(for: textView)
             }
 
+            // The debounce runs as a main-actor Task (inherited from this
+            // `@MainActor` coordinator), so the text view never crosses an
+            // isolation boundary and its main-actor state is safe to touch.
             private func scheduleHighlight(for textView: UITextView) {
                 pending?.cancel()
-                let work = DispatchWorkItem { [weak textView] in
-                    // Dispatched onto the main queue, so the text view's
-                    // main-actor state is safe to touch here.
-                    MainActor.assumeIsolated {
-                        guard let textView else { return }
-                        let selected = textView.selectedRange
-                        rehighlight(textView.textStorage, text: textView.text ?? "")
-                        textView.selectedRange = selected
-                        textView.typingAttributes = YAMLHighlightTheme.baseAttributes
-                    }
+                pending = Task { [weak textView] in
+                    try? await Task.sleep(for: .seconds(highlightDebounce))
+                    guard !Task.isCancelled, let textView else { return }
+                    let selected = textView.selectedRange
+                    rehighlight(textView.textStorage, text: textView.text ?? "")
+                    textView.selectedRange = selected
+                    textView.typingAttributes = YAMLHighlightTheme.baseAttributes
                 }
-                pending = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + highlightDebounce, execute: work)
             }
         }
     }
