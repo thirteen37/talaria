@@ -11,6 +11,12 @@ struct BrowseDetailView: View {
     /// Hermes profiles on the server, surfaced by the window — fed to the
     /// Configuration editor's compare dropdown.
     var hermesProfiles: [HermesProfileInfo] = []
+    /// The window's active Hermes profile (`-p <name>`), highlighted in the
+    /// Profiles management table.
+    var activeHermesProfile: String = HermesProfiles.defaultProfileName
+    /// Invoked after a Profiles mutation so the window refreshes its sidebar
+    /// switcher and reconciles the active profile if it was renamed/deleted.
+    var onProfilesChanged: () -> Void = {}
     /// Lets `NotificationsView` deep-link into another destination (e.g. "Open
     /// Doctor"). Desktop points this at its `browse` selection; the iPhone sheet
     /// pushes onto its navigation path.
@@ -26,6 +32,14 @@ struct BrowseDetailView: View {
             ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
         case .cron:
             CronView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+        case .hermesProfiles:
+            ProfilesView(
+                client: harness.dashboardClient,
+                runner: harness.store.adminRunner,
+                activeProfile: activeHermesProfile,
+                hermesVersion: harness.profile.version,
+                onProfilesChanged: onProfilesChanged
+            )
         case .profiles:
             ConfigEditorContainer(windowHarness: harness, profiles: hermesProfiles)
         case .soul:
