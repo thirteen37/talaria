@@ -14,6 +14,10 @@ struct DesktopServerWindow: View {
     @State private var harness: ServerWindowHarness?
     @State private var browse: BrowseDestination? = .sessions
     @State private var showingSettings = false
+    /// Sidebar visibility, driven by our custom toggle. We manage it ourselves
+    /// (rather than letting the system own the sidebar button) so the toggle can
+    /// carry a notification badge that stays visible when the sidebar collapses.
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     /// Live profile shown in this window. Diverges from `profileId` (the
     /// `WindowGroup` launch value) once the user picks a different profile from
     /// the sidebar switcher; the harness rebuild keys off this.
@@ -52,6 +56,14 @@ struct DesktopServerWindow: View {
         .platformWindowSubtitle(subtitle(for: harness?.profile ?? directory.profile(id: currentProfileId)))
         .task(id: harnessKey) {
             await rebuildHarness()
+        }
+        // The dashboard comes online async, after `rebuildHarness` already ran
+        // its first (client-less) profile load. Re-run once it lands so the
+        // switcher upgrades from default-only to the live dashboard list,
+        // mirroring the config editor's dashboard-ready re-load.
+        .onChange(of: harness?.dashboardClient != nil) { _, hasClient in
+            guard hasClient, let harness else { return }
+            Task { await loadHermesProfiles(harness: harness) }
         }
         // iPad: saving the first server (or a profile mutation while no harness
         // is live) connects without a relaunch. Harmless on macOS, which builds
@@ -118,41 +130,22 @@ struct DesktopServerWindow: View {
         }
     }
 
-    /// Populates `hermesProfiles` for the switcher. Prefers the dashboard API
-    /// (clean names + is-default flag); falls back to the CLI `profile list`;
-    /// degrades to `[default]` so the window always has at least the default.
+    /// Populates `hermesProfiles` for the switcher straight from the dashboard
+    /// API (clean names + is-default flag). Stays default-only/hidden until the
+    /// dashboard is online or if the call fails — no CLI `profile list` fallback,
+    /// whose decorated table would leak marker glyphs into the menu. Re-run when
+    /// `dashboardClient` lands (see the `.onChange` below) to upgrade the list.
     @MainActor
     private func loadHermesProfiles(harness: ServerWindowHarness) async {
+        let profiles = await HermesProfiles.selectorProfiles(client: harness.dashboardClient)
         // Drop a stale listing if the window rebuilt its harness (server or
         // Hermes-profile switch) while this read was in flight — otherwise it
         // would overwrite the active harness's profiles with the previous one's,
         // offering `-p <name>`s the server lacks. Identity (not profile id) is
         // the right key: a Hermes-profile switch keeps the server id but builds
         // a fresh harness.
-        func apply(_ profiles: [HermesProfileInfo]) {
-            guard self.harness === harness else { return }
-            hermesProfiles = profiles
-        }
-        if let client = harness.dashboardClient {
-            do {
-                let list = try await client.listProfiles()
-                apply(list.map {
-                    HermesProfileInfo(name: $0.name, isDefault: $0.isDefault, model: $0.model)
-                })
-                return
-            } catch {
-                // Fall through to the CLI source.
-            }
-        }
-        if let runner = harness.store.adminRunner {
-            do {
-                apply(try await HermesProfiles.list(runner: runner))
-                return
-            } catch {
-                // Fall through to the default-only degrade.
-            }
-        }
-        apply([HermesProfileInfo(name: HermesProfiles.defaultProfileName, isDefault: true, status: nil)])
+        guard self.harness === harness else { return }
+        hermesProfiles = profiles
     }
 
     /// Re-runs the Hermes-profile listing after a Profiles mutation (clone /
@@ -201,10 +194,18 @@ struct DesktopServerWindow: View {
 
     @ViewBuilder
     private func content(harness: ServerWindowHarness) -> some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar(harness: harness)
         } detail: {
             detail(harness: harness)
+        }
+        // Swap the system sidebar toggle for our own so it can show a red dot
+        // when the window has active notifications — visible even when the
+        // sidebar is collapsed and the Notifications row is out of view.
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                sidebarToggle(harness: harness)
+            }
         }
         .alert(
             "Trust this server?",
@@ -238,12 +239,7 @@ struct DesktopServerWindow: View {
                 onSwitchProfile: switchProfile,
                 hermesProfiles: hermesProfiles,
                 activeHermesProfile: activeHermesProfile,
-                onSwitchHermesProfile: switchHermesProfile,
-                notifications: harness.notifications,
-                onOpenNotifications: {
-                    harness.store.selection = nil
-                    browse = .notifications
-                }
+                onSwitchHermesProfile: switchHermesProfile
             )
                 .onChange(of: harness.store.selection) { _, newValue in
                     if newValue != nil {
@@ -285,7 +281,7 @@ struct DesktopServerWindow: View {
 
             Section("Browse") {
                 browseRow(.sessions, store: harness.store)
-                ForEach(BrowseDestination.manageOrder.filter { $0 != .notifications }, id: \.self) { destination in
+                ForEach(BrowseDestination.manageOrder, id: \.self) { destination in
                     browseRow(destination, store: harness.store)
                 }
             }
@@ -293,6 +289,9 @@ struct DesktopServerWindow: View {
         // iPad surfaces a gear to open the editor (no Settings scene there);
         // no-op on macOS.
         .platformSettingsToolbarItem { showingSettings = true }
+        // The default sidebar toggle is replaced by `sidebarToggle` (attached to
+        // the split view) so we can badge it with a notification dot.
+        .toolbar(removing: .sidebarToggle)
         .navigationSplitViewColumnWidth(min: 220, ideal: 240)
     }
 
@@ -340,6 +339,34 @@ struct DesktopServerWindow: View {
         let user = profile.user.map { "\($0)@" } ?? ""
         let port = profile.port.map { ":\($0)" } ?? ""
         return "\(user)\(host)\(port)"
+    }
+
+    /// Replacement for the system sidebar toggle. Toggles `columnVisibility` and
+    /// shows a small red dot when the window has active notifications, so the
+    /// indicator is reachable even with the sidebar (and its Notifications row)
+    /// collapsed.
+    private func sidebarToggle(harness: ServerWindowHarness) -> some View {
+        Button {
+            withAnimation {
+                columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+            }
+        } label: {
+            Image(systemName: "sidebar.leading")
+                .overlay(alignment: .topTrailing) {
+                    if !harness.notifications.issues.isEmpty {
+                        Circle()
+                            .fill(.red)
+                            .frame(width: 6, height: 6)
+                            .offset(x: 4, y: -3)
+                    }
+                }
+        }
+        .help("Toggle Sidebar")
+        .accessibilityLabel(
+            harness.notifications.issues.isEmpty
+                ? "Toggle Sidebar"
+                : "Toggle Sidebar, \(harness.notifications.issues.count) notification(s)"
+        )
     }
 
     private func browseRow(_ destination: BrowseDestination, store: SessionsStore) -> some View {

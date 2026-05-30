@@ -53,6 +53,46 @@ struct DashboardClientProfilesTests {
         #expect(request.value(forHTTPHeaderField: "X-Hermes-Session-Token") == "tok")
     }
 
+    // MARK: - Selector loading (window switcher source-of-truth behavior)
+
+    @Test
+    func selectorProfilesStaysDefaultOnlyWithoutClient() async {
+        // Dashboard not online yet: the switcher stays default-only (hidden), and
+        // there is no CLI fallback path to leak decorated names.
+        let profiles = await HermesProfiles.selectorProfiles(client: nil)
+
+        #expect(profiles.map(\.name) == ["default"])
+        #expect(profiles.first?.isDefault == true)
+    }
+
+    @Test
+    func selectorProfilesUsesDashboardNamesExactly() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/profiles", body: try loadFixtureData("profiles.json"))
+        ])
+        let client = makeClient(http: http)
+
+        let profiles = await HermesProfiles.selectorProfiles(client: client)
+
+        // Exact dashboard names, including a clean `default` — no `◆default`.
+        #expect(profiles.map(\.name) == ["default", "dev", "dining"])
+        #expect(profiles.filter(\.isDefault).map(\.name) == ["default"])
+    }
+
+    @Test
+    func selectorProfilesStaysDefaultOnlyOnAPIFailure() async {
+        // API failure must not fall back to CLI-parsed names: stay default-only.
+        let http = StubHTTP(responses: [
+            .init(path: "/api/profiles", statusCode: 500, body: Data("boom".utf8))
+        ])
+        let client = makeClient(http: http)
+
+        let profiles = await HermesProfiles.selectorProfiles(client: client)
+
+        #expect(profiles.map(\.name) == ["default"])
+        #expect(profiles.first?.isDefault == true)
+    }
+
     private func makeClient(http: StubHTTP) -> DashboardClient {
         DashboardClient(
             baseURL: URL(string: "http://127.0.0.1:9119")!,

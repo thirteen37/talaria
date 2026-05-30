@@ -87,6 +87,11 @@ final class LogsHarness {
         appliedSearchFilter = searchFilter
     }
 
+    /// The committed search term the visible lines were actually fetched with
+    /// (not the uncommitted draft). Used to highlight matches in the rendered
+    /// lines so the overlay tracks what the server filtered on.
+    var activeSearchFilter: String { appliedSearchFilter }
+
     func refreshNow() async {
         await poll()
     }
@@ -139,6 +144,7 @@ struct LogsView: View {
 
     @State private var harness: LogsHarness?
     @State private var autoScroll: Bool = true
+    @State private var highlight: Bool = true
 
     init(client: DashboardClient?, hermesVersion: HermesVersion? = nil) {
         self.client = client
@@ -267,6 +273,9 @@ struct LogsView: View {
             Toggle("Follow", isOn: $autoScroll)
                 .toggleStyle(.switch)
 
+            Toggle("Highlight", isOn: $highlight)
+                .toggleStyle(.switch)
+
             Spacer()
             Text("\(harness.entries.count) lines")
                 .font(.caption)
@@ -282,7 +291,7 @@ struct LogsView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
                     ForEach(harness.entries) { entry in
-                        Text(entry.text.trimmingCharacters(in: .newlines))
+                        Text(highlighted(entry.text, search: harness.activeSearchFilter, enabled: highlight))
                             .font(.system(.body, design: .monospaced))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -300,6 +309,49 @@ struct LogsView: View {
             }
         }
         .frame(maxHeight: .infinity)
+    }
+
+    /// Renders one tail line as a single `AttributedString` (mirroring
+    /// `DoctorView.colorizedBody`) so contiguous selection and "Copy visible"
+    /// stay faithful — `LogSyntax.segments` guarantees the pieces concatenate
+    /// back to the original line. With `enabled` off it falls straight back to
+    /// plain monospaced text.
+    private func highlighted(_ text: String, search: String, enabled: Bool) -> AttributedString {
+        let line = text.trimmingCharacters(in: .newlines)
+        guard enabled else { return AttributedString(line) }
+        var result = AttributedString()
+        for seg in LogSyntax.segments(of: line) {
+            var piece = AttributedString(seg.text)
+            if let c = color(for: seg.token) { piece.foregroundColor = c }
+            result += piece
+        }
+        if !search.isEmpty { applySearchHighlight(&result, term: search) }
+        return result
+    }
+
+    private func color(for token: LogSyntax.Token) -> Color? {
+        switch token {
+        case .timestamp:               return .secondary
+        case .level(.debug):           return .secondary
+        case .level(.info):            return .green
+        case .level(.warning):         return .orange
+        case .level(.error), .level(.critical): return .red
+        case .logger:                  return .teal
+        case .traceFile:               return .secondary
+        case .traceException:          return .red
+        case .traceCaret:              return .pink
+        case .message, .separator, .plain: return nil   // default foreground
+        }
+    }
+
+    /// Case-insensitive background overlay for every occurrence of the search
+    /// term, applied on top of the foreground syntax colors.
+    private func applySearchHighlight(_ s: inout AttributedString, term: String) {
+        var searchStart = s.startIndex
+        while let r = s[searchStart...].range(of: term, options: .caseInsensitive) {
+            s[r].backgroundColor = .yellow.opacity(0.4)
+            searchStart = r.upperBound
+        }
     }
 
     private func copyToPasteboard(_ text: String) {

@@ -95,6 +95,32 @@ public enum HermesProfiles {
         try ensureSuccess(result)
     }
 
+    /// Profiles that drive the window's Hermes-profile switcher, sourced solely
+    /// from the dashboard `/api/profiles` route. The dashboard reports clean
+    /// names and a structured default flag, so this never parses the decorated
+    /// CLI `profile list` table (whose default-marker glyph would otherwise leak
+    /// into the menu — the bug this path replaces).
+    ///
+    /// Returns a default-only list (so the switcher stays hidden) when the
+    /// dashboard client isn't online yet or the call fails. The caller re-runs
+    /// this once `dashboardClient` becomes available to upgrade to the live list.
+    public static func selectorProfiles(client: DashboardClient?) async -> [HermesProfileInfo] {
+        guard let client else { return defaultOnly }
+        do {
+            return try await client.listProfiles().map {
+                HermesProfileInfo(name: $0.name, isDefault: $0.isDefault, status: nil)
+            }
+        } catch {
+            return defaultOnly
+        }
+    }
+
+    /// The default-only state for the switcher: a single `default` row, which the
+    /// sidebar treats as "nothing to switch to" and hides.
+    private static var defaultOnly: [HermesProfileInfo] {
+        [HermesProfileInfo(name: defaultProfileName, isDefault: true, status: nil)]
+    }
+
     /// Tolerant parser modeled on ``HermesSkills/parse(_:)``. Supported shapes:
     ///   * Rich box-drawing tables (`┃ Name ┃ Default ┃ Status ┃`) — header row
     ///     drives column mapping.

@@ -12,12 +12,14 @@ struct HermesSessionSummary: Identifiable, Equatable {
     var title: String
     var updatedAt: Date?
     var cwd: String?
+    var source: String?
 
-    init(id: String, title: String, updatedAt: Date? = nil, cwd: String? = nil) {
+    init(id: String, title: String, updatedAt: Date? = nil, cwd: String? = nil, source: String? = nil) {
         self.id = id
         self.title = title
         self.updatedAt = updatedAt
         self.cwd = cwd
+        self.source = source
     }
 
     init(_ summary: DashboardSessionSummary) {
@@ -29,6 +31,7 @@ struct HermesSessionSummary: Identifiable, Equatable {
         // ordering on the server is recency-first by default.
         self.updatedAt = summary.startedAt.map { Date(timeIntervalSince1970: $0) }
         self.cwd = nil
+        self.source = summary.source
     }
 }
 
@@ -189,8 +192,14 @@ final class SessionsStore {
             openingCount -= 1
         }
 
-        let workingDir = cwdStore.cwd(for: summary.id) ?? summary.cwd ?? defaultCwd
         do {
+            let source = try await effectiveSource(for: summary)
+            if let source, source != "acp" {
+                try await openReadOnly(summary, source: source)
+                return
+            }
+
+            let workingDir = cwdStore.cwd(for: summary.id) ?? summary.cwd ?? defaultCwd
             let state = try await Self.withTimeout(Self.openTimeout, isPaused: isAwaitingUserInput) {
                 try await self.manager.openExisting(id: summary.id, cwd: workingDir)
             }
@@ -206,6 +215,37 @@ final class SessionsStore {
             AppLog.session.error("openExisting: failed: \(String(describing: error), privacy: .public)")
             lastError = Self.describe(error)
         }
+    }
+
+    private func effectiveSource(for summary: HermesSessionSummary) async throws -> String? {
+        if let source = summary.source {
+            return source
+        }
+        guard let dashboardClient else {
+            return nil
+        }
+        let detail = try await dashboardClient.sessionDetail(id: summary.id)
+        return detail.source
+    }
+
+    private func openReadOnly(_ summary: HermesSessionSummary, source: String) async throws {
+        guard let dashboardClient else {
+            lastError = "Dashboard not reachable"
+            return
+        }
+        let payload = try await dashboardClient.sessionMessages(id: summary.id)
+        let messages = SessionHistoryMapper.messages(from: payload.messages)
+        let workingDir = summary.cwd ?? defaultCwd
+        let viewModel = LocalChatViewModel(
+            sessionId: summary.id,
+            cwd: workingDir,
+            messages: messages,
+            source: source
+        )
+        viewModels[summary.id] = viewModel
+        statuses[summary.id] = .idle
+        insert(OpenSession(id: summary.id, cwd: workingDir, title: summary.title))
+        selection = summary.id
     }
 
     func viewModel(for id: SessionId) -> LocalChatViewModel? {

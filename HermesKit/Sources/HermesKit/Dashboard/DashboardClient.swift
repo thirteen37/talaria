@@ -87,6 +87,69 @@ public struct DashboardSessionsSearchResponse: Codable, Equatable, Sendable {
     public let results: [DashboardSessionSearchResult]
 }
 
+public struct DashboardSessionDetail: Codable, Equatable, Sendable {
+    public let id: String
+    public let source: String?
+}
+
+public struct DashboardSessionMessagesResponse: Codable, Equatable, Sendable {
+    public let sessionId: String
+    public let messages: [DashboardMessage]
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId = "session_id"
+        case messages
+    }
+}
+
+public struct DashboardMessage: Codable, Equatable, Sendable {
+    public let role: String
+    public let content: JSONValue?
+    public let toolCalls: JSONValue?
+    public let toolCallId: String?
+    public let toolName: String?
+    public let reasoning: String?
+    public let reasoningContent: String?
+
+    public var plainText: String? {
+        guard let content else { return nil }
+        let text = Self.extractText(from: content)
+        return text.isEmpty ? nil : text
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case role
+        case content
+        case reasoning
+        case toolCalls = "tool_calls"
+        case toolCallId = "tool_call_id"
+        case toolName = "tool_name"
+        case reasoningContent = "reasoning_content"
+    }
+
+    private static func extractText(from value: JSONValue) -> String {
+        switch value {
+        case let .string(text):
+            return text
+        case let .array(values):
+            return values
+                .map(extractText)
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+        case let .object(object):
+            if case let .string(text)? = object["text"] {
+                return text
+            }
+            if let nested = object["content"] {
+                return extractText(from: nested)
+            }
+            return ""
+        default:
+            return ""
+        }
+    }
+}
+
 public struct DashboardActionStatus: Codable, Equatable, Sendable {
     public let name: String
     public let running: Bool
@@ -202,6 +265,14 @@ public struct DashboardClient: Sendable {
         var items: [URLQueryItem] = [URLQueryItem(name: "q", value: query)]
         if let limit { items.append(URLQueryItem(name: "limit", value: String(limit))) }
         return try await get(path: "/api/sessions/search", queryItems: items)
+    }
+
+    public func sessionDetail(id: String) async throws -> DashboardSessionDetail {
+        try await get(path: "/api/sessions/\(id)")
+    }
+
+    public func sessionMessages(id: String) async throws -> DashboardSessionMessagesResponse {
+        try await get(path: "/api/sessions/\(id)/messages")
     }
 
     public func getUpdateActionStatus() async throws -> DashboardActionStatus {
@@ -365,6 +436,25 @@ public struct DashboardClient: Sendable {
 
     private struct ConfigUpdateBody: Encodable {
         let config: JSONValue
+    }
+
+    // MARK: - Soul
+
+    public func getSoul() async throws -> String {
+        let response: SoulResponse = try await get(path: "/api/soul")
+        return response.content
+    }
+
+    public func updateSoul(_ content: String) async throws {
+        try await sendNoContent(method: "PUT", path: "/api/soul", body: SoulUpdateBody(content: content))
+    }
+
+    private struct SoulResponse: Decodable {
+        let content: String
+    }
+
+    private struct SoulUpdateBody: Encodable {
+        let content: String
     }
 
     // MARK: - Logs
