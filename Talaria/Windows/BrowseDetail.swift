@@ -28,6 +28,8 @@ struct BrowseDetailView: View {
             CronView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .profiles:
             ConfigEditorContainer(windowHarness: harness, profiles: hermesProfiles)
+        case .soul:
+            SoulEditorContainer(windowHarness: harness)
         case .logs:
             LogsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .doctor:

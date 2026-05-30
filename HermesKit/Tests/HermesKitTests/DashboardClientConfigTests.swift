@@ -82,6 +82,38 @@ struct DashboardClientConfigTests {
     }
 
     @Test
+    func getSoulReturnsMarkdownContent() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/soul", body: Data(##"{"content":"# Soul\nBe concise.\n"}"##.utf8))
+        ])
+        let client = makeClient(http: http)
+
+        let content = try await client.getSoul()
+
+        #expect(content == "# Soul\nBe concise.\n")
+        let request = try #require(http.recordedRequests.first)
+        #expect(request.httpMethod == "GET")
+        #expect(request.url?.path == "/api/soul")
+    }
+
+    @Test
+    func updateSoulPutsContentWrappedBody() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/soul", body: Data(#"{"ok":true}"#.utf8))
+        ])
+        let client = makeClient(http: http)
+
+        try await client.updateSoul("# Soul\nBe pragmatic.\n")
+
+        let request = try #require(http.recordedRequests.first)
+        #expect(request.httpMethod == "PUT")
+        #expect(request.url?.path == "/api/soul")
+        let body = try #require(request.httpBody)
+        let decoded = try JSONDecoder().decode(SoulUpdateProbe.self, from: body)
+        #expect(decoded.content == "# Soul\nBe pragmatic.\n")
+    }
+
+    @Test
     func getConfigRetriesOnceAfterUnauthorized() async throws {
         let http = StubHTTP(responses: [
             .init(path: "/api/config", statusCode: 401, body: Data(#"{"detail":"Unauthorized"}"#.utf8)),
@@ -121,6 +153,10 @@ struct DashboardClientConfigTests {
 
     private struct ConfigUpdateProbe: Decodable {
         let config: JSONValue
+    }
+
+    private struct SoulUpdateProbe: Decodable {
+        let content: String
     }
 
     private func makeClient(http: StubHTTP) -> DashboardClient {

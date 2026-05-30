@@ -398,6 +398,25 @@ public struct DashboardClient: Sendable {
         let config: JSONValue
     }
 
+    // MARK: - Soul
+
+    public func getSoul() async throws -> String {
+        let response: SoulResponse = try await get(path: "/api/soul")
+        return response.content
+    }
+
+    public func updateSoul(_ content: String) async throws {
+        try await sendNoContent(method: "PUT", path: "/api/soul", body: SoulUpdateBody(content: content))
+    }
+
+    private struct SoulResponse: Decodable {
+        let content: String
+    }
+
+    private struct SoulUpdateBody: Encodable {
+        let content: String
+    }
+
     // MARK: - Logs
 
     public func getLogs(
