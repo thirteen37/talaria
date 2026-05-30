@@ -198,6 +198,7 @@ struct DesktopServerWindow: View {
         // iPad surfaces a gear to open the editor (no Settings scene there);
         // no-op on macOS.
         .platformSettingsToolbarItem { showingSettings = true }
+        .navigationSplitViewColumnWidth(min: 220, ideal: 240)
     }
 
     @ViewBuilder

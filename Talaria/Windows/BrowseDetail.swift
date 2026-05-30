@@ -29,13 +29,13 @@ struct BrowseDetailView: View {
             LogsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .doctor:
             DoctorView(
-                runner: harness.store.adminRunner,
+                doctor: harness.doctor,
                 profile: harness.profile,
                 client: harness.dashboardClient,
                 hermesVersion: harness.profile.version
             )
         case .updates:
-            UpdatesView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            UpdatesView(updates: harness.updates, hermesVersion: harness.profile.version)
         case .notifications:
             NotificationsView(center: harness.notifications, onOpenDestination: onOpenDestination)
         }

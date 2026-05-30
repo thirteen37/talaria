@@ -26,6 +26,9 @@ targets:
     dependencies:
       - package: HermesKit
       - package: Sparkle
+    scheme:
+      testTargets:
+        - TalariaTests
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.talaria.Talaria
@@ -84,6 +87,20 @@ targets:
         # Apple Development cert automatically.
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "9URLHJ84PY"
+
+  TalariaTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: TalariaTests
+    dependencies:
+      - target: Talaria
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.talaria.Talaria.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: 6.0
 
   TalariaIOSUITests:
     type: bundle.ui-testing
