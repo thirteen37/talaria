@@ -382,6 +382,12 @@ final class ConfigEditingState: Identifiable {
         let parsed: JSONValue
         do { parsed = try YAMLConfigCodec.jsonValue(fromYAML: text) }
         catch { lastError = "Imported file isn't valid config YAML: \(error.localizedDescription)"; return }
+        // A blank / whitespace / comments-only file parses to an empty object;
+        // PUTting it would silently wipe the saved config, so reject it instead.
+        if case .object(let o) = parsed, o.isEmpty {
+            lastError = "Imported file is empty; nothing to restore."
+            return
+        }
         isLoading = true
         defer { isLoading = false }
         guard let client = await currentClient() else { lastError = "Dashboard is unavailable; can't restore."; return }

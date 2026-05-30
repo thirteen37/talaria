@@ -48,4 +48,13 @@ struct ConfigEditorHarnessBackupTests {
         // would pass even if the parse guard were removed.
         #expect(state.lastError?.contains("isn't valid config YAML") == true)
     }
+
+    @Test
+    func restoreRejectsEmptyDocumentBeforeReachingClient() async {
+        let state = makeState()
+        // Comments-only YAML parses to an empty object; restoring it would
+        // silently wipe the saved config, so it must be rejected.
+        await state.restore(fromYAML: "# just a comment\n")
+        #expect(state.lastError?.contains("empty") == true)
+    }
 }
