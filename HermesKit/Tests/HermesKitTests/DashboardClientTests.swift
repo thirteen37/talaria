@@ -115,6 +115,43 @@ struct DashboardClientTests {
     }
 
     @Test
+    func sessionDetailDecodesSource() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/sessions/20260528_142010_e9dd2892", body: try loadFixtureData("session-detail.json"))
+        ])
+        let client = DashboardClient(
+            baseURL: URL(string: "http://127.0.0.1:9119")!,
+            token: { "tok" },
+            http: http
+        )
+
+        let detail = try await client.sessionDetail(id: "20260528_142010_e9dd2892")
+
+        #expect(detail.id == "20260528_142010_e9dd2892")
+        #expect(detail.source == "telegram")
+    }
+
+    @Test
+    func sessionMessagesDecodesTranscriptRows() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/sessions/20260528_142010_e9dd2892/messages", body: try loadFixtureData("session-messages.json"))
+        ])
+        let client = DashboardClient(
+            baseURL: URL(string: "http://127.0.0.1:9119")!,
+            token: { "tok" },
+            http: http
+        )
+
+        let response = try await client.sessionMessages(id: "20260528_142010_e9dd2892")
+
+        #expect(response.sessionId == "20260528_142010_e9dd2892")
+        #expect(response.messages.count >= 1)
+        let first = try #require(response.messages.first)
+        #expect(first.role == "user")
+        #expect(first.plainText?.contains("Review our session history") == true)
+    }
+
+    @Test
     func retriesOnceAfterUnauthorizedAndCallsRefresh() async throws {
         // First request: 401. Second request: 200 with fixture body. The
         // client must invoke `onUnauthorized` between the two so a caller-
