@@ -51,6 +51,14 @@ struct ConfigEditorContainer: View {
         .onChange(of: profiles) { _, newProfiles in
             editor?.setAvailableProfiles(newProfiles)
         }
+        // Release every scoped dashboard the editor acquired (Compare spawns a
+        // live SSH/dashboard connection per compared profile) when the view goes
+        // away — navigating to another Browse destination, dismissing the iPhone
+        // Browse sheet, or the window rebuilding on a profile switch.
+        .onDisappear {
+            let harness = editor
+            Task { await harness?.teardown() }
+        }
     }
 
     private func makeEditor() -> ConfigEditorHarness {
