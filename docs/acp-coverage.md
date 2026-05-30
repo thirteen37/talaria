@@ -78,6 +78,7 @@ Dashboard coverage today (Hermes 0.14.0 / release 2026.5.16):
 | Skills | `GET /api/skills`, `PUT /api/skills/toggle` |
 | Cron | full CRUD on `/api/cron/jobs` + `/pause` + `/resume` + `/trigger` |
 | Logs | polled `GET /api/logs` (`file`, `lines`, `level`, `component`, `search` query params) |
+| Profiles config editor | `GET /api/config/schema`, `GET /api/config`, `PUT /api/config`, `GET /api/profiles` (plus per-profile scoping via `hermes -p <name> dashboard`) |
 | Tools enable/disable | _no toggle route — still on `hermes tools enable/disable` CLI_ |
 | Doctor | _no `/api/doctor` — still on `hermes doctor` CLI_ |
 | Chat | _stays on ACP/JSON-RPC, not the dashboard_ |

@@ -146,6 +146,24 @@ public struct DashboardLogsResponse: Codable, Equatable, Sendable {
     public let lines: [String]
 }
 
+/// One profile from `GET /api/profiles`. The dashboard reports clean names and a
+/// structured `is_default` flag, so the editor's profile picker uses this rather
+/// than parsing `hermes profile list`'s decorated CLI table (whose default
+/// marker glyph would otherwise leak into the name).
+public struct DashboardProfile: Codable, Equatable, Sendable, Identifiable {
+    public let name: String
+    public let isDefault: Bool
+    public let model: String?
+    public let provider: String?
+
+    public var id: String { name }
+
+    enum CodingKeys: String, CodingKey {
+        case name, model, provider
+        case isDefault = "is_default"
+    }
+}
+
 public struct DashboardClient: Sendable {
     public let baseURL: URL
     private let token: @Sendable () -> String?
@@ -266,6 +284,49 @@ public struct DashboardClient: Sendable {
         let deliver: String?
     }
 
+    // MARK: - Profiles
+
+    /// Lists the Hermes profiles known to the dashboard host. Profile-agnostic
+    /// (scans the profiles directory), so the window's default dashboard client
+    /// can enumerate every profile.
+    public func listProfiles() async throws -> [DashboardProfile] {
+        let response: ProfilesResponse = try await get(path: "/api/profiles")
+        return response.profiles
+    }
+
+    private struct ProfilesResponse: Decodable {
+        let profiles: [DashboardProfile]
+    }
+
+    // MARK: - Config
+
+    /// Profile-agnostic field schema driving the structured editor. Public
+    /// route (no token required), but the token is still sent when available.
+    /// Parsed via Yams rather than the generic `Decodable` path so the field
+    /// order the dashboard emits is preserved — see ``DashboardConfigSchema``.
+    public func getConfigSchema() async throws -> DashboardConfigSchema {
+        let data = try await sendRawData(method: "GET", path: "/api/config/schema")
+        return try DashboardConfigSchema(data: data)
+    }
+
+    /// Current config for the dashboard process's profile, returned verbatim as
+    /// a `JSONValue` so arbitrary keys round-trip losslessly (the structured
+    /// form and the non-destructive merge both operate on this object).
+    public func getConfig() async throws -> JSONValue {
+        try await get(path: "/api/config")
+    }
+
+    /// Writes the whole config atomically. The dashboard's `ConfigUpdate` model
+    /// wraps the object under a `config` key.
+    public func updateConfig(_ config: JSONValue) async throws {
+        let body = ConfigUpdateBody(config: config)
+        try await sendNoContent(method: "PUT", path: "/api/config", body: body)
+    }
+
+    private struct ConfigUpdateBody: Encodable {
+        let config: JSONValue
+    }
+
     // MARK: - Logs
 
     public func getLogs(
@@ -315,6 +376,25 @@ public struct DashboardClient: Sendable {
         } catch DashboardClientError.unauthorized {
             await onUnauthorized()
             try await sendOnceVoid(method: method, path: path, queryItems: queryItems, body: body)
+        }
+    }
+
+    /// Like ``sendDecoding`` but returns the raw response body. Used by routes
+    /// whose payload needs order-preserving parsing (the config schema) rather
+    /// than Foundation's key-hashing `JSONDecoder`.
+    private func sendRawData(
+        method: String,
+        path: String,
+        queryItems: [URLQueryItem] = [],
+        body: Encodable? = nil
+    ) async throws -> Data {
+        do {
+            let (data, _) = try await dispatch(method: method, path: path, queryItems: queryItems, body: body)
+            return data
+        } catch DashboardClientError.unauthorized {
+            await onUnauthorized()
+            let (data, _) = try await dispatch(method: method, path: path, queryItems: queryItems, body: body)
+            return data
         }
     }
 

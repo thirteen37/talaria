@@ -24,7 +24,7 @@ struct BrowseDetailView: View {
         case .cron:
             CronView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .profiles:
-            ProfilesView(runner: harness.store.adminRunner, profile: harness.profile, transfer: harness.snapshotTransfer)
+            ConfigEditorContainer(windowHarness: harness)
         case .logs:
             LogsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .doctor:

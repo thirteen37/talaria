@@ -43,6 +43,11 @@ public actor DashboardSupervisor {
     // hopping onto the actor — it's an immutable `Sendable` value.
     public nonisolated let profile: ServerProfile
 
+    /// Hermes profile (`hermes -p <name>`) this dashboard is scoped to. nil or
+    /// `default` spawns the unscoped dashboard (the shared window dashboard);
+    /// a named profile scopes every config op to that profile's `HERMES_HOME`.
+    public nonisolated let hermesProfileName: String?
+
     private let launcher: any DashboardProcessLauncher
     private let http: any DashboardHTTP
     private let portAllocator: @Sendable () throws -> Int
@@ -75,6 +80,7 @@ public actor DashboardSupervisor {
 
     public init(
         profile: ServerProfile,
+        hermesProfileName: String? = nil,
         launcher: any DashboardProcessLauncher,
         http: any DashboardHTTP,
         portAllocator: @escaping @Sendable () throws -> Int,
@@ -82,6 +88,7 @@ public actor DashboardSupervisor {
         reachabilityPollInterval: TimeInterval = 0.2
     ) {
         self.profile = profile
+        self.hermesProfileName = hermesProfileName
         self.launcher = launcher
         self.http = http
         self.portAllocator = portAllocator
@@ -231,16 +238,21 @@ public actor DashboardSupervisor {
     private func buildSpec(port: Int) -> DashboardSpawnSpec {
         switch profile.kind {
         case .local:
-            return DashboardSpawnSpec.local(profile: profile, port: port)
+            return DashboardSpawnSpec.local(profile: profile, port: port, hermesProfileName: hermesProfileName)
         case .ssh:
             #if os(macOS)
             // macOS forwards through `/usr/bin/ssh -L` so the local port maps
             // 1:1 to the remote port.
-            return DashboardSpawnSpec.remote(profile: profile, localPort: port, remotePort: port)
+            return DashboardSpawnSpec.remote(
+                profile: profile,
+                localPort: port,
+                remotePort: port,
+                hermesProfileName: hermesProfileName
+            )
             #else
             // iOS reaches the remote dashboard over NIO-SSH `direct-tcpip`,
             // so there's no local forward — `port` is purely the remote port.
-            return DashboardSpawnSpec.remoteNIO(profile: profile, port: port)
+            return DashboardSpawnSpec.remoteNIO(profile: profile, port: port, hermesProfileName: hermesProfileName)
             #endif
         }
     }

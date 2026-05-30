@@ -20,8 +20,13 @@ public struct DashboardSpawnSpec: Sendable, Equatable {
     /// `LocalProcessTransport`'s handling of a bare `hermes` path: when it
     /// isn't absolute, we shell out through `/usr/bin/env` so the user's
     /// PATH (and any Homebrew shim) is consulted.
-    public static func local(profile: ServerProfile, port: Int) -> DashboardSpawnSpec {
-        let dashboardArgs = ["dashboard", "--no-open", "--host", "127.0.0.1", "--port", String(port)]
+    public static func local(
+        profile: ServerProfile,
+        port: Int,
+        hermesProfileName: String? = nil
+    ) -> DashboardSpawnSpec {
+        let dashboardArgs = profileFlag(hermesProfileName)
+            + ["dashboard", "--no-open", "--host", "127.0.0.1", "--port", String(port)]
         var environment = profile.env
         if let home = profile.hermesHome, !home.isEmpty {
             environment["HERMES_HOME"] = home
@@ -50,7 +55,8 @@ public struct DashboardSpawnSpec: Sendable, Equatable {
     public static func remote(
         profile: ServerProfile,
         localPort: Int,
-        remotePort: Int
+        remotePort: Int,
+        hermesProfileName: String? = nil
     ) -> DashboardSpawnSpec {
         // Single-quote the binary path so a hermes install at a path with
         // whitespace or shell metacharacters (e.g. `/Users/x/My Tools/hermes`)
@@ -60,8 +66,9 @@ public struct DashboardSpawnSpec: Sendable, Equatable {
         if let hermesHome = profile.hermesHome, !hermesHome.isEmpty {
             remoteParts += ["env", ShellQuoting.shellQuote("HERMES_HOME=\(hermesHome)")]
         }
+        remoteParts += [ShellQuoting.shellQuote(profile.hermesPath)]
+        remoteParts += remoteProfileFlag(hermesProfileName)
         remoteParts += [
-            ShellQuoting.shellQuote(profile.hermesPath),
             "dashboard",
             "--no-open",
             "--host",
@@ -105,13 +112,18 @@ public struct DashboardSpawnSpec: Sendable, Equatable {
     /// directly on a session channel, and HTTP reaches the dashboard through a
     /// `direct-tcpip` channel to `127.0.0.1:<port>` rather than a local
     /// forward. `executable` is a sentinel the NIO launcher ignores.
-    public static func remoteNIO(profile: ServerProfile, port: Int) -> DashboardSpawnSpec {
+    public static func remoteNIO(
+        profile: ServerProfile,
+        port: Int,
+        hermesProfileName: String? = nil
+    ) -> DashboardSpawnSpec {
         var remoteParts: [String] = []
         if let hermesHome = profile.hermesHome, !hermesHome.isEmpty {
             remoteParts += ["env", ShellQuoting.shellQuote("HERMES_HOME=\(hermesHome)")]
         }
+        remoteParts += [ShellQuoting.shellQuote(profile.hermesPath)]
+        remoteParts += remoteProfileFlag(hermesProfileName)
         remoteParts += [
-            ShellQuoting.shellQuote(profile.hermesPath),
             "dashboard",
             "--no-open",
             "--host",
@@ -129,5 +141,21 @@ public struct DashboardSpawnSpec: Sendable, Equatable {
             arguments: [wrapped],
             environment: [:]
         )
+    }
+
+    /// Global `-p <name>` flag tokens that scope every config op to a named
+    /// profile, or empty for the default profile (`default` == no `-p`, which is
+    /// what the window's shared dashboard already serves). Used for the local
+    /// argv where no shell quoting is applied.
+    private static func profileFlag(_ name: String?) -> [String] {
+        guard let name, !name.isEmpty, name != HermesProfiles.defaultProfileName else { return [] }
+        return ["-p", name]
+    }
+
+    /// Like ``profileFlag(_:)`` but single-quotes the name for the remote shell
+    /// command line, matching how the hermes path and env vars are quoted.
+    private static func remoteProfileFlag(_ name: String?) -> [String] {
+        guard let name, !name.isEmpty, name != HermesProfiles.defaultProfileName else { return [] }
+        return ["-p", ShellQuoting.shellQuote(name)]
     }
 }

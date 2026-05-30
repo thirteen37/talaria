@@ -95,6 +95,69 @@ struct DashboardSpawnSpecTests {
         #expect(command == "'/Users/x/My Tools/hermes' dashboard --no-open --host 127.0.0.1 --port 9119")
     }
 
+    // MARK: - Profile scoping (-p <name>)
+
+    @Test
+    func localProfileInsertsProfileFlagBeforeDashboard() {
+        let profile = ServerProfile(name: "Local", kind: .local, hermesPath: "/opt/homebrew/bin/hermes")
+        let spec = DashboardSpawnSpec.local(profile: profile, port: 9000, hermesProfileName: "work")
+        // `-p work` is a global flag and must precede the `dashboard` subcommand.
+        #expect(spec.arguments == ["-p", "work", "dashboard", "--no-open", "--host", "127.0.0.1", "--port", "9000"])
+    }
+
+    @Test
+    func localProfileInsertsProfileFlagAfterBareHermesName() {
+        let profile = ServerProfile(name: "Local", kind: .local, hermesPath: "hermes")
+        let spec = DashboardSpawnSpec.local(profile: profile, port: 9000, hermesProfileName: "work")
+        #expect(spec.executable.path == "/usr/bin/env")
+        #expect(spec.arguments == ["hermes", "-p", "work", "dashboard", "--no-open", "--host", "127.0.0.1", "--port", "9000"])
+    }
+
+    @Test
+    func localProfileOmitsProfileFlagForDefaultOrNil() {
+        let profile = ServerProfile(name: "Local", kind: .local, hermesPath: "/opt/homebrew/bin/hermes")
+        let base = ["dashboard", "--no-open", "--host", "127.0.0.1", "--port", "9000"]
+        // `default` == no `-p` (the window's shared dashboard already serves it).
+        #expect(DashboardSpawnSpec.local(profile: profile, port: 9000, hermesProfileName: "default").arguments == base)
+        #expect(DashboardSpawnSpec.local(profile: profile, port: 9000, hermesProfileName: nil).arguments == base)
+    }
+
+    @Test
+    func remoteProfileInsertsProfileFlagBeforeDashboard() throws {
+        var profile = ServerProfile(name: "Box", kind: .ssh, host: "h", hermesPath: "hermes", remoteShellMode: .direct)
+        profile.user = "x"
+        let spec = DashboardSpawnSpec.remote(profile: profile, localPort: 1000, remotePort: 9119, hermesProfileName: "work")
+        let command = try #require(spec.arguments.last)
+        #expect(command == "'hermes' -p 'work' dashboard --no-open --host 127.0.0.1 --port 9119")
+    }
+
+    @Test
+    func remoteProfileOmitsProfileFlagForDefault() throws {
+        var profile = ServerProfile(name: "Box", kind: .ssh, host: "h", hermesPath: "hermes", remoteShellMode: .direct)
+        profile.user = "x"
+        let spec = DashboardSpawnSpec.remote(profile: profile, localPort: 1000, remotePort: 9119, hermesProfileName: "default")
+        let command = try #require(spec.arguments.last)
+        #expect(command == "'hermes' dashboard --no-open --host 127.0.0.1 --port 9119")
+    }
+
+    @Test
+    func remoteNIOProfileInsertsProfileFlagBeforeDashboard() throws {
+        var profile = ServerProfile(name: "Box", kind: .ssh, host: "h", hermesPath: "hermes", remoteShellMode: .direct)
+        profile.user = "x"
+        let spec = DashboardSpawnSpec.remoteNIO(profile: profile, port: 9119, hermesProfileName: "work")
+        let command = try #require(spec.arguments.last)
+        #expect(command == "'hermes' -p 'work' dashboard --no-open --host 127.0.0.1 --port 9119")
+    }
+
+    @Test
+    func remoteNIOProfileOmitsProfileFlagForNil() throws {
+        var profile = ServerProfile(name: "Box", kind: .ssh, host: "h", hermesPath: "hermes", remoteShellMode: .direct)
+        profile.user = "x"
+        let spec = DashboardSpawnSpec.remoteNIO(profile: profile, port: 9119, hermesProfileName: nil)
+        let command = try #require(spec.arguments.last)
+        #expect(command == "'hermes' dashboard --no-open --host 127.0.0.1 --port 9119")
+    }
+
     @Test
     func remoteProfileForwardsHermesHomeEnvironmentWhenSet() throws {
         var profile = ServerProfile(
