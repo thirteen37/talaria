@@ -29,6 +29,17 @@ public struct DoctorReport: Sendable, Equatable {
     }
 }
 
+/// Classification of a doctor body line by its leading status glyph. The UI
+/// maps each case to a color; keeping the classification here keeps it pure,
+/// Foundation-only, and testable.
+public enum DoctorLineStatus: Sendable, Equatable {
+    case ok       // ✓
+    case warning  // ⚠
+    case failure  // ✗ / ✖
+    case hint     // →
+    case plain    // anything else
+}
+
 public enum HermesDoctorError: Error, Equatable, Sendable, LocalizedError {
     case commandFailed(exitCode: Int32, stderr: String)
 
@@ -58,6 +69,20 @@ public enum HermesDoctor {
     /// (different tip phrasing, quoting) still trigger the offer.
     public static func suggestsFix(_ text: String) -> Bool {
         text.contains("doctor --fix")
+    }
+
+    /// Classifies a body line by its leading status glyph (after trimming
+    /// leading whitespace). Pure; the UI maps the result to a color.
+    public static func lineStatus(_ line: String) -> DoctorLineStatus {
+        let scalars = line.drop(while: { $0 == " " || $0 == "\t" }).unicodeScalars
+        guard let first = scalars.first else { return .plain }
+        switch first.value {
+        case 0x2713: return .ok               // ✓
+        case 0x26A0: return .warning          // ⚠
+        case 0x2717, 0x2716: return .failure  // ✗ ✖
+        case 0x2192: return .hint             // →
+        default: return .plain
+        }
     }
 
     private static func report(from arguments: [String], runner: HermesAdminRunning) async throws -> DoctorReport {

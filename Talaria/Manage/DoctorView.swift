@@ -179,7 +179,7 @@ struct DoctorView: View {
                             }
                         )
                     ) {
-                        Text(section.body)
+                        Text(colorizedBody(section.body))
                             .font(.system(.body, design: .monospaced))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -194,6 +194,34 @@ struct DoctorView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Renders a section body as a single `AttributedString` (one per section,
+    /// not a `VStack` of per-line `Text`s) so contiguous text selection and the
+    /// "Copy bundle" path — which uses `report.raw` — stay intact. Each line is
+    /// tinted by its leading status glyph.
+    private func colorizedBody(_ body: String) -> AttributedString {
+        var result = AttributedString()
+        let lines = body.split(separator: "\n", omittingEmptySubsequences: false)
+        for (i, line) in lines.enumerated() {
+            var piece = AttributedString(String(line))
+            if let color = color(for: HermesDoctor.lineStatus(String(line))) {
+                piece.foregroundColor = color
+            }
+            result += piece
+            if i < lines.count - 1 { result += AttributedString("\n") }
+        }
+        return result
+    }
+
+    private func color(for status: DoctorLineStatus) -> Color? {
+        switch status {
+        case .ok:      return .green
+        case .warning: return .orange
+        case .failure: return .red
+        case .hint:    return .secondary
+        case .plain:   return nil   // default foreground
+        }
     }
 
     @ViewBuilder
