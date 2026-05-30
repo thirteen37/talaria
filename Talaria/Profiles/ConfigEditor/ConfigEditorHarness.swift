@@ -30,6 +30,10 @@ final class ConfigEditorHarness {
     private(set) var dest: ConfigEditingState?
     var compareProfile: String = ""
     var comparing: Bool { dest != nil }
+    /// Visual-only filter for the editable comparison: hides rows whose values
+    /// match on both sides. Affects only which rows render, never the underlying
+    /// editing states.
+    var showDifferencesOnly = false
 
     /// Profile-list error (config errors live on the editing states).
     var lastError: String?
