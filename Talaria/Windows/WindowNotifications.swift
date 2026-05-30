@@ -94,35 +94,6 @@ final class WindowNotificationCenter {
     }
 }
 
-/// Bell shown in the sidebar header. Lights up when the center has any
-/// active issues; tapping navigates the window to the notifications page.
-struct NotificationBell: View {
-    let center: WindowNotificationCenter
-    let onOpen: () -> Void
-
-    var body: some View {
-        Button(action: onOpen) {
-            ZStack(alignment: .topTrailing) {
-                Image(systemName: center.issues.isEmpty ? "bell" : "bell.badge.fill")
-                    .foregroundStyle(center.issues.isEmpty ? .secondary : Color.accentColor)
-                if !center.issues.isEmpty {
-                    Text("\(center.issues.count)")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Color.red, in: Capsule())
-                        .offset(x: 6, y: -6)
-                }
-            }
-            .frame(width: 22, height: 22)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.borderless)
-        .help(center.issues.isEmpty ? "No notifications" : "\(center.issues.count) notification(s)")
-    }
-}
-
 /// Detail page that lists each active issue with a deep-link button to the
 /// relevant sidebar destination.
 struct NotificationsView: View {
