@@ -59,23 +59,27 @@ enum NIOSSHConnectionFactory {
         }
         let authDelegate = NIOSSHAuthDelegate(username: user, privateKey: privateKey, password: password)
         let hostKeyDelegate = NIOSSHHostKeyVerifier(store: hostKeyStore, host: host, port: port, confirmUnknown: hostKeyConfirmer)
-        let config = SSHClientConfiguration(
-            userAuthDelegate: authDelegate,
-            serverAuthDelegate: hostKeyDelegate
-        )
 
         let bootstrap = ClientBootstrap(group: group)
             // Match the ACP transport's connect bound so a stalled SYN
             // doesn't pin the UI for ~75s on macOS's default TCP backoff.
             .connectTimeout(.seconds(15))
+            // Build the (non-Sendable) `SSHClientConfiguration` and install the
+            // handler on the event loop so neither crosses the `@Sendable`
+            // initializer boundary; only the Sendable delegates are captured.
             .channelInitializer { channel in
-                channel.pipeline.addHandlers([
-                    NIOSSHHandler(
-                        role: .client(config),
-                        allocator: channel.allocator,
-                        inboundChildChannelInitializer: nil
-                    ),
-                ])
+                channel.eventLoop.makeCompletedFuture {
+                    try channel.pipeline.syncOperations.addHandler(
+                        NIOSSHHandler(
+                            role: .client(SSHClientConfiguration(
+                                userAuthDelegate: authDelegate,
+                                serverAuthDelegate: hostKeyDelegate
+                            )),
+                            allocator: channel.allocator,
+                            inboundChildChannelInitializer: nil
+                        )
+                    )
+                }
             }
 
         do {
@@ -134,18 +138,34 @@ public struct NIOSSHCommandRunner: RemoteCommandRunning {
 
     private func runOnConnection(connection: Channel, command: String, timeout: TimeAmount) async throws -> RemoteCommandResult {
         let promise = connection.eventLoop.makePromise(of: CommandResultBox.self)
-        let handler = NIOSSHCommandHandler(command: command, complete: promise)
 
-        let sshHandler = try await connection.pipeline.handler(type: NIOSSHHandler.self).get()
-        let childPromise = connection.eventLoop.makePromise(of: Channel.self)
-        sshHandler.createChannel(childPromise, channelType: .session) { childChannel, _ in
-            childChannel.pipeline.addHandler(handler)
-        }
-        let childChannel = try await childPromise.futureResult.get()
+        // Resolve the (non-Sendable, library) `NIOSSHHandler` and open the
+        // session child channel entirely on the event loop, so it never
+        // crosses an async boundary. The command handler is installed inside
+        // the on-loop initializer.
+        let childChannel = try await connection.eventLoop.flatSubmit { () -> EventLoopFuture<Channel> in
+            let childPromise = connection.eventLoop.makePromise(of: Channel.self)
+            do {
+                let sshHandler = try connection.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
+                sshHandler.createChannel(childPromise, channelType: .session) { childChannel, _ in
+                    childChannel.eventLoop.makeCompletedFuture {
+                        try childChannel.pipeline.syncOperations.addHandler(
+                            NIOSSHCommandHandler(command: command, complete: promise)
+                        )
+                    }
+                }
+            } catch {
+                childPromise.fail(error)
+            }
+            return childPromise.futureResult
+        }.get()
 
-        let timer = connection.eventLoop.scheduleTask(in: timeout) { [weak handler, weak childChannel] in
+        let timer = connection.eventLoop.scheduleTask(in: timeout) {
+            // On the event loop: read the handler back from the pipeline rather
+            // than capturing it, then mark the timeout and tear the channel down.
+            let handler = try? childChannel.pipeline.syncOperations.handler(type: NIOSSHCommandHandler.self)
             handler?.markTimedOut()
-            childChannel?.close(promise: nil)
+            childChannel.close(promise: nil)
         }
         promise.futureResult.whenComplete { _ in timer.cancel() }
 
@@ -172,7 +192,11 @@ public struct NIOSSHCommandRunner: RemoteCommandRunning {
 /// (expected-small) stdout/stderr in memory, capturing the exit code and
 /// fulfilling `complete` on channel close. Used for control commands like
 /// `sqlite3 .backup` and `rm -f` that produce little or no output.
-final class NIOSSHCommandHandler: ChannelDuplexHandler {
+/// `@unchecked Sendable`: like every NIO `ChannelHandler`, all callbacks run on
+/// the channel's event loop and the mutable state is only touched there. The
+/// conformance lets the timeout timer hold a reference to it without tripping
+/// strict-concurrency capture checks.
+final class NIOSSHCommandHandler: ChannelDuplexHandler, @unchecked Sendable {
     typealias InboundIn = SSHChannelData
     typealias InboundOut = Never
     typealias OutboundIn = Never

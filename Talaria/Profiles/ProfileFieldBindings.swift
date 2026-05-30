@@ -5,7 +5,7 @@ import SwiftUI
 /// editors. They bridge a `ServerProfile`'s optional `String?` / `Int?` fields
 /// to the `String` bindings `TextField` wants, treating empty input as `nil`.
 extension Binding where Value == ServerProfile {
-    func string(_ keyPath: WritableKeyPath<ServerProfile, String?>) -> Binding<String> {
+    func string(_ keyPath: WritableKeyPath<ServerProfile, String?> & Sendable) -> Binding<String> {
         Binding<String>(
             get: { wrappedValue[keyPath: keyPath] ?? "" },
             set: { newValue in
@@ -14,7 +14,7 @@ extension Binding where Value == ServerProfile {
         )
     }
 
-    func int(_ keyPath: WritableKeyPath<ServerProfile, Int?>) -> Binding<String> {
+    func int(_ keyPath: WritableKeyPath<ServerProfile, Int?> & Sendable) -> Binding<String> {
         Binding<String>(
             get: { wrappedValue[keyPath: keyPath].map(String.init) ?? "" },
             set: { newValue in

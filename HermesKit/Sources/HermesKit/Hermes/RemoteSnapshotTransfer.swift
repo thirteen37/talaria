@@ -163,23 +163,27 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
         }
         let authDelegate = NIOSSHAuthDelegate(username: user, privateKey: privateKey, password: password)
         let hostKeyDelegate = NIOSSHHostKeyVerifier(store: hostKeyStore, host: host, port: port, confirmUnknown: hostKeyConfirmer)
-        let config = SSHClientConfiguration(
-            userAuthDelegate: authDelegate,
-            serverAuthDelegate: hostKeyDelegate
-        )
 
         let bootstrap = ClientBootstrap(group: group)
             // Match the ACP transport's connect bound so a stalled SYN
             // doesn't pin the UI for ~75s on macOS's default TCP backoff.
             .connectTimeout(.seconds(15))
+            // Build the (non-Sendable) `SSHClientConfiguration` and install the
+            // handler on the event loop so neither crosses the `@Sendable`
+            // initializer boundary; only the Sendable delegates are captured.
             .channelInitializer { channel in
-                channel.pipeline.addHandlers([
-                    NIOSSHHandler(
-                        role: .client(config),
-                        allocator: channel.allocator,
-                        inboundChildChannelInitializer: nil
-                    ),
-                ])
+                channel.eventLoop.makeCompletedFuture {
+                    try channel.pipeline.syncOperations.addHandler(
+                        NIOSSHHandler(
+                            role: .client(SSHClientConfiguration(
+                                userAuthDelegate: authDelegate,
+                                serverAuthDelegate: hostKeyDelegate
+                            )),
+                            allocator: channel.allocator,
+                            inboundChildChannelInitializer: nil
+                        )
+                    )
+                }
             }
 
         let connection: Channel
@@ -291,7 +295,14 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
 /// order chunks never interleave on disk, and we still tear the channel
 /// down on the event loop the moment a write fails or the size cap is
 /// breached.
-final class NIOSSHCatHandler: ChannelDuplexHandler {
+/// `@unchecked Sendable`: all handler state is read and written exclusively on
+/// the channel's event loop. The background `writeQueue` only ever touches the
+/// captured `FileHandle` and the local chunk — never the handler's own mutable
+/// state — and hops back to the event loop (`eventLoop.execute`) before calling
+/// `fail` or reading `result`. The conformance lets those on-loop hops capture
+/// `self`, and lets the timeout timer hold a reference, without tripping
+/// strict-concurrency capture checks.
+final class NIOSSHCatHandler: ChannelDuplexHandler, @unchecked Sendable {
     typealias InboundIn = SSHChannelData
     typealias InboundOut = Never
     typealias OutboundIn = Never
@@ -362,8 +373,11 @@ final class NIOSSHCatHandler: ChannelDuplexHandler {
                 do {
                     try handle.write(contentsOf: chunk)
                 } catch {
+                    // Bind to a local `let` so the event-loop hop captures a
+                    // constant rather than the mutable weak `self` binding.
+                    let handler = self
                     eventLoop.execute {
-                        self?.fail(error: error)
+                        handler?.fail(error: error)
                         channel.close(promise: nil)
                     }
                 }
@@ -455,23 +469,39 @@ extension NIOSSHCatTransfer {
         writeHandle: FileHandle
     ) async throws -> CatResultBox {
         let promise = connection.eventLoop.makePromise(of: CatResultBox.self)
-        let handler = NIOSSHCatHandler(command: command, writeHandle: writeHandle, complete: promise)
 
-        let sshHandler = try await connection.pipeline.handler(type: NIOSSHHandler.self).get()
-        let childPromise = connection.eventLoop.makePromise(of: Channel.self)
-        sshHandler.createChannel(childPromise, channelType: .session) { childChannel, _ in
-            childChannel.pipeline.addHandler(handler)
-        }
-        let childChannel = try await childPromise.futureResult.get()
+        // Resolve the (non-Sendable, library) `NIOSSHHandler` and open the
+        // session child channel entirely on the event loop, so it never
+        // crosses an async boundary. The cat handler is installed inside the
+        // on-loop initializer.
+        let childChannel = try await connection.eventLoop.flatSubmit { () -> EventLoopFuture<Channel> in
+            let childPromise = connection.eventLoop.makePromise(of: Channel.self)
+            do {
+                let sshHandler = try connection.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
+                sshHandler.createChannel(childPromise, channelType: .session) { childChannel, _ in
+                    childChannel.eventLoop.makeCompletedFuture {
+                        try childChannel.pipeline.syncOperations.addHandler(
+                            NIOSSHCatHandler(command: command, writeHandle: writeHandle, complete: promise)
+                        )
+                    }
+                }
+            } catch {
+                childPromise.fail(error)
+            }
+            return childPromise.futureResult
+        }.get()
 
         // Bound the await against ``fetchTimeout``. On expiry we flag the
         // handler (so the eventual `channelInactive` fulfills the promise
         // with `timedOut == true`) and force-close the channel to unblock
         // the await. Cleaning up the timer when the promise settles
         // normally avoids a dangling reference.
-        let timeout = connection.eventLoop.scheduleTask(in: Self.fetchTimeout) { [weak handler, weak childChannel] in
+        let timeout = connection.eventLoop.scheduleTask(in: Self.fetchTimeout) {
+            // On the event loop: read the handler back from the pipeline rather
+            // than capturing it, then mark the timeout and tear the channel down.
+            let handler = try? childChannel.pipeline.syncOperations.handler(type: NIOSSHCatHandler.self)
             handler?.markTimedOut()
-            childChannel?.close(promise: nil)
+            childChannel.close(promise: nil)
         }
         promise.futureResult.whenComplete { _ in timeout.cancel() }
 

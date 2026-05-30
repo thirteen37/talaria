@@ -141,10 +141,6 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
             onExhausted: { authFailure.fail(SSHTransportError.authFailed(authFailureMessage)) }
         )
         let hostKeyDelegate = NIOSSHHostKeyVerifier(store: hostKeyStore, host: host, port: port, confirmUnknown: hostKeyConfirmer)
-        let config = SSHClientConfiguration(
-            userAuthDelegate: authDelegate,
-            serverAuthDelegate: hostKeyDelegate
-        )
 
         let bootstrap = ClientBootstrap(group: group)
             // Mirrors the system-ssh path's ~15s bound (`ConnectTimeout=5` +
@@ -152,14 +148,22 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
             // can block ~75s on macOS's default TCP backoff.
             .connectTimeout(.seconds(15))
             .channelOption(ChannelOptions.socket(SocketOptionLevel(SOL_SOCKET), SO_REUSEADDR), value: 1)
+            // Build the (non-Sendable) `SSHClientConfiguration` and install the
+            // handler on the event loop so neither crosses the `@Sendable`
+            // initializer boundary; only the Sendable delegates are captured.
             .channelInitializer { channel in
-                channel.pipeline.addHandlers([
-                    NIOSSHHandler(
-                        role: .client(config),
-                        allocator: channel.allocator,
-                        inboundChildChannelInitializer: nil
-                    ),
-                ])
+                channel.eventLoop.makeCompletedFuture {
+                    try channel.pipeline.syncOperations.addHandler(
+                        NIOSSHHandler(
+                            role: .client(SSHClientConfiguration(
+                                userAuthDelegate: authDelegate,
+                                serverAuthDelegate: hostKeyDelegate
+                            )),
+                            allocator: channel.allocator,
+                            inboundChildChannelInitializer: nil
+                        )
+                    )
+                }
             }
 
         let connection: Channel
@@ -184,14 +188,28 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
         childPromise.futureResult.cascade(to: channelOpen)
         authFailure.futureResult.whenFailure { channelOpen.fail($0) }
         do {
-            let handler = try await connection.pipeline.handler(type: NIOSSHHandler.self).get()
-            handler.createChannel(childPromise, channelType: .session) { childChannel, _ in
-                let dataHandler = NIOSSHChannelHandler(
-                    command: command,
-                    inboundContinuation: inboundContinuation,
-                    stderrRing: stderrRing
-                )
-                return childChannel.pipeline.addHandler(dataHandler)
+            // Resolve the (non-Sendable, library) `NIOSSHHandler` and open the
+            // session child channel on the event loop, so it never crosses an
+            // async boundary. The data handler is installed inside the on-loop
+            // initializer. A failure resolving the handler fails `childPromise`,
+            // which `channelOpen` observes via the cascade below.
+            connection.eventLoop.execute {
+                do {
+                    let handler = try connection.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
+                    handler.createChannel(childPromise, channelType: .session) { childChannel, _ in
+                        childChannel.eventLoop.makeCompletedFuture {
+                            try childChannel.pipeline.syncOperations.addHandler(
+                                NIOSSHChannelHandler(
+                                    command: command,
+                                    inboundContinuation: inboundContinuation,
+                                    stderrRing: stderrRing
+                                )
+                            )
+                        }
+                    }
+                } catch {
+                    childPromise.fail(error)
+                }
             }
             let child = try await channelOpen.futureResult.get()
             // Resolve the auth-failure promise so it doesn't linger once the
@@ -350,7 +368,11 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
 ///
 /// Outbound: `ByteBuffer`s written into the channel are wrapped as
 /// `SSHChannelData(type: .channel, ...)`.
-final class NIOSSHChannelHandler: ChannelDuplexHandler {
+/// `@unchecked Sendable`: like every NIO `ChannelHandler`, all callbacks run on
+/// the channel's event loop and the mutable state (`execAckPromise`) is only
+/// touched there. The conformance lets the handler be installed via the
+/// `@Sendable` child-channel initializer without tripping capture checks.
+final class NIOSSHChannelHandler: ChannelDuplexHandler, @unchecked Sendable {
     typealias InboundIn = SSHChannelData
     typealias InboundOut = Never
     typealias OutboundIn = ByteBuffer

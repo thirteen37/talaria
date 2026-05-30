@@ -90,24 +90,33 @@ public final class NIOSSHDashboardConnection: @unchecked Sendable {
         )
         storeConnection(connection)
 
-        let sshHandler = try await connection.pipeline.handler(type: NIOSSHHandler.self).get()
-        let childPromise = connection.eventLoop.makePromise(of: Channel.self)
         let stderrContinuation = stderrContinuation
         let exitContinuation = exitContinuation
         let exitBox = exitBox
-        sshHandler.createChannel(childPromise, channelType: .session) { child, _ in
-            child.eventLoop.makeCompletedFuture {
-                try child.pipeline.syncOperations.addHandler(
-                    DashboardExecHandler(
-                        command: command,
-                        stderr: stderrContinuation,
-                        exit: exitContinuation,
-                        exitBox: exitBox
-                    )
-                )
+        // Resolve the (non-Sendable, library) `NIOSSHHandler` and open the
+        // session child channel entirely on the event loop, so it never
+        // crosses an async boundary.
+        let child = try await connection.eventLoop.flatSubmit { () -> EventLoopFuture<Channel> in
+            let childPromise = connection.eventLoop.makePromise(of: Channel.self)
+            do {
+                let sshHandler = try connection.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
+                sshHandler.createChannel(childPromise, channelType: .session) { child, _ in
+                    child.eventLoop.makeCompletedFuture {
+                        try child.pipeline.syncOperations.addHandler(
+                            DashboardExecHandler(
+                                command: command,
+                                stderr: stderrContinuation,
+                                exit: exitContinuation,
+                                exitBox: exitBox
+                            )
+                        )
+                    }
+                }
+            } catch {
+                childPromise.fail(error)
             }
-        }
-        let child = try await childPromise.futureResult.get()
+            return childPromise.futureResult
+        }.get()
         storeExecChannel(child)
     }
 
