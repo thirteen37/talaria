@@ -25,8 +25,21 @@ struct PhoneServerWindow: View {
     /// popping (back-swipe) clears the selection.
     @State private var chatPath: [SessionId] = []
     @State private var activeProfileId: UUID?
+    /// Active Hermes profile (`hermes -p <name>`) the whole window is scoped to.
+    /// Does not persist — resets to `default` on launch and on every server
+    /// switch.
+    @State private var activeHermesProfile = HermesProfiles.defaultProfileName
+    /// Hermes profiles available on the active server, enumerated after the
+    /// dashboard comes online. Drives the sidebar switcher.
+    @State private var hermesProfiles: [HermesProfileInfo] = []
 
     private var currentProfileId: UUID { activeProfileId ?? profileId }
+
+    /// Combined rebuild identity: a change to either the server or the Hermes
+    /// profile tears the harness down and rebuilds it.
+    private var harnessKey: HarnessKey {
+        HarnessKey(server: currentProfileId, hermes: activeHermesProfile)
+    }
 
     var body: some View {
         Group {
@@ -45,7 +58,7 @@ struct PhoneServerWindow: View {
             }
         }
         .navigationTitle(harness?.profile.name ?? directory.profile(id: currentProfileId)?.name ?? "Hermes")
-        .task(id: currentProfileId) {
+        .task(id: harnessKey) {
             await rebuildHarness()
         }
         // Auto-build only when no server is active yet (the no-server empty
@@ -89,20 +102,74 @@ struct PhoneServerWindow: View {
         AppLog.general.info("rebuildHarness: \(directory.profiles.count) profile(s) configured")
         let previous = harness
         if let profile = ServerWindowHarness.resolveProfile(in: directory, requestedId: currentProfileId) {
-            harness = ServerWindowHarness.make(profile: profile)
+            harness = ServerWindowHarness.make(profile: profile, hermesProfileName: activeHermesProfile)
         } else {
             harness = nil
         }
         previous?.tearDown()
         harness?.startDashboard()
+        // Enumerate the server's Hermes profiles for the sidebar switcher. Kept
+        // out of `.task(id:)` (it isn't a rebuild trigger — that would loop).
+        if let harness {
+            Task { await loadHermesProfiles(harness: harness) }
+        } else {
+            hermesProfiles = []
+        }
     }
 
+    /// Populates `hermesProfiles` for the switcher. Prefers the dashboard API;
+    /// falls back to the CLI `profile list`; degrades to `[default]`.
+    @MainActor
+    private func loadHermesProfiles(harness: ServerWindowHarness) async {
+        // Drop a stale listing if the window rebuilt its harness (server or
+        // Hermes-profile switch) while this read was in flight, so it can't
+        // overwrite the active harness's profiles with the previous one's.
+        // Identity (not profile id) is the right key: a Hermes-profile switch
+        // keeps the server id but builds a fresh harness.
+        func apply(_ profiles: [HermesProfileInfo]) {
+            guard self.harness === harness else { return }
+            hermesProfiles = profiles
+        }
+        if let client = harness.dashboardClient {
+            do {
+                let list = try await client.listProfiles()
+                apply(list.map { HermesProfileInfo(name: $0.name, isDefault: $0.isDefault, status: nil) })
+                return
+            } catch {
+                // Fall through to the CLI source.
+            }
+        }
+        if let runner = harness.store.adminRunner {
+            do {
+                apply(try await HermesProfiles.list(runner: runner))
+                return
+            } catch {
+                // Fall through to the default-only degrade.
+            }
+        }
+        apply([HermesProfileInfo(name: HermesProfiles.defaultProfileName, isDefault: true, status: nil)])
+    }
+
+    /// In-place server swap. Resets the Hermes profile to `default` so a new
+    /// server never inherits a possibly-nonexistent named profile (both feed
+    /// one key, so a single `.task` fire results).
     private func switchProfile(to newId: UUID) {
         guard newId != currentProfileId else { return }
         recents.record(newId)
         harness?.tearDown()
         harness = nil
+        hermesProfiles = []
+        activeHermesProfile = HermesProfiles.defaultProfileName
         activeProfileId = newId
+    }
+
+    /// In-place Hermes-profile swap: tears the harness down (dropping open
+    /// chats) and rebuilds the whole window under `-p <name>`.
+    private func switchHermesProfile(to name: String) {
+        guard name != activeHermesProfile else { return }
+        harness?.tearDown()
+        harness = nil
+        activeHermesProfile = name
     }
 
     @ViewBuilder
@@ -165,6 +232,9 @@ struct PhoneServerWindow: View {
                 profile: harness.profile,
                 profiles: directory.allProfiles,
                 onSwitchProfile: switchProfile,
+                hermesProfiles: hermesProfiles,
+                activeHermesProfile: activeHermesProfile,
+                onSwitchHermesProfile: switchHermesProfile,
                 notifications: harness.notifications,
                 // Bell opens the Browse sheet directly on Notifications.
                 onOpenNotifications: {
@@ -240,6 +310,7 @@ struct PhoneServerWindow: View {
         }) {
             PhoneBrowseSheet(
                 harness: harness,
+                hermesProfiles: hermesProfiles,
                 initial: browseDeepLink,
                 onOpenSettings: {
                     pendingSettings = true
@@ -268,4 +339,11 @@ struct PhoneServerWindow: View {
             }
         }
     }
+}
+
+/// Combined rebuild identity for the window's `.task(id:)`: a change to either
+/// the server profile or the active Hermes profile rebuilds the harness.
+private struct HarnessKey: Hashable {
+    let server: UUID
+    let hermes: String
 }

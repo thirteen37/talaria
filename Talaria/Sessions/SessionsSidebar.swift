@@ -6,6 +6,11 @@ struct SessionsSidebar: View {
     let profile: ServerProfile
     let profiles: [ServerProfile]
     let onSwitchProfile: (UUID) -> Void
+    /// Hermes profiles (`hermes -p <name>`) available on the active server.
+    let hermesProfiles: [HermesProfileInfo]
+    /// The window's active Hermes profile name.
+    let activeHermesProfile: String
+    let onSwitchHermesProfile: (String) -> Void
     let notifications: WindowNotificationCenter
     let onOpenNotifications: () -> Void
 
@@ -18,6 +23,9 @@ struct SessionsSidebar: View {
         profile: ServerProfile,
         profiles: [ServerProfile] = [],
         onSwitchProfile: @escaping (UUID) -> Void = { _ in },
+        hermesProfiles: [HermesProfileInfo] = [],
+        activeHermesProfile: String = HermesProfiles.defaultProfileName,
+        onSwitchHermesProfile: @escaping (String) -> Void = { _ in },
         notifications: WindowNotificationCenter,
         onOpenNotifications: @escaping () -> Void = {}
     ) {
@@ -25,6 +33,9 @@ struct SessionsSidebar: View {
         self.profile = profile
         self.profiles = profiles
         self.onSwitchProfile = onSwitchProfile
+        self.hermesProfiles = hermesProfiles
+        self.activeHermesProfile = activeHermesProfile
+        self.onSwitchHermesProfile = onSwitchHermesProfile
         self.notifications = notifications
         self.onOpenNotifications = onOpenNotifications
     }
@@ -42,6 +53,18 @@ struct SessionsSidebar: View {
                     NotificationBell(center: notifications, onOpen: onOpenNotifications)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+                // Second stacked menu: the window's active Hermes profile.
+                // Hidden when only `default` exists (nothing to switch to) to
+                // keep the sidebar uncluttered for the common single-profile case.
+                if hermesProfiles.count > 1 {
+                    HermesProfileHeader(
+                        active: activeHermesProfile,
+                        profiles: hermesProfiles,
+                        onSelect: onSwitchHermesProfile
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
 
             Section("Chat") {
@@ -192,6 +215,51 @@ struct SessionsSidebar: View {
                         .foregroundStyle(.secondary)
                     Text(current.name)
                         .font(.headline)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Sidebar row showing the window's active Hermes profile with a menu that
+    /// lists every profile on the server. Styled to read as a second, indented
+    /// menu stacked under the server `ProfileHeader`. Selecting one rebuilds the
+    /// window via the closure from the host window (`-p <name>`).
+    private struct HermesProfileHeader: View {
+        let active: String
+        let profiles: [HermesProfileInfo]
+        let onSelect: (String) -> Void
+
+        var body: some View {
+            Menu {
+                ForEach(profiles) { p in
+                    Button {
+                        if p.name != active {
+                            onSelect(p.name)
+                        }
+                    } label: {
+                        if p.name == active {
+                            Label(p.name, systemImage: "checkmark")
+                        } else {
+                            Text(p.name)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "person.crop.circle")
+                        .foregroundStyle(.secondary)
+                    Text("Profile: \(active)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Image(systemName: "chevron.down")
                         .font(.caption2)

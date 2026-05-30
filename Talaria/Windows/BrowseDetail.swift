@@ -8,6 +8,9 @@ import SwiftUI
 struct BrowseDetailView: View {
     let harness: ServerWindowHarness
     let destination: BrowseDestination
+    /// Hermes profiles on the server, surfaced by the window — fed to the
+    /// Configuration editor's compare dropdown.
+    var hermesProfiles: [HermesProfileInfo] = []
     /// Lets `NotificationsView` deep-link into another destination (e.g. "Open
     /// Doctor"). Desktop points this at its `browse` selection; the iPhone sheet
     /// pushes onto its navigation path.
@@ -24,7 +27,7 @@ struct BrowseDetailView: View {
         case .cron:
             CronView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .profiles:
-            ConfigEditorContainer(windowHarness: harness)
+            ConfigEditorContainer(windowHarness: harness, profiles: hermesProfiles)
         case .logs:
             LogsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .doctor:

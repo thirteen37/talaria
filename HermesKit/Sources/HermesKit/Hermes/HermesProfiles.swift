@@ -38,6 +38,23 @@ public enum HermesProfiles {
     /// Conventional name of the default profile (lives at `~/.hermes`).
     public static let defaultProfileName = "default"
 
+    /// Global `-p <name>` flag tokens that scope a `hermes` invocation to a
+    /// named profile, or empty for the default profile (`nil`/empty/`default`
+    /// all yield no `-p`, which is what the window's shared dashboard already
+    /// serves). Used for a local argv where no shell quoting is applied —
+    /// `[hermesPath] + cliFlag(name) + ["acp"]` and friends.
+    public static func cliFlag(_ name: String?) -> [String] {
+        guard let name, !name.isEmpty, name != defaultProfileName else { return [] }
+        return ["-p", name]
+    }
+
+    /// Like ``cliFlag(_:)`` but single-quotes the name for a remote shell
+    /// command line, matching how the hermes path and env vars are quoted.
+    public static func remoteCLIFlag(_ name: String?) -> [String] {
+        guard let name, !name.isEmpty, name != defaultProfileName else { return [] }
+        return ["-p", ShellQuoting.shellQuote(name)]
+    }
+
     public static func list(runner: HermesAdminRunning) async throws -> [HermesProfileInfo] {
         let result = try await runner.run(HermesAdminCommand(arguments: ["profile", "list"]))
         try ensureSuccess(result)

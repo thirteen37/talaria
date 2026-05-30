@@ -1,15 +1,12 @@
 import HermesKit
 import SwiftUI
 
-/// View-model for the single-profile config editor. Loads a profile's schema +
-/// config from its dashboard, exposes a structured form and an editable YAML
-/// mirror of the same edited state, and saves non-destructively. Comparison
-/// state is additive — a compact (iPhone) variant can reuse this harness and
-/// simply never set `comparing`.
-///
-/// The dashboard is reached only through injected `acquireScoped`/`releaseScoped`
-/// closures (the window harness wires the macOS coordinator or the iOS
-/// supervisor), so this type stays platform-neutral.
+/// View-model for the single-profile config editor. Edits the config of the
+/// window's **active** Hermes profile — the window dashboard is already scoped
+/// to it (`hermes -p <name>`), so the editor simply talks to that dashboard via
+/// the injected `defaultClient` provider; it no longer acquires its own
+/// profile-scoped dashboard. Comparison state is additive — a compact (iPhone)
+/// variant can reuse this harness and simply never set `comparing`.
 @MainActor
 @Observable
 final class ConfigEditorHarness {
@@ -20,12 +17,15 @@ final class ConfigEditorHarness {
         var label: String { self == .structured ? "Structured" : "YAML" }
     }
 
-    // Profile selection
-    var profiles: [HermesProfileInfo] = []
-    var selectedProfile: String
-    /// Set when `hermes profile list` is too old to exist; the editor still
-    /// works against the single `default` profile.
-    var profilesUnavailable = false
+    /// Profiles on the server (from the window) — only the compare dropdown's
+    /// source of options now; the edit target is fixed to `editedProfileName`.
+    /// Mutable because the window's enumeration can land after the editor opens
+    /// (a slow remote `profile list`); the container feeds updates in via
+    /// ``setAvailableProfiles(_:)`` so the dropdown isn't stuck empty.
+    private(set) var profiles: [HermesProfileInfo]
+    /// The Hermes profile this editor edits (the window's active profile). Used
+    /// by the on-disk degraded read and as the comparison source.
+    let editedProfileName: String
 
     // Single-profile editor state
     var mode: Mode = .structured
@@ -54,41 +54,29 @@ final class ConfigEditorHarness {
 
     // Dependencies
     private let defaultClientProvider: @MainActor () -> DashboardClient?
-    private let runner: HermesAdminRunning?
     private let serverProfile: ServerProfile
     private let transfer: RemoteSnapshotTransfer?
-    private let acquireScoped: @MainActor (String) async throws -> (DashboardSupervisor, DashboardClient)
-    private let releaseScoped: @MainActor (DashboardSupervisor) async -> Void
-
-    // Held profile-scoped dashboard for a non-default selection.
-    private var heldSupervisor: DashboardSupervisor?
-    private var heldClient: DashboardClient?
-    private var heldProfileName: String?
 
     // Serializes comparison reads so rapid selection changes don't fire
     // concurrent NIO-SSH reads that race host-key verification.
     private var compareTask: Task<Void, Never>?
-    // Serializes config loads so rapid profile switches can't run overlapping
-    // GETs (which would race `resolveClient`'s scoped-dashboard bookkeeping and
-    // let a slow earlier response clobber a newer profile's state).
+    // Serializes config loads so a refresh can't run overlapping GETs.
     private var loadTask: Task<Void, Never>?
 
     init(
-        selectedProfile: String = HermesProfiles.defaultProfileName,
+        profiles: [HermesProfileInfo],
+        editedProfileName: String,
         defaultClient: @escaping @MainActor () -> DashboardClient?,
-        runner: HermesAdminRunning?,
         profile: ServerProfile,
-        transfer: RemoteSnapshotTransfer?,
-        acquireScoped: @escaping @MainActor (String) async throws -> (DashboardSupervisor, DashboardClient),
-        releaseScoped: @escaping @MainActor (DashboardSupervisor) async -> Void
+        transfer: RemoteSnapshotTransfer?
     ) {
-        self.selectedProfile = selectedProfile
+        self.profiles = profiles
+        self.editedProfileName = editedProfileName
         self.defaultClientProvider = defaultClient
-        self.runner = runner
         self.serverProfile = profile
         self.transfer = transfer
-        self.acquireScoped = acquireScoped
-        self.releaseScoped = releaseScoped
+        // Default the compare target to the first other profile.
+        self.compareProfile = profiles.first(where: { $0.name != editedProfileName })?.name ?? ""
     }
 
     var isDirty: Bool {
@@ -103,54 +91,11 @@ final class ConfigEditorHarness {
     // MARK: - Loading
 
     func start() async {
-        await loadProfiles()
         load()
     }
 
     func refresh() async {
-        await loadProfiles()
         load()
-    }
-
-    func loadProfiles() async {
-        // Prefer the dashboard API: it returns clean names + a structured
-        // is-default flag, where the CLI `hermes profile list` decorates the
-        // default row with a marker glyph that leaks into the parsed name.
-        if let client = defaultClientProvider() {
-            do {
-                let list = try await client.listProfiles()
-                profiles = list.map { HermesProfileInfo(name: $0.name, isDefault: $0.isDefault, status: nil) }
-                profilesUnavailable = false
-                normalizeSelections()
-                return
-            } catch {
-                // Fall through to the CLI source (dashboard down / too old).
-            }
-        }
-        guard let runner else {
-            profiles = [HermesProfileInfo(name: HermesProfiles.defaultProfileName, isDefault: true, status: nil)]
-            normalizeSelections()
-            return
-        }
-        do {
-            profiles = try await HermesProfiles.list(runner: runner)
-            profilesUnavailable = false
-            normalizeSelections()
-        } catch {
-            handleProfilesError(error)
-        }
-    }
-
-    /// Keeps the selected (and compare) profiles valid against the current list.
-    private func normalizeSelections() {
-        if !profiles.contains(where: { $0.name == selectedProfile }) {
-            selectedProfile = profiles.first(where: \.isDefault)?.name
-                ?? profiles.first?.name
-                ?? HermesProfiles.defaultProfileName
-        }
-        if compareProfile.isEmpty || !profiles.contains(where: { $0.name == compareProfile }) {
-            compareProfile = profiles.first(where: { $0.name != selectedProfile })?.name ?? ""
-        }
     }
 
     /// Schedules a config load, chained behind any in-flight load so two never
@@ -164,21 +109,14 @@ final class ConfigEditorHarness {
     }
 
     private func performLoad() async {
-        // Capture the profile this load is for. Each assignment after an `await`
-        // bails if the selection moved on, so a slow earlier response can't
-        // clobber a newer profile's state (mirrors `performCompare`).
-        let target = selectedProfile
         isLoading = true
         defer { isLoading = false }
-        let client = await resolveClient()
-        guard selectedProfile == target else { return }
-        if let client {
+        if let client = defaultClientProvider() {
             do {
                 async let schemaResult = client.getConfigSchema()
                 async let configResult = client.getConfig()
                 let schema = try await schemaResult
                 let config = try await configResult
-                guard selectedProfile == target else { return }
                 self.schema = schema
                 original = config
                 working = config
@@ -189,26 +127,22 @@ final class ConfigEditorHarness {
                 lastError = nil
                 if mode == .yaml { regenerateYAML() }
             } catch {
-                guard selectedProfile == target else { return }
                 lastError = error.localizedDescription
             }
         } else {
-            await loadDegraded(target: target)
+            await loadDegraded()
         }
         if comparing { scheduleCompare() }
     }
 
-    /// Re-runs the load when the window's default dashboard comes online after
-    /// an initial degraded render (the editor opened before the spawn finished).
+    /// Re-runs the load when the window's dashboard comes online after an
+    /// initial degraded render (the editor opened before the spawn finished).
     func reloadIfDashboardAppeared() {
-        guard dashboardUnavailable,
-              selectedProfile == HermesProfiles.defaultProfileName,
-              defaultClientProvider() != nil else { return }
+        guard dashboardUnavailable, defaultClientProvider() != nil else { return }
         load()
     }
 
-    private func loadDegraded(target: String) async {
-        guard selectedProfile == target else { return }
+    private func loadDegraded() async {
         dashboardUnavailable = true
         schema = nil
         form = nil
@@ -218,64 +152,17 @@ final class ConfigEditorHarness {
         do {
             let text = try await HermesConfigReader.read(
                 profile: serverProfile,
-                profileName: target,
+                profileName: editedProfileName,
                 transfer: transfer
             )
-            guard selectedProfile == target else { return }
             yamlText = text
             mode = .yaml
         } catch {
-            guard selectedProfile == target else { return }
             yamlText = ""
         }
     }
 
-    private func resolveClient() async -> DashboardClient? {
-        if selectedProfile == HermesProfiles.defaultProfileName {
-            await releaseHeld()
-            return defaultClientProvider()
-        }
-        if heldProfileName == selectedProfile, let heldClient {
-            return heldClient
-        }
-        await releaseHeld()
-        do {
-            let (supervisor, client) = try await acquireScoped(selectedProfile)
-            heldSupervisor = supervisor
-            heldClient = client
-            heldProfileName = selectedProfile
-            return client
-        } catch {
-            lastError = error.localizedDescription
-            return nil
-        }
-    }
-
-    private func releaseHeld() async {
-        if let heldSupervisor {
-            await releaseScoped(heldSupervisor)
-        }
-        heldSupervisor = nil
-        heldClient = nil
-        heldProfileName = nil
-    }
-
-    /// Releases any profile-scoped dashboard this editor acquired. Call from the
-    /// view's teardown.
-    func teardown() async {
-        await releaseHeld()
-    }
-
-    // MARK: - Profile / mode switching
-
-    func selectProfile(_ name: String) async {
-        guard name != selectedProfile else { return }
-        selectedProfile = name
-        if compareProfile == name {
-            compareProfile = profiles.first(where: { $0.name != name })?.name ?? ""
-        }
-        load()
-    }
+    // MARK: - Mode switching
 
     func setMode(_ newMode: Mode) {
         guard newMode != mode else { return }
@@ -393,7 +280,7 @@ final class ConfigEditorHarness {
         guard canSave else { return }
         isLoading = true
         defer { isLoading = false }
-        guard let client = await resolveClient() else {
+        guard let client = defaultClientProvider() else {
             lastError = "Dashboard is unavailable; can't save."
             return
         }
@@ -420,11 +307,26 @@ final class ConfigEditorHarness {
 
     // MARK: - Comparison (desktop)
 
+    /// Refreshes the available profiles for the compare dropdown when the
+    /// window's enumeration lands after the editor opened. Preserves a still-valid
+    /// user compare choice; otherwise re-defaults it (and re-runs the comparison
+    /// if one is active and was waiting on an empty list).
+    func setAvailableProfiles(_ newProfiles: [HermesProfileInfo]) {
+        guard newProfiles != profiles else { return }
+        profiles = newProfiles
+        if compareProfile.isEmpty || !newProfiles.contains(where: { $0.name == compareProfile }) {
+            compareProfile = newProfiles.first(where: { $0.name != editedProfileName })?.name ?? ""
+            if comparing, !compareProfile.isEmpty {
+                scheduleCompare()
+            }
+        }
+    }
+
     func toggleComparing() {
         comparing.toggle()
         if comparing {
             if compareProfile.isEmpty {
-                compareProfile = profiles.first(where: { $0.name != selectedProfile })?.name ?? ""
+                compareProfile = profiles.first(where: { $0.name != editedProfileName })?.name ?? ""
             }
             scheduleCompare()
         } else {
@@ -449,7 +351,7 @@ final class ConfigEditorHarness {
     }
 
     private func performCompare() async {
-        let source = selectedProfile
+        let source = editedProfileName
         let dest = compareProfile
         guard !dest.isEmpty, dest != source else {
             comparison = nil
@@ -460,24 +362,15 @@ final class ConfigEditorHarness {
             // host-key verifications (mirrors ProfilesConfigHarness).
             let sourceText = try await HermesConfigReader.read(profile: serverProfile, profileName: source, transfer: transfer)
             let destText = try await HermesConfigReader.read(profile: serverProfile, profileName: dest, transfer: transfer)
-            guard selectedProfile == source, compareProfile == dest else { return }
+            guard compareProfile == dest else { return }
             let sourceDoc = try HermesConfigDocument.parse(sourceText)
             let destDoc = try HermesConfigDocument.parse(destText)
             comparison = ConfigComparison(source: sourceDoc, dest: destDoc)
             lastError = nil
         } catch {
-            guard selectedProfile == source, compareProfile == dest else { return }
+            guard compareProfile == dest else { return }
             comparison = nil
             lastError = error.localizedDescription
         }
-    }
-
-    private func handleProfilesError(_ error: Error) {
-        if let profilesError = error as? HermesProfilesError, case .commandUnavailable = profilesError {
-            profilesUnavailable = true
-            profiles = [HermesProfileInfo(name: HermesProfiles.defaultProfileName, isDefault: true, status: nil)]
-            return
-        }
-        lastError = error.localizedDescription
     }
 }

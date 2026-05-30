@@ -14,6 +14,13 @@ import SwiftUI
 final class ServerWindowHarness {
     let store: SessionsStore
     let profile: ServerProfile
+    /// The active Hermes profile (`hermes -p <name>`) this window is scoped to.
+    /// `default` for the unscoped install. Every consumer the harness bundles
+    /// (ACP transport, admin runner, dashboard supervisor) is built for this
+    /// name, so a switch tears the harness down and rebuilds — the same
+    /// machinery a server switch uses. Does not persist: resets to `default`
+    /// on launch and on every server switch.
+    let hermesProfileName: String
     /// The SSH transfer built by `makeRemote` with this window's transport
     /// selection (NIO + keychain/host-key store when NIO is active or on iOS;
     /// nil on the system-ssh macOS path, where consumers fall back to
@@ -58,11 +65,13 @@ final class ServerWindowHarness {
     init(
         store: SessionsStore,
         profile: ServerProfile,
+        hermesProfileName: String = HermesProfiles.defaultProfileName,
         snapshotTransfer: RemoteSnapshotTransfer? = nil,
         hostKeyCoordinator: HostKeyConfirmationCoordinator? = nil
     ) {
         self.store = store
         self.profile = profile
+        self.hermesProfileName = hermesProfileName
         self.snapshotTransfer = snapshotTransfer
         self.hostKeyCoordinator = hostKeyCoordinator
         self.notifications = WindowNotificationCenter(adminRunner: store.adminRunner)
@@ -103,13 +112,17 @@ final class ServerWindowHarness {
     }
 
     /// Dispatches to the platform `makeLocal` / `makeRemote` (defined in the
-    /// per-platform extensions).
-    static func make(profile: ServerProfile) -> ServerWindowHarness {
+    /// per-platform extensions), scoping every consumer to `hermesProfileName`
+    /// (`default` for the unscoped install).
+    static func make(
+        profile: ServerProfile,
+        hermesProfileName: String = HermesProfiles.defaultProfileName
+    ) -> ServerWindowHarness {
         switch profile.kind {
         case .local:
-            return makeLocal(profile: profile)
+            return makeLocal(profile: profile, hermesProfileName: hermesProfileName)
         case .ssh:
-            return makeRemote(profile: profile)
+            return makeRemote(profile: profile, hermesProfileName: hermesProfileName)
         }
     }
 

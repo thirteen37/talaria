@@ -4,11 +4,17 @@ import HermesKit
 // macOS transport / admin / dashboard wiring for `ServerWindowHarness`. The iOS
 // mirror lives in `Windows/iOS/ServerWindowHarness+iOS.swift`.
 extension ServerWindowHarness {
-    static func makeLocal(profile: ServerProfile) -> ServerWindowHarness {
+    static func makeLocal(
+        profile: ServerProfile,
+        hermesProfileName: String = HermesProfiles.defaultProfileName
+    ) -> ServerWindowHarness {
         let resolver = LoginShellPATHResolver.shared
         resolver.warm()
         let hermesPath = profile.hermesPath
         let hermesHome = profile.hermesHome
+        // `-p <name>` is a global flag placed between the binary and the `acp`
+        // subcommand; it collapses to nothing for the default profile.
+        let acpArgs = [hermesPath] + HermesProfiles.cliFlag(hermesProfileName) + ["acp"]
         let manager = SessionManager {
             let extraEnv = await resolver.extraEnv()
             var environment = extraEnv
@@ -17,7 +23,7 @@ extension ServerWindowHarness {
             }
             let transport = LocalProcessTransport(
                 executableURL: URL(fileURLWithPath: "/usr/bin/env"),
-                arguments: [hermesPath, "acp"],
+                arguments: acpArgs,
                 environment: environment
             )
             try transport.start()
@@ -37,15 +43,24 @@ extension ServerWindowHarness {
         if let hermesHome {
             adminBaseEnv["HERMES_HOME"] = hermesHome
         }
-        let adminRunner = PathAwareHermesAdminRunner(
-            inner: LocalHermesAdminRunner(hermesPath: hermesPath, environment: adminBaseEnv),
-            resolver: resolver
+        // Scope outermost: `-p <name>` is prepended to each admin command (except
+        // the default profile and `profile …` subcommands) after PATH resolution
+        // and binary selection have already shaped the inner command.
+        let adminRunner = ProfileScopedHermesAdminRunner(
+            inner: PathAwareHermesAdminRunner(
+                inner: LocalHermesAdminRunner(hermesPath: hermesPath, environment: adminBaseEnv),
+                resolver: resolver
+            ),
+            hermesProfileName: hermesProfileName
         )
         let store = SessionsStore(manager: manager, adminRunner: adminRunner)
-        return ServerWindowHarness(store: store, profile: profile)
+        return ServerWindowHarness(store: store, profile: profile, hermesProfileName: hermesProfileName)
     }
 
-    static func makeRemote(profile: ServerProfile) -> ServerWindowHarness {
+    static func makeRemote(
+        profile: ServerProfile,
+        hermesProfileName: String = HermesProfiles.defaultProfileName
+    ) -> ServerWindowHarness {
         let useNIO = preferNIOSSHTransport()
         let manager: SessionManager
         // Transport-appropriate remote-file reader for surfaces that read
@@ -66,7 +81,8 @@ extension ServerWindowHarness {
                     profile: profile,
                     credentialProvider: credentialProvider,
                     hostKeyStore: hostKeyStore,
-                    hostKeyConfirmer: confirmer
+                    hostKeyConfirmer: confirmer,
+                    hermesProfileName: hermesProfileName
                 )
                 try await transport.start()
                 return transport
@@ -87,7 +103,8 @@ extension ServerWindowHarness {
                     hermesPath: profile.hermesPath,
                     hermesHome: profile.hermesHome,
                     remoteShellMode: profile.remoteShellMode,
-                    remoteShellPrefix: profile.remoteShellPrefix
+                    remoteShellPrefix: profile.remoteShellPrefix,
+                    hermesProfileName: hermesProfileName
                 )
                 try transport.start()
                 return transport
@@ -96,7 +113,12 @@ extension ServerWindowHarness {
             snapshotTransfer = nil
         }
 
-        let admin: any HermesAdminRunning = RemoteHermesAdminRunner(profile: profile)
+        // Scope outermost so Tools/Doctor run under the window's Hermes profile;
+        // `profile list` and the default profile stay unscoped.
+        let admin: any HermesAdminRunning = ProfileScopedHermesAdminRunner(
+            inner: RemoteHermesAdminRunner(profile: profile),
+            hermesProfileName: hermesProfileName
+        )
         let store = SessionsStore(
             manager: manager,
             adminRunner: admin,
@@ -107,6 +129,7 @@ extension ServerWindowHarness {
         return ServerWindowHarness(
             store: store,
             profile: profile,
+            hermesProfileName: hermesProfileName,
             snapshotTransfer: snapshotTransfer,
             hostKeyCoordinator: hostKeyCoordinator
         )
@@ -137,7 +160,10 @@ extension ServerWindowHarness {
     /// resulting `DashboardClient` so views can observe it.
     func acquireDashboard() async {
         do {
-            let (endpoint, supervisor) = try await DashboardCoordinator.shared.acquire(profile: profile)
+            let (endpoint, supervisor) = try await DashboardCoordinator.shared.acquire(
+                profile: profile,
+                hermesProfileName: hermesProfileName
+            )
             // Store before the cancellation check so `tearDown()` can release
             // the acquired refcount even if we bail out right after.
             dashboardSupervisor = supervisor
@@ -153,25 +179,6 @@ extension ServerWindowHarness {
             store.dashboardClient = nil
             dashboardError = error.localizedDescription
         }
-    }
-
-    /// Acquires a dashboard scoped to a *named* Hermes profile for the config
-    /// editor, separate from this window's shared `default` dashboard. The
-    /// caller (the editor harness) holds the returned supervisor and releases it
-    /// via ``releaseScopedDashboard(_:)`` on profile switch / teardown. The
-    /// default profile never calls this — it reuses ``dashboardClient``.
-    func acquireScopedDashboardClient(
-        hermesProfileName: String
-    ) async throws -> (DashboardSupervisor, DashboardClient) {
-        let (endpoint, supervisor) = try await DashboardCoordinator.shared.acquire(
-            profile: profile,
-            hermesProfileName: hermesProfileName
-        )
-        return (supervisor, endpoint.session.client())
-    }
-
-    func releaseScopedDashboard(_ supervisor: DashboardSupervisor) async {
-        await DashboardCoordinator.shared.release(supervisor)
     }
 
     /// Cancels long-lived per-window resources when the SwiftUI window

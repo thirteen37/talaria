@@ -25,7 +25,7 @@ public struct DashboardSpawnSpec: Sendable, Equatable {
         port: Int,
         hermesProfileName: String? = nil
     ) -> DashboardSpawnSpec {
-        let dashboardArgs = profileFlag(hermesProfileName)
+        let dashboardArgs = HermesProfiles.cliFlag(hermesProfileName)
             + ["dashboard", "--no-open", "--host", "127.0.0.1", "--port", String(port)]
         var environment = profile.env
         if let home = profile.hermesHome, !home.isEmpty {
@@ -67,7 +67,7 @@ public struct DashboardSpawnSpec: Sendable, Equatable {
             remoteParts += ["env", ShellQuoting.shellQuote("HERMES_HOME=\(hermesHome)")]
         }
         remoteParts += [ShellQuoting.shellQuote(profile.hermesPath)]
-        remoteParts += remoteProfileFlag(hermesProfileName)
+        remoteParts += HermesProfiles.remoteCLIFlag(hermesProfileName)
         remoteParts += [
             "dashboard",
             "--no-open",
@@ -122,7 +122,7 @@ public struct DashboardSpawnSpec: Sendable, Equatable {
             remoteParts += ["env", ShellQuoting.shellQuote("HERMES_HOME=\(hermesHome)")]
         }
         remoteParts += [ShellQuoting.shellQuote(profile.hermesPath)]
-        remoteParts += remoteProfileFlag(hermesProfileName)
+        remoteParts += HermesProfiles.remoteCLIFlag(hermesProfileName)
         remoteParts += [
             "dashboard",
             "--no-open",
@@ -141,21 +141,5 @@ public struct DashboardSpawnSpec: Sendable, Equatable {
             arguments: [wrapped],
             environment: [:]
         )
-    }
-
-    /// Global `-p <name>` flag tokens that scope every config op to a named
-    /// profile, or empty for the default profile (`default` == no `-p`, which is
-    /// what the window's shared dashboard already serves). Used for the local
-    /// argv where no shell quoting is applied.
-    private static func profileFlag(_ name: String?) -> [String] {
-        guard let name, !name.isEmpty, name != HermesProfiles.defaultProfileName else { return [] }
-        return ["-p", name]
-    }
-
-    /// Like ``profileFlag(_:)`` but single-quotes the name for the remote shell
-    /// command line, matching how the hermes path and env vars are quoted.
-    private static func remoteProfileFlag(_ name: String?) -> [String] {
-        guard let name, !name.isEmpty, name != HermesProfiles.defaultProfileName else { return [] }
-        return ["-p", ShellQuoting.shellQuote(name)]
     }
 }
