@@ -104,6 +104,22 @@ extension ServerWindowHarness {
         }
     }
 
+    /// Acquires a dashboard scoped to a *named* Hermes profile for the config
+    /// editor, separate from this window's shared `default` dashboard. iOS owns
+    /// its supervisors directly (no cross-window coordinator), so this builds a
+    /// fresh NIO-SSH-backed supervisor; the caller holds and releases it.
+    func acquireScopedDashboardClient(
+        hermesProfileName: String
+    ) async throws -> (DashboardSupervisor, DashboardClient) {
+        let supervisor = makeIOSDashboardSupervisor(hermesProfileName: hermesProfileName)
+        let endpoint = try await supervisor.acquire()
+        return (supervisor, endpoint.session.client())
+    }
+
+    func releaseScopedDashboard(_ supervisor: DashboardSupervisor) async {
+        await supervisor.release()
+    }
+
     func tearDown() {
         if dashboardStarted, !dashboardReleased {
             dashboardReleased = true
@@ -134,7 +150,9 @@ extension ServerWindowHarness {
     /// `direct-tcpip` channel. Reuses the window's host-key trust coordinator
     /// and the shared pinned host-key store so the dashboard connection doesn't
     /// re-prompt for a key the chat transport already trusted.
-    private func makeIOSDashboardSupervisor() -> DashboardSupervisor {
+    private func makeIOSDashboardSupervisor(
+        hermesProfileName: String = HermesProfiles.defaultProfileName
+    ) -> DashboardSupervisor {
         var confirmer: HostKeyConfirmer?
         if let coordinator = hostKeyCoordinator {
             confirmer = { host, port, fingerprint in
@@ -148,16 +166,19 @@ extension ServerWindowHarness {
             hostKeyConfirmer: confirmer
         )
         let profile = profile
+        let isDefault = hermesProfileName == HermesProfiles.defaultProfileName
         return DashboardSupervisor(
             profile: profile,
+            hermesProfileName: isDefault ? nil : hermesProfileName,
             launcher: NIOSSHDashboardProcessLauncher(connection: connection),
             http: NIOSSHDashboardHTTP(connection: connection),
             portAllocator: {
                 // No local forward on iOS, so this is purely the remote bind
-                // port. Honor an explicit profile port; otherwise pick a high
-                // ephemeral port (collisions surface as the supervisor's
-                // not-reachable error).
-                if let port = profile.dashboardPort { return port }
+                // port. Only the default dashboard honors an explicit profile
+                // port; a named scope picks a fresh high ephemeral port so it
+                // doesn't collide with the running default (collisions surface
+                // as the supervisor's not-reachable error).
+                if isDefault, let port = profile.dashboardPort { return port }
                 return Int.random(in: 40000...60000)
             }
         )

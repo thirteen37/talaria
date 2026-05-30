@@ -1,0 +1,26 @@
+{
+  "profiles": [
+    {
+      "name": "default",
+      "path": "/Users/x/.hermes",
+      "is_default": true,
+      "model": "anthropic/claude-sonnet-4.6",
+      "provider": "anthropic",
+      "has_env": true,
+      "skill_count": 12
+    },
+    {
+      "name": "dev",
+      "path": "/Users/x/.hermes/profiles/dev",
+      "is_default": false,
+      "model": null,
+      "provider": null,
+      "has_env": false,
+      "skill_count": 0
+    },
+    {
+      "name": "dining",
+      "is_default": false
+    }
+  ]
+}

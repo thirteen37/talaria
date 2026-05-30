@@ -1,0 +1,41 @@
+{
+  "fields": {
+    "model": {
+      "type": "string",
+      "description": "Default model (e.g. anthropic/claude-sonnet-4.6)",
+      "category": "general"
+    },
+    "model_context_length": {
+      "type": "number",
+      "description": "Context window override (0 = auto-detect from model metadata)",
+      "category": "general"
+    },
+    "agent.timeout": {
+      "type": "number",
+      "description": "Agent → Timeout",
+      "category": "agent"
+    },
+    "agent.streaming": {
+      "type": "boolean",
+      "description": "Agent → Streaming",
+      "category": "agent"
+    },
+    "agent.toolsets": {
+      "type": "list",
+      "description": "Agent → Toolsets",
+      "category": "agent"
+    },
+    "terminal.backend": {
+      "type": "select",
+      "description": "Terminal execution backend",
+      "category": "terminal",
+      "options": ["local", "docker", "ssh", "modal"]
+    },
+    "experimental.flux_capacitor": {
+      "type": "wormhole",
+      "description": "An unknown future field type",
+      "category": "auxiliary"
+    }
+  },
+  "category_order": ["general", "agent", "terminal", "display", "auxiliary"]
+}

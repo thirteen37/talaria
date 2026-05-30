@@ -1,0 +1,11 @@
+{
+  "model": "anthropic/claude-sonnet-4.6",
+  "model_context_length": 0,
+  "terminal": {
+    "backend": "local"
+  },
+  "agent": {
+    "streaming": true,
+    "toolsets": ["files", "web"]
+  }
+}

@@ -24,6 +24,7 @@ Dashboard-backed surfaces today:
 - Cron: `/api/cron/jobs` plus pause/resume/trigger subroutes.
 - Logs: polled `/api/logs`.
 - Updates: `/api/status`, `/api/hermes/update`, `/api/actions/hermes-update/status`.
+- Profiles config editor: schema + current config via `/api/config/schema` and `/api/config`, non-destructive writes via `PUT /api/config`, and the profile list via `/api/profiles`. Editing the default profile reuses the window's shared dashboard; editing a *named* profile launches an isolated profile-scoped dashboard (`hermes -p <name> dashboard`). An editable YAML mirror and the read-only two-profile comparison share the same surface.
 
 Three operations remain on CLI fallbacks because Hermes does not expose dashboard routes for them yet:
 
@@ -35,4 +36,4 @@ Remote dashboard access on macOS is provided by spawning system `ssh` with a loo
 
 ## Window Model
 
-Each app window is scoped to one `ServerProfile`. The window owns its ACP session clients, dashboard client reference, CLI fallback runner, version cache, and capability table. `DashboardCoordinator` shares one dashboard supervisor per profile across windows.
+Each app window is scoped to one `ServerProfile`. The window owns its ACP session clients, dashboard client reference, CLI fallback runner, version cache, and capability table. `DashboardCoordinator` caches one dashboard supervisor per `(ServerProfile, Hermes profile)` pair: every window shares the default-profile dashboard, while the Profiles editor acquires a separate, profile-scoped supervisor (its own port + process) when editing a named profile, releasing it on profile switch or teardown.

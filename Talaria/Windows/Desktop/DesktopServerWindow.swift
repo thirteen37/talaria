@@ -233,7 +233,7 @@ struct DesktopServerWindow: View {
             case .skills: SkillsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
             case .tools: ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
             case .cron: CronView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
-            case .profiles: ProfilesView(runner: harness.store.adminRunner, profile: harness.profile, transfer: harness.snapshotTransfer)
+            case .profiles: ConfigEditorContainer(windowHarness: harness)
             case .logs:
                 LogsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
             case .doctor:
