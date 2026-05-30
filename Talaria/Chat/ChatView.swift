@@ -43,14 +43,18 @@ struct ChatView: View {
                 contextSize: viewModel.contextSize
             )
 
-            Composer(
-                prompt: $viewModel.prompt,
-                isSending: viewModel.isSending,
-                isBlocked: viewModel.pendingPermission != nil,
-                availableCommands: viewModel.availableCommands,
-                send: { Task { await viewModel.sendPrompt() } },
-                cancel: { Task { await viewModel.cancel() } }
-            )
+            if viewModel.isReadOnly {
+                ReadOnlyComposerBanner()
+            } else {
+                Composer(
+                    prompt: $viewModel.prompt,
+                    isSending: viewModel.isSending,
+                    isBlocked: viewModel.pendingPermission != nil,
+                    availableCommands: viewModel.availableCommands,
+                    send: { Task { await viewModel.sendPrompt() } },
+                    cancel: { Task { await viewModel.cancel() } }
+                )
+            }
         }
         .navigationTitle("Chat")
         // Inline title (iOS) keeps the chat's vertical space for the transcript
@@ -70,6 +74,23 @@ struct ChatView: View {
     }
 }
 
+private struct ReadOnlyComposerBanner: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "lock")
+                .foregroundStyle(.secondary)
+            Text("Read-only. Created outside Talaria; replies are not supported here.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+    }
+}
+
 @MainActor
 @Observable
 final class LocalChatViewModel {
@@ -84,6 +105,7 @@ final class LocalChatViewModel {
     var turnStartDate: Date?
     var contextUsed: Int?
     var contextSize: Int?
+    let isReadOnly: Bool
 
     private weak var manager: SessionManager?
     private weak var store: SessionsStore?
@@ -102,9 +124,23 @@ final class LocalChatViewModel {
         self.sessionId = sessionId
         self.cwd = cwd
         self.store = store
+        self.isReadOnly = false
+    }
+
+    init(sessionId: SessionId, cwd: String, messages: [ChatTranscriptMessage], source: String) {
+        self.manager = nil
+        self.sessionId = sessionId
+        self.cwd = cwd
+        self.store = nil
+        self.messages = messages
+        self.statusText = "Read-only source: \(source)"
+        self.isReadOnly = true
     }
 
     func start() async {
+        guard !isReadOnly else {
+            return
+        }
         guard notificationTask == nil, let manager else {
             return
         }
@@ -120,6 +156,9 @@ final class LocalChatViewModel {
     }
 
     func sendPrompt() async {
+        guard !isReadOnly else {
+            return
+        }
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSending, pendingPermission == nil else {
             return
@@ -158,6 +197,9 @@ final class LocalChatViewModel {
     }
 
     func cancel() async {
+        guard !isReadOnly else {
+            return
+        }
         promptTask?.cancel()
 
         if pendingPermission != nil {
