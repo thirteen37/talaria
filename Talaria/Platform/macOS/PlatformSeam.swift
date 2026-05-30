@@ -88,13 +88,16 @@ extension View {
 
 /// Two-pane split for desktop surfaces. macOS uses a resizable `HSplitView`.
 struct PlatformSplit<Primary: View, Secondary: View>: View {
+    var showsSecondary: Bool = true
     @ViewBuilder var primary: () -> Primary
     @ViewBuilder var secondary: () -> Secondary
 
     init(
+        showsSecondary: Bool = true,
         @ViewBuilder primary: @escaping () -> Primary,
         @ViewBuilder secondary: @escaping () -> Secondary
     ) {
+        self.showsSecondary = showsSecondary
         self.primary = primary
         self.secondary = secondary
     }
@@ -102,7 +105,7 @@ struct PlatformSplit<Primary: View, Secondary: View>: View {
     var body: some View {
         HSplitView {
             primary()
-            secondary()
+            if showsSecondary { secondary() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

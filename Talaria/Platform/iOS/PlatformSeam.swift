@@ -102,13 +102,16 @@ extension View {
 /// Two-pane split for desktop surfaces. iPad uses a plain `HStack` + `Divider`
 /// (no draggable splitter, which AppKit's `HSplitView` provides on macOS).
 struct PlatformSplit<Primary: View, Secondary: View>: View {
+    var showsSecondary: Bool = true
     @ViewBuilder var primary: () -> Primary
     @ViewBuilder var secondary: () -> Secondary
 
     init(
+        showsSecondary: Bool = true,
         @ViewBuilder primary: @escaping () -> Primary,
         @ViewBuilder secondary: @escaping () -> Secondary
     ) {
+        self.showsSecondary = showsSecondary
         self.primary = primary
         self.secondary = secondary
     }
@@ -116,8 +119,10 @@ struct PlatformSplit<Primary: View, Secondary: View>: View {
     var body: some View {
         HStack(spacing: 0) {
             primary()
-            Divider()
-            secondary()
+            if showsSecondary {
+                Divider()
+                secondary()
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
