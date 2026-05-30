@@ -28,6 +28,8 @@ struct BrowseDetailView: View {
             SessionsBrowser(store: harness.store, client: harness.dashboardClient)
         case .skills:
             SkillsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+        case .plugins:
+            PluginsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .tools:
             ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
         case .cron:
