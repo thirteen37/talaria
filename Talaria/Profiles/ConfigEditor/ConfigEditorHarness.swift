@@ -418,6 +418,35 @@ final class ConfigEditorHarness {
         }
     }
 
+    // MARK: - Backup (export / restore)
+
+    /// YAML of the LAST-SAVED config (never the live edited buffer), for download.
+    /// In the degraded (dashboard-unavailable) state `yamlText` already holds the
+    /// on-disk config, so back that up instead.
+    var backupYAML: String {
+        if dashboardUnavailable { return yamlText }
+        guard let original else { return "" }
+        return (try? YAMLConfigCodec.yaml(from: original)) ?? ""
+    }
+
+    var canExportBackup: Bool { !backupYAML.isEmpty }
+
+    var backupFilename: String { "\(selectedProfile)-config.yaml" }
+
+    /// Parses an imported file and writes it to the server as the whole document
+    /// (mirrors YAML-mode save), then reloads. No-op without a live dashboard.
+    func restore(fromYAML text: String) async {
+        guard !dashboardUnavailable else { lastError = "Dashboard is unavailable; can't restore."; return }
+        let parsed: JSONValue
+        do { parsed = try YAMLConfigCodec.jsonValue(fromYAML: text) }
+        catch { lastError = "Imported file isn't valid config YAML: \(error.localizedDescription)"; return }
+        isLoading = true
+        defer { isLoading = false }
+        guard let client = await resolveClient() else { lastError = "Dashboard is unavailable; can't restore."; return }
+        do { try await client.updateConfig(parsed); load() }
+        catch { lastError = error.localizedDescription }
+    }
+
     // MARK: - Comparison (desktop)
 
     func toggleComparing() {

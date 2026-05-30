@@ -12,6 +12,9 @@ struct ConfigEditorContainer: View {
     let windowHarness: ServerWindowHarness
 
     @State private var editor: ConfigEditorHarness?
+    @State private var showingExporter = false
+    @State private var showingImporter = false
+    @State private var pendingRestoreText: String?
 
     var body: some View {
         Group {
@@ -77,6 +80,35 @@ struct ConfigEditorContainer: View {
         }
         .toolbar { toolbar(editor) }
         .manageBanner(banner(editor), severity: editor.lastError != nil ? .error : .warning)
+        .fileExporter(isPresented: $showingExporter,
+                      document: YAMLFileDocument(text: editor.backupYAML),
+                      contentType: .hermesYAML,
+                      defaultFilename: editor.backupFilename) { result in
+            if case .failure(let e) = result { editor.lastError = e.localizedDescription }
+        }
+        .fileImporter(isPresented: $showingImporter,
+                      allowedContentTypes: [.hermesYAML, .text, .data]) { result in
+            switch result {
+            case .success(let url):
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                do { pendingRestoreText = try String(contentsOf: url, encoding: .utf8) }
+                catch { editor.lastError = error.localizedDescription }
+            case .failure(let e):
+                editor.lastError = e.localizedDescription
+            }
+        }
+        .alert("Replace live config?", isPresented: Binding(
+                get: { pendingRestoreText != nil },
+                set: { if !$0 { pendingRestoreText = nil } })) {
+            Button("Replace", role: .destructive) {
+                if let text = pendingRestoreText { Task { await editor.restore(fromYAML: text) } }
+                pendingRestoreText = nil
+            }
+            Button("Cancel", role: .cancel) { pendingRestoreText = nil }
+        } message: {
+            Text("This overwrites the saved config for “\(editor.selectedProfile)” with the imported file.")
+        }
     }
 
     @ToolbarContentBuilder
@@ -121,10 +153,20 @@ struct ConfigEditorContainer: View {
                     set: { editor.showDifferencesOnly = $0 }
                 ))
             } else {
+                Button { showingExporter = true } label: {
+                    Label("Download", systemImage: "square.and.arrow.down")
+                }
+                .disabled(!editor.canExportBackup)
+
+                Button { showingImporter = true } label: {
+                    Label("Upload", systemImage: "square.and.arrow.up")
+                }
+                .disabled(editor.dashboardUnavailable || editor.isLoading)
+
                 Button {
                     Task { await editor.save() }
                 } label: {
-                    Label("Save", systemImage: "square.and.arrow.down")
+                    Label("Save", systemImage: "checkmark.circle")
                 }
                 .disabled(!editor.canSave)
             }
