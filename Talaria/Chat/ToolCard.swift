@@ -3,7 +3,12 @@ import SwiftUI
 
 struct ToolCard: View {
     let message: ChatTranscriptMessage
-    @State private var isExpanded = true
+    @State private var isExpanded: Bool
+
+    init(message: ChatTranscriptMessage) {
+        self.message = message
+        _isExpanded = State(initialValue: message.toolStatus.isActive)
+    }
 
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
@@ -37,8 +42,19 @@ struct ToolCard: View {
                 }
             }
         }
-        .padding(10)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(message.kind.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        // Collapse only on the transition into a terminal status, so a manually
+        // re-expanded completed tool stays open for the life of the view. (As in
+        // ReasoningPanel, a LazyVStack recycle re-seeds `isExpanded` from the
+        // status, so a finished tool re-collapses to the default after scrolling
+        // far off-screen and back.)
+        .onChange(of: message.toolStatus) { _, status in
+            if !status.isActive {
+                isExpanded = false
+            }
+        }
     }
 }
 
