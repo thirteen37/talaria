@@ -8,6 +8,12 @@
 
 /* Begin PBXBuildFile section */
 		017543919F27FE682FC1021D /* ConfigEditorContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CBD4ADE8CB11225B24DCC54 /* ConfigEditorContainer.swift */; };
+		FE0000000000000000000011 /* ConfigEditingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE0000000000000000000001 /* ConfigEditingState.swift */; };
+		FE0000000000000000000012 /* ConfigEditingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE0000000000000000000001 /* ConfigEditingState.swift */; };
+		FE0000000000000000000013 /* ConfigFieldControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE0000000000000000000002 /* ConfigFieldControl.swift */; };
+		FE0000000000000000000014 /* ConfigFieldControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE0000000000000000000002 /* ConfigFieldControl.swift */; };
+		FE0000000000000000000015 /* EditableComparisonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE0000000000000000000003 /* EditableComparisonView.swift */; };
+		FE0000000000000000000016 /* EditableComparisonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE0000000000000000000003 /* EditableComparisonView.swift */; };
 		05373FFD890DF132B906065E /* SkillsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E5FD3271C03262E8A67B725 /* SkillsView.swift */; };
 		07DBA47FED183F9847DECCD5 /* HermesKit in Frameworks */ = {isa = PBXBuildFile; productRef = 8115E8BE768E77F5D1E3BE4B /* HermesKit */; };
 		0ABDCA69A2B9FF88CA82E91A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B71A6200C3475A1788F447EE /* Assets.xcassets */; };
@@ -38,7 +44,6 @@
 		46DB99C0E7AAE0FB6CA7B107 /* PhoneBrowseSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82AB33DE89BBD4F3D4D28D34 /* PhoneBrowseSheet.swift */; };
 		4AE1CCD2FAA490BDF400EAC4 /* SlashMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7914D7DB63EFCABE5A2D84BA /* SlashMenu.swift */; };
 		4B8E5264D875A01CD6C5AC15 /* ProbeCapabilityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29E4871FCDE4D32F84F4F785 /* ProbeCapabilityView.swift */; };
-		4C174B0BAADF9078B2BCCCC9 /* ProfilesComparisonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850A48728A6C17C11C7F943E /* ProfilesComparisonView.swift */; };
 		4C5249F406142A692ACA9A54 /* ToolCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09D9869DC5BF08FEDB227ACF /* ToolCard.swift */; };
 		4C6846E5305B13218E4647EE /* ChatModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA57702C4F0773DF6231FDD1 /* ChatModels.swift */; };
 		4DFE894BF203B5E8CAB91B93 /* DesktopServerWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F6D42240D0DFA40A9B1E0FC /* DesktopServerWindow.swift */; };
@@ -89,7 +94,6 @@
 		A27B8F3EDC961F5FC9E17E94 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B71A6200C3475A1788F447EE /* Assets.xcassets */; };
 		A8A565A53ACD757085295E54 /* ProfileProber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F42FDBFD4F21B7E12EB88CA /* ProfileProber.swift */; };
 		AB02605BD95213C83617A813 /* SessionsBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C21784B6CC62C9E498749A73 /* SessionsBrowser.swift */; };
-		ADE64928B89AB29085F980B9 /* ProfilesComparisonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 850A48728A6C17C11C7F943E /* ProfilesComparisonView.swift */; };
 		AE1E5F4DF2CC154A4C2BD329 /* ProfileProber.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD5A8C9E26CB5316AE819FD5 /* ProfileProber.swift */; };
 		AEB74C1183992A4975C42A24 /* YAMLConfigEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1F74B80AC68E1FFEEFEC183 /* YAMLConfigEditor.swift */; };
 		B12C7ACB8C23C086A85E0842 /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC6EAC9742C997DB3F416F0 /* AppLog.swift */; };
@@ -190,7 +194,6 @@
 		7D9089ABA90F410BC7A0349A /* BrowseDestination.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowseDestination.swift; sourceTree = "<group>"; };
 		82AB33DE89BBD4F3D4D28D34 /* PhoneBrowseSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneBrowseSheet.swift; sourceTree = "<group>"; };
 		82CA47B4FE65F06FAC7B45D9 /* Composer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Composer.swift; sourceTree = "<group>"; };
-		850A48728A6C17C11C7F943E /* ProfilesComparisonView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ProfilesComparisonView.swift; path = Talaria/Profiles/ConfigEditor/ProfilesComparisonView.swift; sourceTree = SOURCE_ROOT; };
 		8AA23ADC5BC8B713EA424CDD /* ProfileEditorRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditorRoot.swift; sourceTree = "<group>"; };
 		94299301A67348B115A820E1 /* PlatformSeam.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformSeam.swift; sourceTree = "<group>"; };
 		98125E594379F762DEEEBF1A /* Info-iOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Info-iOS.plist"; sourceTree = "<group>"; };
@@ -199,6 +202,9 @@
 		9F78017EA1F409DD12D2729D /* DoctorHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoctorHarnessTests.swift; sourceTree = "<group>"; };
 		A12A6961B7D8E937263627BB /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
 		A1F74B80AC68E1FFEEFEC183 /* YAMLConfigEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = YAMLConfigEditor.swift; path = Talaria/Profiles/ConfigEditor/YAMLConfigEditor.swift; sourceTree = SOURCE_ROOT; };
+		FE0000000000000000000001 /* ConfigEditingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ConfigEditingState.swift; path = Talaria/Profiles/ConfigEditor/ConfigEditingState.swift; sourceTree = SOURCE_ROOT; };
+		FE0000000000000000000002 /* ConfigFieldControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ConfigFieldControl.swift; path = Talaria/Profiles/ConfigEditor/ConfigFieldControl.swift; sourceTree = SOURCE_ROOT; };
+		FE0000000000000000000003 /* EditableComparisonView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = EditableComparisonView.swift; path = Talaria/Profiles/ConfigEditor/EditableComparisonView.swift; sourceTree = SOURCE_ROOT; };
 		A30DFD8DFB5E048EC77638CD /* DoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoctorView.swift; sourceTree = "<group>"; };
 		AB09200C1C83F6EF34A8A307 /* DashboardCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCoordinator.swift; sourceTree = "<group>"; };
 		B001CA285B7593A84B2E5C1E /* PhoneServerWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneServerWindow.swift; sourceTree = "<group>"; };
@@ -547,8 +553,10 @@
 				FE2744F29DEFB87FCB5F1488 /* ConfigEditorHarness.swift */,
 				5D65450EA610712023496BCF /* StructuredConfigEditor.swift */,
 				A1F74B80AC68E1FFEEFEC183 /* YAMLConfigEditor.swift */,
-				850A48728A6C17C11C7F943E /* ProfilesComparisonView.swift */,
 				9CBD4ADE8CB11225B24DCC54 /* ConfigEditorContainer.swift */,
+				FE0000000000000000000001 /* ConfigEditingState.swift */,
+				FE0000000000000000000002 /* ConfigFieldControl.swift */,
+				FE0000000000000000000003 /* EditableComparisonView.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -759,8 +767,10 @@
 				7E4347F2BBEC33971F274EF4 /* ConfigEditorHarness.swift in Sources */,
 				C72C422EAB0CD0067493F96C /* StructuredConfigEditor.swift in Sources */,
 				568046A5AA573BF0E93C4D55 /* YAMLConfigEditor.swift in Sources */,
-				4C174B0BAADF9078B2BCCCC9 /* ProfilesComparisonView.swift in Sources */,
 				3BF4463D8EB70B859E0A7FA3 /* ConfigEditorContainer.swift in Sources */,
+				FE0000000000000000000011 /* ConfigEditingState.swift in Sources */,
+				FE0000000000000000000013 /* ConfigFieldControl.swift in Sources */,
+				FE0000000000000000000015 /* EditableComparisonView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -822,8 +832,10 @@
 				800948328FAF58BBF7BB1287 /* ConfigEditorHarness.swift in Sources */,
 				EF4249328ABE7D4F752682C0 /* StructuredConfigEditor.swift in Sources */,
 				AEB74C1183992A4975C42A24 /* YAMLConfigEditor.swift in Sources */,
-				ADE64928B89AB29085F980B9 /* ProfilesComparisonView.swift in Sources */,
 				017543919F27FE682FC1021D /* ConfigEditorContainer.swift in Sources */,
+				FE0000000000000000000012 /* ConfigEditingState.swift in Sources */,
+				FE0000000000000000000014 /* ConfigFieldControl.swift in Sources */,
+				FE0000000000000000000016 /* EditableComparisonView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

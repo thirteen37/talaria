@@ -1,11 +1,10 @@
 import HermesKit
 import SwiftUI
 
-/// View-model for the single-profile config editor. Loads a profile's schema +
-/// config from its dashboard, exposes a structured form and an editable YAML
-/// mirror of the same edited state, and saves non-destructively. Comparison
-/// state is additive — a compact (iPhone) variant can reuse this harness and
-/// simply never set `comparing`.
+/// View-model for the Profiles config surface. Owns the profile list/selection,
+/// a name-keyed scoped-dashboard pool, and the `source` editing state for the
+/// selected profile. Comparison is additive — desktop reveals a second editing
+/// state (`dest`); iPhone reuses the same harness and simply never compares.
 ///
 /// The dashboard is reached only through injected `acquireScoped`/`releaseScoped`
 /// closures (the window harness wires the macOS coordinator or the iOS
@@ -13,65 +12,39 @@ import SwiftUI
 @MainActor
 @Observable
 final class ConfigEditorHarness {
-    enum Mode: String, CaseIterable, Identifiable {
-        case structured
-        case yaml
-        var id: String { rawValue }
-        var label: String { self == .structured ? "Structured" : "YAML" }
-    }
+    typealias Mode = ConfigEditingState.Mode
 
     // Profile selection
     var profiles: [HermesProfileInfo] = []
-    var selectedProfile: String
+    private(set) var selectedProfile: String
     /// Set when `hermes profile list` is too old to exist; the editor still
     /// works against the single `default` profile.
     var profilesUnavailable = false
 
-    // Single-profile editor state
-    var mode: Mode = .structured
-    private(set) var schema: DashboardConfigSchema?
-    private(set) var form: ProfileConfigForm?
-    /// Last GET — the non-destructive merge base and the dirty baseline.
-    private(set) var original: JSONValue?
-    /// Live edited config; structured controls mutate it, the YAML pane mirrors it.
-    private(set) var working: JSONValue = .object([:])
-    var yamlText: String = ""
-    var yamlParseError: String?
+    /// Editing state for the selected profile. Rebuilt on every selection change
+    /// so each instance is immutably scoped to one profile.
+    private(set) var source: ConfigEditingState
 
-    // Comparison (desktop only)
-    var comparing = false
+    // Comparison (desktop only): a second editing state bound to `compareProfile`.
+    // `comparing` is derived from its presence.
+    private(set) var dest: ConfigEditingState?
     var compareProfile: String = ""
-    private(set) var comparison: ConfigComparison?
-    var showDifferencesOnly = false
+    var comparing: Bool { dest != nil }
 
-    // Status
-    var isLoading = false
+    /// Profile-list error (config errors live on the editing states).
     var lastError: String?
-    /// Dashboard client unavailable (not yet online, or spawn failed): the
-    /// editor degrades to a read-only YAML view from the on-disk config and
-    /// disables Save.
-    var dashboardUnavailable = false
 
     // Dependencies
     private let defaultClientProvider: @MainActor () -> DashboardClient?
     private let runner: HermesAdminRunning?
     private let serverProfile: ServerProfile
     private let transfer: RemoteSnapshotTransfer?
-    private let acquireScoped: @MainActor (String) async throws -> (DashboardSupervisor, DashboardClient)
-    private let releaseScoped: @MainActor (DashboardSupervisor) async -> Void
+    private let pool: ScopedDashboardPool<DashboardSupervisor, DashboardClient>
 
-    // Held profile-scoped dashboard for a non-default selection.
-    private var heldSupervisor: DashboardSupervisor?
-    private var heldClient: DashboardClient?
-    private var heldProfileName: String?
-
-    // Serializes comparison reads so rapid selection changes don't fire
-    // concurrent NIO-SSH reads that race host-key verification.
+    // Serializes compare-state transitions (build/teardown of `dest`) so rapid
+    // toggles don't fire concurrent first-connections that race host-key
+    // verification, and so a teardown can't run before its build completes.
     private var compareTask: Task<Void, Never>?
-    // Serializes config loads so rapid profile switches can't run overlapping
-    // GETs (which would race `resolveClient`'s scoped-dashboard bookkeeping and
-    // let a slow earlier response clobber a newer profile's state).
-    private var loadTask: Task<Void, Never>?
 
     init(
         selectedProfile: String = HermesProfiles.defaultProfileName,
@@ -87,29 +60,60 @@ final class ConfigEditorHarness {
         self.runner = runner
         self.serverProfile = profile
         self.transfer = transfer
-        self.acquireScoped = acquireScoped
-        self.releaseScoped = releaseScoped
+        let pool = ScopedDashboardPool<DashboardSupervisor, DashboardClient>(
+            acquire: acquireScoped,
+            release: releaseScoped
+        )
+        self.pool = pool
+        self.source = ConfigEditorHarness.makeState(
+            for: selectedProfile,
+            defaultClient: defaultClient,
+            serverProfile: profile,
+            transfer: transfer,
+            pool: pool
+        )
     }
 
-    var isDirty: Bool {
-        guard let original, !dashboardUnavailable else { return false }
-        return working != original
+    private static func makeState(
+        for name: String,
+        defaultClient: @escaping @MainActor () -> DashboardClient?,
+        serverProfile: ServerProfile,
+        transfer: RemoteSnapshotTransfer?,
+        pool: ScopedDashboardPool<DashboardSupervisor, DashboardClient>
+    ) -> ConfigEditingState {
+        ConfigEditingState(
+            profileName: name,
+            defaultClient: defaultClient,
+            serverProfile: serverProfile,
+            transfer: transfer,
+            acquireScoped: { try await pool.acquire($0) },
+            releaseScoped: { await pool.release($0) }
+        )
     }
 
-    var canSave: Bool {
-        isDirty && !isLoading && !dashboardUnavailable && yamlParseError == nil
+    private func makeState(for name: String) -> ConfigEditingState {
+        ConfigEditorHarness.makeState(
+            for: name,
+            defaultClient: defaultClientProvider,
+            serverProfile: serverProfile,
+            transfer: transfer,
+            pool: pool
+        )
     }
+
+    var isLoading: Bool { source.isLoading }
 
     // MARK: - Loading
 
     func start() async {
         await loadProfiles()
-        load()
+        source.load()
     }
 
     func refresh() async {
         await loadProfiles()
-        load()
+        source.load()
+        dest?.load()
     }
 
     func loadProfiles() async {
@@ -144,126 +148,40 @@ final class ConfigEditorHarness {
     /// Keeps the selected (and compare) profiles valid against the current list.
     private func normalizeSelections() {
         if !profiles.contains(where: { $0.name == selectedProfile }) {
-            selectedProfile = profiles.first(where: \.isDefault)?.name
+            let resolved = profiles.first(where: \.isDefault)?.name
                 ?? profiles.first?.name
                 ?? HermesProfiles.defaultProfileName
+            if resolved != selectedProfile {
+                selectedProfile = resolved
+                rebuildSource()
+            }
         }
         if compareProfile.isEmpty || !profiles.contains(where: { $0.name == compareProfile }) {
             compareProfile = profiles.first(where: { $0.name != selectedProfile })?.name ?? ""
         }
     }
 
-    /// Schedules a config load, chained behind any in-flight load so two never
-    /// overlap. Fire-and-forget: the view observes the harness state as it lands.
-    func load() {
-        let previous = loadTask
-        loadTask = Task { [weak self] in
-            await previous?.value
-            await self?.performLoad()
-        }
-    }
-
-    private func performLoad() async {
-        // Capture the profile this load is for. Each assignment after an `await`
-        // bails if the selection moved on, so a slow earlier response can't
-        // clobber a newer profile's state (mirrors `performCompare`).
-        let target = selectedProfile
-        isLoading = true
-        defer { isLoading = false }
-        let client = await resolveClient()
-        guard selectedProfile == target else { return }
-        if let client {
-            do {
-                async let schemaResult = client.getConfigSchema()
-                async let configResult = client.getConfig()
-                let schema = try await schemaResult
-                let config = try await configResult
-                guard selectedProfile == target else { return }
-                self.schema = schema
-                original = config
-                working = config
-                form = ProfileConfigForm.make(schema: schema, config: config)
-                yamlText = (try? YAMLConfigCodec.yaml(from: config)) ?? ""
-                yamlParseError = nil
-                dashboardUnavailable = false
-                lastError = nil
-                if mode == .yaml { regenerateYAML() }
-            } catch {
-                guard selectedProfile == target else { return }
-                lastError = error.localizedDescription
-            }
-        } else {
-            await loadDegraded(target: target)
-        }
-        if comparing { scheduleCompare() }
-    }
-
-    /// Re-runs the load when the window's default dashboard comes online after
-    /// an initial degraded render (the editor opened before the spawn finished).
+    /// Re-runs the load when the window's default dashboard comes online after an
+    /// initial degraded render. Routes to whichever editing state(s) are bound to
+    /// the default profile (either column of the comparison can be `default`).
     func reloadIfDashboardAppeared() {
-        guard dashboardUnavailable,
-              selectedProfile == HermesProfiles.defaultProfileName,
-              defaultClientProvider() != nil else { return }
-        load()
-    }
-
-    private func loadDegraded(target: String) async {
-        guard selectedProfile == target else { return }
-        dashboardUnavailable = true
-        schema = nil
-        form = nil
-        original = nil
-        // Best-effort: show the on-disk config read-only so the surface isn't
-        // empty while the dashboard is unreachable.
-        do {
-            let text = try await HermesConfigReader.read(
-                profile: serverProfile,
-                profileName: target,
-                transfer: transfer
-            )
-            guard selectedProfile == target else { return }
-            yamlText = text
-            mode = .yaml
-        } catch {
-            guard selectedProfile == target else { return }
-            yamlText = ""
+        if source.profileName == HermesProfiles.defaultProfileName {
+            source.reloadIfDashboardAppeared()
+        }
+        if dest?.profileName == HermesProfiles.defaultProfileName {
+            dest?.reloadIfDashboardAppeared()
         }
     }
 
-    private func resolveClient() async -> DashboardClient? {
-        if selectedProfile == HermesProfiles.defaultProfileName {
-            await releaseHeld()
-            return defaultClientProvider()
-        }
-        if heldProfileName == selectedProfile, let heldClient {
-            return heldClient
-        }
-        await releaseHeld()
-        do {
-            let (supervisor, client) = try await acquireScoped(selectedProfile)
-            heldSupervisor = supervisor
-            heldClient = client
-            heldProfileName = selectedProfile
-            return client
-        } catch {
-            lastError = error.localizedDescription
-            return nil
-        }
-    }
-
-    private func releaseHeld() async {
-        if let heldSupervisor {
-            await releaseScoped(heldSupervisor)
-        }
-        heldSupervisor = nil
-        heldClient = nil
-        heldProfileName = nil
-    }
-
-    /// Releases any profile-scoped dashboard this editor acquired. Call from the
-    /// view's teardown.
+    /// Releases every profile-scoped dashboard this editor acquired. Call from
+    /// the view's teardown. Awaits in-flight load/compare chains first, then tears
+    /// down both states and drains the pool as a backstop so no supervisor leaks.
     func teardown() async {
-        await releaseHeld()
+        compareTask?.cancel()
+        await compareTask?.value
+        await source.teardown()
+        await dest?.teardown()
+        await pool.drain()
     }
 
     // MARK: - Profile / mode switching
@@ -271,204 +189,74 @@ final class ConfigEditorHarness {
     func selectProfile(_ name: String) async {
         guard name != selectedProfile else { return }
         selectedProfile = name
-        if compareProfile == name {
+        rebuildSource()
+        // While comparing, never let both columns target the same config: if the
+        // new selection collides with the compare profile, bump it and rebuild
+        // dest against the new source (collision-avoidance runs before acquiring).
+        if comparing, compareProfile == name {
             compareProfile = profiles.first(where: { $0.name != name })?.name ?? ""
+            buildDest(for: compareProfile)
         }
-        load()
+    }
+
+    /// Swaps in a fresh editing state for the current selection and tears down the
+    /// previous one (releasing its scoped hold) without blocking the UI.
+    private func rebuildSource() {
+        let previous = source
+        source = makeState(for: selectedProfile)
+        source.load()
+        Task { await previous.teardown() }
     }
 
     func setMode(_ newMode: Mode) {
-        guard newMode != mode else { return }
-        switch newMode {
-        case .yaml:
-            regenerateYAML()
-            yamlParseError = nil
-            mode = .yaml
-        case .structured:
-            // Don't leave the user staring at a structured form built from
-            // stale values while their YAML doesn't parse.
-            guard yamlParseError == nil else { return }
-            mode = .structured
-        }
+        source.setMode(newMode)
     }
 
-    private func regenerateYAML() {
-        yamlText = (try? YAMLConfigCodec.yaml(from: working)) ?? yamlText
-    }
-
-    /// Re-parses the YAML pane into `working` on each edit so the structured
-    /// view and dirty/save state stay in sync. Parse failures surface inline and
-    /// leave `working` at its last good value.
-    func yamlChanged() {
-        guard mode == .yaml, !dashboardUnavailable else { return }
-        do {
-            working = try YAMLConfigCodec.jsonValue(fromYAML: yamlText)
-            yamlParseError = nil
-        } catch {
-            yamlParseError = error.localizedDescription
-        }
-    }
-
-    // MARK: - Structured field access
-
-    func value(for field: ConfigFormField) -> ConfigValue {
-        guard let leaf = ProfileConfigForm.value(at: field.key, in: working) else { return .missing }
-        return ProfileConfigForm.configValue(from: leaf, schemaType: field.schema?.type)
-    }
-
-    private func setWorking(_ key: String, _ json: JSONValue) {
-        working = ProfileConfigForm.setValue(json, at: key, in: working)
-    }
-
-    func stringBinding(for field: ConfigFormField) -> Binding<String> {
-        Binding(
-            get: { [weak self] in self.map { Self.string(from: $0.value(for: field)) } ?? "" },
-            set: { [weak self] in self?.setWorking(field.key, .string($0)) }
-        )
-    }
-
-    func boolBinding(for field: ConfigFormField) -> Binding<Bool> {
-        Binding(
-            get: { [weak self] in
-                if let self, case .bool(let b) = self.value(for: field) { return b }
-                return false
-            },
-            set: { [weak self] in self?.setWorking(field.key, .bool($0)) }
-        )
-    }
-
-    /// Text side of a number field (string bridge so partial input doesn't crash
-    /// the control). Parseable text stores a JSON number; anything else stores a
-    /// string the schema coercion resolves at save.
-    func numberTextBinding(for field: ConfigFormField) -> Binding<String> {
-        Binding(
-            get: { [weak self] in self.map { Self.string(from: $0.value(for: field)) } ?? "" },
-            set: { [weak self] text in
-                if let number = Double(text) {
-                    self?.setWorking(field.key, .number(number))
-                } else {
-                    self?.setWorking(field.key, .string(text))
-                }
-            }
-        )
-    }
-
-    /// Stepper side of a number field.
-    func numberBinding(for field: ConfigFormField) -> Binding<Double> {
-        Binding(
-            get: { [weak self] in
-                if let self, case .number(let n) = self.value(for: field) { return n }
-                return 0
-            },
-            set: { [weak self] in self?.setWorking(field.key, .number($0)) }
-        )
-    }
-
-    func listBinding(for field: ConfigFormField) -> Binding<[String]> {
-        Binding(
-            get: { [weak self] in
-                if let self, case .list(let items) = self.value(for: field) { return items }
-                return []
-            },
-            set: { [weak self] in self?.setWorking(field.key, .array($0.map(JSONValue.string))) }
-        )
-    }
-
-    private static func string(from value: ConfigValue) -> String {
-        switch value {
-        case .string(let s): return s
-        case .bool(let b): return b ? "true" : "false"
-        case .number(let n):
-            if n == n.rounded(), abs(n) < 1e15 { return String(Int64(n)) }
-            return String(n)
-        case .list(let items): return items.joined(separator: ", ")
-        case .missing: return ""
-        case .raw: return ""
-        }
-    }
-
-    // MARK: - Save
-
-    func save() async {
-        guard canSave else { return }
-        isLoading = true
-        defer { isLoading = false }
-        guard let client = await resolveClient() else {
-            lastError = "Dashboard is unavailable; can't save."
-            return
-        }
-        do {
-            let toPut: JSONValue
-            if mode == .yaml {
-                // The YAML pane owns the whole document, so PUT it as parsed
-                // (this is where key removals take effect).
-                toPut = try YAMLConfigCodec.jsonValue(fromYAML: yamlText)
-            } else {
-                guard let original else { return }
-                // Re-GET immediately before PUT and merge only edited dotpaths so
-                // a concurrent external change to another key isn't clobbered.
-                let fresh = try await client.getConfig()
-                let edits = ProfileConfigForm.edits(from: working, base: original, schema: schema)
-                toPut = ProfileConfigForm.merged(into: fresh, edits: edits)
-            }
-            try await client.updateConfig(toPut)
-            load()
-        } catch {
-            lastError = error.localizedDescription
-        }
-    }
-
-    // MARK: - Comparison (desktop)
+    // MARK: - Comparison (desktop, editable two-column)
 
     func toggleComparing() {
-        comparing.toggle()
         if comparing {
-            if compareProfile.isEmpty {
+            stopComparing()
+        } else {
+            if compareProfile.isEmpty || compareProfile == selectedProfile {
                 compareProfile = profiles.first(where: { $0.name != selectedProfile })?.name ?? ""
             }
-            scheduleCompare()
-        } else {
-            comparison = nil
+            guard !compareProfile.isEmpty else { return }
+            buildDest(for: compareProfile)
         }
     }
 
     func setCompareProfile(_ name: String) {
+        guard name != compareProfile, name != selectedProfile else { return }
         compareProfile = name
-        scheduleCompare()
+        buildDest(for: name)
     }
 
-    /// Chains the next comparison behind the previous one so concurrent reads
-    /// never overlap (the NIO transport opens a fresh SSH connection per read
-    /// and racing two host-key verifications fails one side).
-    private func scheduleCompare() {
-        let previous = compareTask
+    /// Builds the dest editing state for `name` and starts its load behind any
+    /// previous compare work. The dest acquire is sequenced **after** the source
+    /// side's in-flight load so two first-connections don't race host-key
+    /// verification on the NIO transport (concurrent verifications fail one side).
+    private func buildDest(for name: String) {
+        let previousTask = compareTask
+        let previousDest = dest
+        let newDest = makeState(for: name)
+        dest = newDest
         compareTask = Task { [weak self] in
-            await previous?.value
-            await self?.performCompare()
+            await previousTask?.value
+            await previousDest?.teardown()
+            await self?.source.awaitCurrentLoad()
+            if Task.isCancelled { return }
+            newDest.load()
         }
     }
 
-    private func performCompare() async {
-        let source = selectedProfile
-        let dest = compareProfile
-        guard !dest.isEmpty, dest != source else {
-            comparison = nil
-            return
-        }
-        do {
-            // Sequential reads: on the NIO transport concurrent reads race two
-            // host-key verifications (mirrors ProfilesConfigHarness).
-            let sourceText = try await HermesConfigReader.read(profile: serverProfile, profileName: source, transfer: transfer)
-            let destText = try await HermesConfigReader.read(profile: serverProfile, profileName: dest, transfer: transfer)
-            guard selectedProfile == source, compareProfile == dest else { return }
-            let sourceDoc = try HermesConfigDocument.parse(sourceText)
-            let destDoc = try HermesConfigDocument.parse(destText)
-            comparison = ConfigComparison(source: sourceDoc, dest: destDoc)
-            lastError = nil
-        } catch {
-            guard selectedProfile == source, compareProfile == dest else { return }
-            comparison = nil
-            lastError = error.localizedDescription
+    private func stopComparing() {
+        let previousTask = compareTask
+        let previousDest = dest
+        dest = nil
+        compareTask = Task {
+            await previousTask?.value
+            await previousDest?.teardown()
         }
     }
 
