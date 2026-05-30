@@ -1,28 +1,31 @@
 import HermesKit
 import SwiftUI
 
-/// View-model for the Profiles config surface. Owns the profile list/selection,
-/// a name-keyed scoped-dashboard pool, and the `source` editing state for the
-/// selected profile. Comparison is additive — desktop reveals a second editing
-/// state (`dest`); iPhone reuses the same harness and simply never compares.
+/// View-model for the Configuration surface. Edits the window's **active** Hermes
+/// profile: the window dashboard is already scoped to it (`hermes -p <name>`), so
+/// the `source` editing state reads that profile through the window's shared
+/// client rather than acquiring its own. There is no in-editor profile picker —
+/// the primary profile is chosen by the window's top-level switcher.
 ///
-/// The dashboard is reached only through injected `acquireScoped`/`releaseScoped`
-/// closures (the window harness wires the macOS coordinator or the iOS
-/// supervisor), so this type stays platform-neutral.
+/// Comparison is additive (desktop only): a second editing state (`dest`) targets
+/// another profile and reaches it through the name-keyed `ScopedDashboardPool`,
+/// since the window client only serves the active profile. iPhone reuses this
+/// harness and simply never compares.
 @MainActor
 @Observable
 final class ConfigEditorHarness {
     typealias Mode = ConfigEditingState.Mode
 
-    // Profile selection
-    var profiles: [HermesProfileInfo] = []
-    private(set) var selectedProfile: String
-    /// Set when `hermes profile list` is too old to exist; the editor still
-    /// works against the single `default` profile.
-    var profilesUnavailable = false
+    /// Profiles on the server (from the window) — the compare dropdown's options.
+    /// Mutable because the window's enumeration can land after the editor opens
+    /// (a slow remote `profile list`); the container feeds updates in via
+    /// ``setAvailableProfiles(_:)`` so the dropdown isn't stuck empty.
+    private(set) var profiles: [HermesProfileInfo]
+    /// The Hermes profile this editor edits (the window's active profile). The
+    /// source column is fixed to it; it's also the comparison's source side.
+    let editedProfileName: String
 
-    /// Editing state for the selected profile. Rebuilt on every selection change
-    /// so each instance is immutably scoped to one profile.
+    /// Editing state for the edited (window-active) profile.
     private(set) var source: ConfigEditingState
 
     // Comparison (desktop only): a second editing state bound to `compareProfile`.
@@ -40,7 +43,6 @@ final class ConfigEditorHarness {
 
     // Dependencies
     private let defaultClientProvider: @MainActor () -> DashboardClient?
-    private let runner: HermesAdminRunning?
     private let serverProfile: ServerProfile
     private let transfer: RemoteSnapshotTransfer?
     private let pool: ScopedDashboardPool<DashboardSupervisor, DashboardClient>
@@ -51,17 +53,17 @@ final class ConfigEditorHarness {
     private var compareTask: Task<Void, Never>?
 
     init(
-        selectedProfile: String = HermesProfiles.defaultProfileName,
+        profiles: [HermesProfileInfo],
+        editedProfileName: String,
         defaultClient: @escaping @MainActor () -> DashboardClient?,
-        runner: HermesAdminRunning?,
         profile: ServerProfile,
         transfer: RemoteSnapshotTransfer?,
         acquireScoped: @escaping @MainActor (String) async throws -> (DashboardSupervisor, DashboardClient),
         releaseScoped: @escaping @MainActor (DashboardSupervisor) async -> Void
     ) {
-        self.selectedProfile = selectedProfile
+        self.profiles = profiles
+        self.editedProfileName = editedProfileName
         self.defaultClientProvider = defaultClient
-        self.runner = runner
         self.serverProfile = profile
         self.transfer = transfer
         let pool = ScopedDashboardPool<DashboardSupervisor, DashboardClient>(
@@ -69,8 +71,10 @@ final class ConfigEditorHarness {
             release: releaseScoped
         )
         self.pool = pool
+        self.compareProfile = profiles.first(where: { $0.name != editedProfileName })?.name ?? ""
         self.source = ConfigEditorHarness.makeState(
-            for: selectedProfile,
+            for: editedProfileName,
+            editedProfileName: editedProfileName,
             defaultClient: defaultClient,
             serverProfile: profile,
             transfer: transfer,
@@ -80,6 +84,7 @@ final class ConfigEditorHarness {
 
     private static func makeState(
         for name: String,
+        editedProfileName: String,
         defaultClient: @escaping @MainActor () -> DashboardClient?,
         serverProfile: ServerProfile,
         transfer: RemoteSnapshotTransfer?,
@@ -87,6 +92,9 @@ final class ConfigEditorHarness {
     ) -> ConfigEditingState {
         ConfigEditingState(
             profileName: name,
+            // The window dashboard is scoped to the active profile, so that
+            // column reads the shared client; any other profile is pool-scoped.
+            usesWindowClient: name == editedProfileName,
             defaultClient: defaultClient,
             serverProfile: serverProfile,
             transfer: transfer,
@@ -98,6 +106,7 @@ final class ConfigEditorHarness {
     private func makeState(for name: String) -> ConfigEditingState {
         ConfigEditorHarness.makeState(
             for: name,
+            editedProfileName: editedProfileName,
             defaultClient: defaultClientProvider,
             serverProfile: serverProfile,
             transfer: transfer,
@@ -110,71 +119,40 @@ final class ConfigEditorHarness {
     // MARK: - Loading
 
     func start() async {
-        await loadProfiles()
         source.load()
     }
 
     func refresh() async {
-        await loadProfiles()
         source.load()
         dest?.load()
     }
 
-    func loadProfiles() async {
-        // Prefer the dashboard API: it returns clean names + a structured
-        // is-default flag, where the CLI `hermes profile list` decorates the
-        // default row with a marker glyph that leaks into the parsed name.
-        if let client = defaultClientProvider() {
-            do {
-                let list = try await client.listProfiles()
-                profiles = list.map { HermesProfileInfo(name: $0.name, isDefault: $0.isDefault, status: nil) }
-                profilesUnavailable = false
-                normalizeSelections()
-                return
-            } catch {
-                // Fall through to the CLI source (dashboard down / too old).
+    /// Refreshes the compare dropdown's options when the window's enumeration
+    /// lands after the editor opened. Preserves a still-valid compare choice;
+    /// otherwise re-defaults it (rebuilding `dest` if a comparison is active and
+    /// its target vanished).
+    func setAvailableProfiles(_ newProfiles: [HermesProfileInfo]) {
+        guard newProfiles != profiles else { return }
+        profiles = newProfiles
+        let compareStillValid = !compareProfile.isEmpty
+            && newProfiles.contains(where: { $0.name == compareProfile })
+        guard !compareStillValid else { return }
+        compareProfile = newProfiles.first(where: { $0.name != editedProfileName })?.name ?? ""
+        if comparing {
+            if compareProfile.isEmpty {
+                stopComparing()
+            } else {
+                buildDest(for: compareProfile)
             }
-        }
-        guard let runner else {
-            profiles = [HermesProfileInfo(name: HermesProfiles.defaultProfileName, isDefault: true, status: nil)]
-            normalizeSelections()
-            return
-        }
-        do {
-            profiles = try await HermesProfiles.list(runner: runner)
-            profilesUnavailable = false
-            normalizeSelections()
-        } catch {
-            handleProfilesError(error)
         }
     }
 
-    /// Keeps the selected (and compare) profiles valid against the current list.
-    private func normalizeSelections() {
-        if !profiles.contains(where: { $0.name == selectedProfile }) {
-            let resolved = profiles.first(where: \.isDefault)?.name
-                ?? profiles.first?.name
-                ?? HermesProfiles.defaultProfileName
-            if resolved != selectedProfile {
-                selectedProfile = resolved
-                rebuildSource()
-            }
-        }
-        if compareProfile.isEmpty || !profiles.contains(where: { $0.name == compareProfile }) {
-            compareProfile = profiles.first(where: { $0.name != selectedProfile })?.name ?? ""
-        }
-    }
-
-    /// Re-runs the load when the window's default dashboard comes online after an
-    /// initial degraded render. Routes to whichever editing state(s) are bound to
-    /// the default profile (either column of the comparison can be `default`).
+    /// Re-runs the load when the window's dashboard comes online after an initial
+    /// degraded render. The internal guard limits this to the window-client
+    /// state(s), so a pool-scoped `dest` is unaffected.
     func reloadIfDashboardAppeared() {
-        if source.profileName == HermesProfiles.defaultProfileName {
-            source.reloadIfDashboardAppeared()
-        }
-        if dest?.profileName == HermesProfiles.defaultProfileName {
-            dest?.reloadIfDashboardAppeared()
-        }
+        source.reloadIfDashboardAppeared()
+        dest?.reloadIfDashboardAppeared()
     }
 
     /// Releases every profile-scoped dashboard this editor acquired. Call from
@@ -188,29 +166,7 @@ final class ConfigEditorHarness {
         await pool.drain()
     }
 
-    // MARK: - Profile / mode switching
-
-    func selectProfile(_ name: String) async {
-        guard name != selectedProfile else { return }
-        selectedProfile = name
-        rebuildSource()
-        // While comparing, never let both columns target the same config: if the
-        // new selection collides with the compare profile, bump it and rebuild
-        // dest against the new source (collision-avoidance runs before acquiring).
-        if comparing, compareProfile == name {
-            compareProfile = profiles.first(where: { $0.name != name })?.name ?? ""
-            buildDest(for: compareProfile)
-        }
-    }
-
-    /// Swaps in a fresh editing state for the current selection and tears down the
-    /// previous one (releasing its scoped hold) without blocking the UI.
-    private func rebuildSource() {
-        let previous = source
-        source = makeState(for: selectedProfile)
-        source.load()
-        Task { await previous.teardown() }
-    }
+    // MARK: - Mode switching
 
     func setMode(_ newMode: Mode) {
         source.setMode(newMode)
@@ -222,8 +178,8 @@ final class ConfigEditorHarness {
         if comparing {
             stopComparing()
         } else {
-            if compareProfile.isEmpty || compareProfile == selectedProfile {
-                compareProfile = profiles.first(where: { $0.name != selectedProfile })?.name ?? ""
+            if compareProfile.isEmpty || compareProfile == editedProfileName {
+                compareProfile = profiles.first(where: { $0.name != editedProfileName })?.name ?? ""
             }
             guard !compareProfile.isEmpty else { return }
             buildDest(for: compareProfile)
@@ -231,7 +187,7 @@ final class ConfigEditorHarness {
     }
 
     func setCompareProfile(_ name: String) {
-        guard name != compareProfile, name != selectedProfile else { return }
+        guard name != compareProfile, name != editedProfileName else { return }
         compareProfile = name
         buildDest(for: name)
     }
@@ -262,14 +218,5 @@ final class ConfigEditorHarness {
             await previousTask?.value
             await previousDest?.teardown()
         }
-    }
-
-    private func handleProfilesError(_ error: Error) {
-        if let profilesError = error as? HermesProfilesError, case .commandUnavailable = profilesError {
-            profilesUnavailable = true
-            profiles = [HermesProfileInfo(name: HermesProfiles.defaultProfileName, isDefault: true, status: nil)]
-            return
-        }
-        lastError = error.localizedDescription
     }
 }

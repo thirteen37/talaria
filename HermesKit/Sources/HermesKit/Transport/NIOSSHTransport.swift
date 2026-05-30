@@ -26,6 +26,9 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
     public var inbound: AsyncThrowingStream<Data, Error> { inboundStream }
 
     private let profile: ServerProfile
+    /// Hermes profile (`hermes -p <name>`) the remote ACP session runs under.
+    /// nil / `default` runs the unscoped default profile.
+    private let hermesProfileName: String?
     private let hostKeyStore: HostKeyStore
     private let hostKeyConfirmer: HostKeyConfirmer?
     private let privateKey: NIOSSHPrivateKey?
@@ -55,6 +58,7 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
         hostKeyStore: HostKeyStore,
         hostKeyConfirmer: HostKeyConfirmer? = nil,
         passphrase: String? = nil,
+        hermesProfileName: String? = nil,
         group: EventLoopGroup = NIOSSHTransport.sharedGroup
     ) throws {
         let privateKey = try credentialProvider.privateKey(for: profile, passphrase: passphrase)
@@ -68,6 +72,7 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
             password: password,
             hostKeyStore: hostKeyStore,
             hostKeyConfirmer: hostKeyConfirmer,
+            hermesProfileName: hermesProfileName,
             group: group
         )
     }
@@ -78,9 +83,11 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
         password: String? = nil,
         hostKeyStore: HostKeyStore,
         hostKeyConfirmer: HostKeyConfirmer? = nil,
+        hermesProfileName: String? = nil,
         group: EventLoopGroup
     ) {
         self.profile = profile
+        self.hermesProfileName = hermesProfileName
         self.privateKey = privateKey
         self.password = password
         self.hostKeyStore = hostKeyStore
@@ -114,7 +121,7 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
         }
         let port = profile.port ?? 22
         let user = profile.user ?? NSUserName()
-        let command = buildHermesRemoteCommand(profile: profile)
+        let command = buildHermesRemoteCommand(profile: profile, hermesProfileName: hermesProfileName)
         let authKind = privateKey != nil ? "key" : "password"
         HermesLog.transport.info("connect start \(user, privacy: .public)@\(host, privacy: .public):\(port) auth=\(authKind, privacy: .public)")
         HermesLog.transport.info("remote command: \(command, privacy: .public)")

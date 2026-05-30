@@ -49,6 +49,55 @@ struct RemoteShellInvocationTests {
     }
 
     @Test
+    func namedHermesProfileInsertsGlobalFlagBeforeAcp() {
+        let line = buildHermesRemoteCommand(
+            hermesPath: "hermes",
+            hermesHome: nil,
+            remoteShellMode: .direct,
+            remoteShellPrefix: nil,
+            hermesProfileName: "work"
+        )
+        // `-p 'work'` is a global flag: it sits between the binary and `acp`,
+        // and the name is single-quoted like the path.
+        #expect(line == "'hermes' -p 'work' acp")
+    }
+
+    @Test
+    func defaultOrNilHermesProfileOmitsFlag() {
+        // `default`/`nil` keep the byte-identical bare-acp command line.
+        #expect(
+            buildHermesRemoteCommand(
+                hermesPath: "hermes",
+                hermesHome: nil,
+                remoteShellMode: .direct,
+                remoteShellPrefix: nil,
+                hermesProfileName: "default"
+            ) == "'hermes' acp"
+        )
+        #expect(
+            buildHermesRemoteCommand(
+                hermesPath: "hermes",
+                hermesHome: nil,
+                remoteShellMode: .direct,
+                remoteShellPrefix: nil,
+                hermesProfileName: nil
+            ) == "'hermes' acp"
+        )
+    }
+
+    @Test
+    func namedHermesProfileWithHermesHomeKeepsEnvThenFlag() {
+        let line = buildHermesRemoteCommand(
+            hermesPath: "/opt/bin/hermes",
+            hermesHome: "/tmp/hermes",
+            remoteShellMode: .direct,
+            remoteShellPrefix: nil,
+            hermesProfileName: "work"
+        )
+        #expect(line == "env 'HERMES_HOME=/tmp/hermes' '/opt/bin/hermes' -p 'work' acp")
+    }
+
+    @Test
     func profileOverloadMatchesFieldOverload() {
         let profile = ServerProfile(
             name: "Box",

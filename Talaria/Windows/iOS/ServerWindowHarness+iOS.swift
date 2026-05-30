@@ -9,15 +9,22 @@ extension ServerWindowHarness {
     /// iOS can't run local hermes (no `Process` / `OneShotProcess`). The
     /// bundled local profile is hidden in the UI, but keep a stub so the shared
     /// `make` dispatch stays total — the transport throws if ever started.
-    static func makeLocal(profile: ServerProfile) -> ServerWindowHarness {
+    static func makeLocal(
+        profile: ServerProfile,
+        hermesProfileName: String = HermesProfiles.defaultProfileName
+    ) -> ServerWindowHarness {
         let manager = SessionManager { throw TransportError.unsupportedPlatform }
         return ServerWindowHarness(
             store: SessionsStore(manager: manager, adminRunner: nil),
-            profile: profile
+            profile: profile,
+            hermesProfileName: hermesProfileName
         )
     }
 
-    static func makeRemote(profile: ServerProfile) -> ServerWindowHarness {
+    static func makeRemote(
+        profile: ServerProfile,
+        hermesProfileName: String = HermesProfiles.defaultProfileName
+    ) -> ServerWindowHarness {
         let hostKeyCoordinator = HostKeyConfirmationCoordinator()
         let credentialProvider: SSHCredentialProvider = FileIdentityProvider()
         let hostKeyStore = defaultHostKeyStore()
@@ -29,7 +36,8 @@ extension ServerWindowHarness {
                 profile: profile,
                 credentialProvider: credentialProvider,
                 hostKeyStore: hostKeyStore,
-                hostKeyConfirmer: confirmer
+                hostKeyConfirmer: confirmer,
+                hermesProfileName: hermesProfileName
             )
             try await transport.start()
             return transport
@@ -44,11 +52,16 @@ extension ServerWindowHarness {
         // host-key trust + identity wiring so Tools/Doctor/Profiles connect on
         // the same auth policy as the chat transport (and don't re-prompt for a
         // key the chat transport already trusted).
-        let admin: any HermesAdminRunning = NIOSSHHermesAdminRunner(
-            profile: profile,
-            credentialProvider: credentialProvider,
-            hostKeyStore: hostKeyStore,
-            hostKeyConfirmer: confirmer
+        // Scope outermost so Tools/Doctor run under the window's Hermes profile;
+        // `profile list` and the default profile stay unscoped.
+        let admin: any HermesAdminRunning = ProfileScopedHermesAdminRunner(
+            inner: NIOSSHHermesAdminRunner(
+                profile: profile,
+                credentialProvider: credentialProvider,
+                hostKeyStore: hostKeyStore,
+                hostKeyConfirmer: confirmer
+            ),
+            hermesProfileName: hermesProfileName
         )
         let store = SessionsStore(
             manager: manager,
@@ -60,6 +73,7 @@ extension ServerWindowHarness {
         return ServerWindowHarness(
             store: store,
             profile: profile,
+            hermesProfileName: hermesProfileName,
             snapshotTransfer: snapshotTransfer,
             hostKeyCoordinator: hostKeyCoordinator
         )
@@ -87,7 +101,7 @@ extension ServerWindowHarness {
     /// Acquires the dashboard endpoint for this profile, publishing the
     /// resulting `DashboardClient` so views can observe it.
     func acquireDashboard() async {
-        let supervisor = makeIOSDashboardSupervisor()
+        let supervisor = makeIOSDashboardSupervisor(hermesProfileName: hermesProfileName)
         dashboardSupervisor = supervisor
         do {
             let endpoint = try await supervisor.acquire()
@@ -105,10 +119,11 @@ extension ServerWindowHarness {
         }
     }
 
-    /// Acquires a dashboard scoped to a *named* Hermes profile for the config
-    /// editor, separate from this window's shared `default` dashboard. iOS owns
-    /// its supervisors directly (no cross-window coordinator), so this builds a
-    /// fresh NIO-SSH-backed supervisor; the caller holds and releases it.
+    /// Acquires a dashboard scoped to a *named* Hermes profile, separate from
+    /// this window's shared dashboard. Used by the Configuration editor's
+    /// comparison column to reach a profile other than the window's active one.
+    /// iOS owns its supervisors directly (no cross-window coordinator), so this
+    /// builds a fresh NIO-SSH-backed supervisor; the caller holds and releases it.
     func acquireScopedDashboardClient(
         hermesProfileName: String
     ) async throws -> (DashboardSupervisor, DashboardClient) {

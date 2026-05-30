@@ -16,7 +16,8 @@ public final class SSHTransport: Transport, @unchecked Sendable {
         hermesPath: String = "hermes",
         hermesHome: String? = nil,
         remoteShellMode: RemoteShellMode = .direct,
-        remoteShellPrefix: String? = nil
+        remoteShellPrefix: String? = nil,
+        hermesProfileName: String? = nil
     ) {
         let arguments = Self.makeArguments(
             host: host,
@@ -26,7 +27,8 @@ public final class SSHTransport: Transport, @unchecked Sendable {
             hermesPath: hermesPath,
             hermesHome: hermesHome,
             remoteShellMode: remoteShellMode,
-            remoteShellPrefix: remoteShellPrefix
+            remoteShellPrefix: remoteShellPrefix,
+            hermesProfileName: hermesProfileName
         )
 
         self.processTransport = LocalProcessTransport(
@@ -43,7 +45,8 @@ public final class SSHTransport: Transport, @unchecked Sendable {
         hermesPath: String = "hermes",
         hermesHome: String? = nil,
         remoteShellMode: RemoteShellMode = .direct,
-        remoteShellPrefix: String? = nil
+        remoteShellPrefix: String? = nil,
+        hermesProfileName: String? = nil
     ) -> [String] {
         var arguments = ["-T", "-o", "BatchMode=yes"]
         if let port {
@@ -65,7 +68,8 @@ public final class SSHTransport: Transport, @unchecked Sendable {
                 hermesPath: hermesPath,
                 hermesHome: hermesHome,
                 remoteShellMode: remoteShellMode,
-                remoteShellPrefix: remoteShellPrefix
+                remoteShellPrefix: remoteShellPrefix,
+                hermesProfileName: hermesProfileName
             )
         )
         return arguments

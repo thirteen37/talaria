@@ -14,6 +14,7 @@ struct ConfigEditorHarnessBackupTests {
     private func makeState() -> ConfigEditingState {
         ConfigEditingState(
             profileName: HermesProfiles.defaultProfileName,
+            usesWindowClient: true,
             defaultClient: { nil },
             serverProfile: ServerProfile(name: "Test", kind: .local),
             transfer: nil,

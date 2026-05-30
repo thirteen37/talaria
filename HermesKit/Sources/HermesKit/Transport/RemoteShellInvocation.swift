@@ -39,13 +39,18 @@ public func buildHermesRemoteCommand(
     hermesPath: String,
     hermesHome: String?,
     remoteShellMode: RemoteShellMode,
-    remoteShellPrefix: String?
+    remoteShellPrefix: String?,
+    hermesProfileName: String? = nil
 ) -> String {
     var remoteParts: [String] = []
     if let hermesHome {
         remoteParts += ["env", ShellQuoting.shellQuote("HERMES_HOME=\(hermesHome)")]
     }
-    remoteParts += [ShellQuoting.shellQuote(hermesPath), "acp"]
+    // `-p <name>` is a global flag: it goes between the binary and the `acp`
+    // subcommand, and collapses to nothing for the default profile.
+    remoteParts += [ShellQuoting.shellQuote(hermesPath)]
+    remoteParts += HermesProfiles.remoteCLIFlag(hermesProfileName)
+    remoteParts += ["acp"]
     let inner = remoteParts.joined(separator: " ")
     return remoteShellMode.wrap(command: inner, customPrefix: remoteShellPrefix)
 }
@@ -53,12 +58,13 @@ public func buildHermesRemoteCommand(
 /// Convenience overload that pulls the remote-command knobs straight off a
 /// ``ServerProfile``. Both transports use this so the wrapped command stays
 /// identical across the system-ssh and NIO-SSH paths.
-public func buildHermesRemoteCommand(profile: ServerProfile) -> String {
+public func buildHermesRemoteCommand(profile: ServerProfile, hermesProfileName: String? = nil) -> String {
     buildHermesRemoteCommand(
         hermesPath: profile.hermesPath,
         hermesHome: profile.hermesHome,
         remoteShellMode: profile.remoteShellMode,
-        remoteShellPrefix: profile.remoteShellPrefix
+        remoteShellPrefix: profile.remoteShellPrefix,
+        hermesProfileName: hermesProfileName
     )
 }
 

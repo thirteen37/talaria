@@ -1,16 +1,20 @@
 import HermesKit
 import SwiftUI
 
-/// Container for the profile config editor. Hosts a single-profile
-/// structured/YAML editor with a toolbar profile picker, a Structured⇄YAML
-/// segmented toggle, a Save action, and (desktop only) a Compare mode that
-/// reveals a second profile picker and the editable two-column comparison.
+/// Container for the Configuration editor. Hosts a structured/YAML editor for the
+/// window's active Hermes profile (no in-editor picker — the primary profile is
+/// chosen by the window's top-level switcher), a Structured⇄YAML segmented
+/// toggle, a Save action, and (desktop only) a Compare mode that reveals a second
+/// profile picker and the editable two-column comparison.
 ///
 /// The same container backs both the desktop window and the iPhone Browse sheet
 /// (`BrowseDetailView` → `PhoneBrowseSheet`); Compare is gated off on iPhone,
 /// where the two-column layout is unusable.
 struct ConfigEditorContainer: View {
     let windowHarness: ServerWindowHarness
+    /// Profiles available on the server (for the compare dropdown), surfaced by
+    /// the window so the editor doesn't re-enumerate them.
+    let profiles: [HermesProfileInfo]
 
     @State private var editor: ConfigEditorHarness?
     @State private var showingExporter = false
@@ -34,19 +38,29 @@ struct ConfigEditorContainer: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .navigationTitle("Profiles")
+        .navigationTitle("Configuration")
         .task {
             guard editor == nil else { return }
             let harness = makeEditor()
             editor = harness
             await harness.start()
         }
-        // The window's default dashboard may come online after the editor first
-        // rendered (degraded). Re-load to upgrade to the live form.
+        // The window's dashboard may come online after the editor first rendered
+        // (degraded). Re-load to upgrade to the live form.
         .onChange(of: windowHarness.dashboardClient != nil) { _, hasClient in
             guard hasClient, let editor else { return }
             editor.reloadIfDashboardAppeared()
         }
+        // The window's Hermes-profile enumeration can land after the editor
+        // opened (a slow remote `profile list`). Feed it in so the Compare
+        // dropdown fills instead of staying empty for the editor's lifetime.
+        .onChange(of: profiles) { _, newProfiles in
+            editor?.setAvailableProfiles(newProfiles)
+        }
+        // Release every scoped dashboard the editor acquired (Compare spawns a
+        // live SSH/dashboard connection per compared profile) when the view goes
+        // away — navigating to another Browse destination, dismissing the iPhone
+        // Browse sheet, or the window rebuilding on a profile switch.
         .onDisappear {
             let harness = editor
             Task { await harness?.teardown() }
@@ -55,10 +69,13 @@ struct ConfigEditorContainer: View {
 
     private func makeEditor() -> ConfigEditorHarness {
         ConfigEditorHarness(
+            profiles: profiles,
+            editedProfileName: windowHarness.hermesProfileName,
             defaultClient: { [weak windowHarness] in windowHarness?.dashboardClient },
-            runner: windowHarness.store.adminRunner,
             profile: windowHarness.profile,
             transfer: windowHarness.snapshotTransfer,
+            // Comparison reaches a profile other than the window's active one, so
+            // it acquires that profile's own scoped dashboard.
             acquireScoped: { name in
                 try await windowHarness.acquireScopedDashboardClient(hermesProfileName: name)
             },
@@ -111,20 +128,13 @@ struct ConfigEditorContainer: View {
             }
             Button("Cancel", role: .cancel) { pendingRestoreText = nil }
         } message: {
-            Text("This overwrites the saved config for “\(editor.selectedProfile)” with the imported file.")
+            Text("This overwrites the saved config for “\(editor.editedProfileName)” with the imported file.")
         }
     }
 
     @ToolbarContentBuilder
     private func toolbar(_ editor: ConfigEditorHarness) -> some ToolbarContent {
         ToolbarItemGroup {
-            Picker("Profile", selection: Binding(
-                get: { editor.selectedProfile },
-                set: { name in Task { await editor.selectProfile(name) } }
-            )) {
-                ForEach(editor.profiles) { Text($0.name).tag($0.name) }
-            }
-
             if !editor.comparing {
                 Picker("View", selection: Binding(
                     get: { editor.source.mode },
@@ -150,7 +160,7 @@ struct ConfigEditorContainer: View {
                     get: { editor.compareProfile },
                     set: { editor.setCompareProfile($0) }
                 )) {
-                    ForEach(editor.profiles.filter { $0.name != editor.selectedProfile }) {
+                    ForEach(editor.profiles.filter { $0.name != editor.editedProfileName }) {
                         Text($0.name).tag($0.name)
                     }
                 }
@@ -194,9 +204,6 @@ struct ConfigEditorContainer: View {
         if let error = editor.lastError { return error }
         if editor.source.dashboardUnavailable {
             return "Dashboard unavailable — showing the on-disk config read-only. Save is disabled."
-        }
-        if editor.profilesUnavailable {
-            return "Profile listing is unavailable in this Hermes version."
         }
         return nil
     }

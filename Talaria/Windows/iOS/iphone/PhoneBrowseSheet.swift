@@ -8,6 +8,9 @@ import SwiftUI
 /// toolbar button instead of a sidebar.
 struct PhoneBrowseSheet: View {
     let harness: ServerWindowHarness
+    /// Hermes profiles on the server, surfaced by the window — fed to the
+    /// Configuration editor's compare dropdown.
+    var hermesProfiles: [HermesProfileInfo] = []
     /// Optional deep link (e.g. the bell → Notifications): seeds the stack so
     /// the sheet opens directly on that surface.
     var initial: BrowseDestination?
@@ -47,6 +50,7 @@ struct PhoneBrowseSheet: View {
                 BrowseDetailView(
                     harness: harness,
                     destination: destination,
+                    hermesProfiles: hermesProfiles,
                     // Keep deep links inside this sheet's stack (e.g. a
                     // notification's "Open Doctor" pushes Doctor here).
                     onOpenDestination: { dest in path.append(dest) }

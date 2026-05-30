@@ -50,11 +50,15 @@ final class ConfigEditingState: Identifiable {
     private let acquireScoped: @MainActor (String) async throws -> DashboardClient
     private let releaseScoped: @MainActor (String) async -> Void
 
-    private var isDefaultProfile: Bool { profileName == HermesProfiles.defaultProfileName }
+    /// True when this state edits the window's **active** Hermes profile, whose
+    /// dashboard the window already runs (`hermes -p <name>`). Such a state reads
+    /// the window's shared client live (so it upgrades when the dashboard
+    /// arrives) instead of acquiring its own from the pool. A comparison column
+    /// targeting any *other* profile is scoped (`false`).
+    private let usesWindowClient: Bool
 
     // One scoped hold per state: acquired lazily on first use, released in
-    // `teardown()`. The default profile never touches the pool — it reads the
-    // window's shared client live so it can upgrade when the dashboard arrives.
+    // `teardown()`. A window-client state never touches the pool.
     private var scopedClient: DashboardClient?
     private var didAcquireScoped = false
 
@@ -64,6 +68,7 @@ final class ConfigEditingState: Identifiable {
 
     init(
         profileName: String,
+        usesWindowClient: Bool,
         defaultClient: @escaping @MainActor () -> DashboardClient?,
         serverProfile: ServerProfile,
         transfer: RemoteSnapshotTransfer?,
@@ -71,6 +76,7 @@ final class ConfigEditingState: Identifiable {
         releaseScoped: @escaping @MainActor (String) async -> Void
     ) {
         self.profileName = profileName
+        self.usesWindowClient = usesWindowClient
         self.defaultClientProvider = defaultClient
         self.serverProfile = serverProfile
         self.transfer = transfer
@@ -137,11 +143,11 @@ final class ConfigEditingState: Identifiable {
         await loadTask?.value
     }
 
-    /// Re-runs the load when the window's default dashboard comes online after an
-    /// initial degraded render (the editor opened before the spawn finished).
-    /// Only the default-profile state observes the window client.
+    /// Re-runs the load when the window's dashboard comes online after an initial
+    /// degraded render (the editor opened before the spawn finished). Only a
+    /// window-client state observes the window client.
     func reloadIfDashboardAppeared() {
-        guard dashboardUnavailable, isDefaultProfile, defaultClientProvider() != nil else { return }
+        guard dashboardUnavailable, usesWindowClient, defaultClientProvider() != nil else { return }
         load()
     }
 
@@ -168,11 +174,11 @@ final class ConfigEditingState: Identifiable {
         }
     }
 
-    /// Resolves this state's dashboard client. The default profile reads the
-    /// window's shared client live; a named profile acquires its scoped client
+    /// Resolves this state's dashboard client. A window-client state reads the
+    /// window's shared client live; any other profile acquires its scoped client
     /// from the pool exactly once and caches it for the state's lifetime.
     private func currentClient() async -> DashboardClient? {
-        if isDefaultProfile {
+        if usesWindowClient {
             return defaultClientProvider()
         }
         if let scopedClient {
