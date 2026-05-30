@@ -75,6 +75,20 @@ struct ChatTranscriptMessage: Identifiable, Equatable {
     }
 }
 
+extension ToolCallStatus {
+    /// Active states keep the tool card expanded; terminal states collapse it.
+    var isActive: Bool {
+        self == .pending || self == .inProgress
+    }
+}
+
+extension Optional where Wrapped == ToolCallStatus {
+    /// A `nil` status (e.g. an allowed-and-cleared permission) is treated as terminal.
+    var isActive: Bool {
+        self?.isActive ?? false
+    }
+}
+
 struct PermissionPromptState: Identifiable {
     let id: JSONRPCID
     var request: RequestPermissionRequest

@@ -16,8 +16,9 @@ struct ChatView: View {
                             ContentUnavailableView("No Session", systemImage: "bubble.left.and.bubble.right")
                                 .frame(maxWidth: .infinity, minHeight: 360)
                         } else {
+                            let lastId = viewModel.messages.last?.id
                             ForEach(viewModel.messages) { message in
-                                TranscriptRow(message: message)
+                                TranscriptRow(message: message, isLast: message.id == lastId)
                                     .id(message.id)
                             }
                         }
