@@ -82,40 +82,35 @@ final class UpdatesHarness {
 }
 
 struct UpdatesView: View {
-    let client: DashboardClient?
+    let updates: UpdatesHarness?
     let hermesVersion: HermesVersion?
 
-    @State private var harness: UpdatesHarness?
-
-    init(client: DashboardClient?, hermesVersion: HermesVersion? = nil) {
-        self.client = client
+    init(updates: UpdatesHarness?, hermesVersion: HermesVersion? = nil) {
+        self.updates = updates
         self.hermesVersion = hermesVersion
     }
 
     var body: some View {
         Group {
-            if client == nil {
+            if let updates {
+                content(harness: updates)
+            } else {
+                // The harness is built by the window once the dashboard client
+                // is acquired; until then there's nothing to show.
                 ContentUnavailableView(
                     "Dashboard not ready",
                     systemImage: "arrow.triangle.2.circlepath",
                     description: Text("Waiting for the Hermes dashboard to come online.")
                 )
-            } else if let harness {
-                content(harness: harness)
-            } else {
-                ProgressView()
             }
         }
         .navigationTitle("Updates")
-        // Keyed on client availability so the harness is built when the
-        // dashboard finishes booting and `client` flips non-nil, not only on
-        // first appear (a bare `.task` on the Group never re-runs for that flip).
-        .task(id: client != nil) {
-            guard let client else { harness = nil; return }
-            if harness != nil { return }
-            let h = UpdatesHarness(service: DashboardUpdatesService(client: client))
-            harness = h
-            await h.refresh()
+        // Load the version banner once when the harness first becomes available.
+        // `state == nil` guards against clobbering an in-flight apply when the
+        // user navigates back mid-apply — the apply log persists.
+        .task(id: updates != nil) {
+            guard let updates, updates.state == nil else { return }
+            await updates.refresh()
         }
     }
 

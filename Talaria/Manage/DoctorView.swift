@@ -1,26 +1,69 @@
 import HermesKit
 import SwiftUI
 
-struct DoctorView: View {
+/// Window-owned (not view-owned) holder for the Doctor run state. Sits on
+/// `ServerWindowHarness` like `WindowNotificationCenter`, so a run survives
+/// Browse navigation that destroys `DoctorView`. The view is a thin observer.
+@MainActor
+@Observable
+final class DoctorHarness {
+    var report: DoctorReport?
+    var isRunning = false
+    var lastError: String?
+    var expanded: Set<Int> = []
+
     let runner: HermesAdminRunning?
+    private var runTask: Task<Void, Never>?
+
+    init(runner: HermesAdminRunning?) { self.runner = runner }
+
+    func runDoctor() { run { try await HermesDoctor.run(runner: $0) } }
+    func runFix()    { run { try await HermesDoctor.runFix(runner: $0) } }
+
+    /// Owns the Task so it is NOT tied to the view's lifecycle — the whole
+    /// point of the fix. A run started here keeps going and writes back to
+    /// the (harness-held) state even if the user navigates away mid-run.
+    private func run(_ op: @escaping @Sendable (HermesAdminRunning) async throws -> DoctorReport) {
+        guard let runner else { return }
+        runTask?.cancel()
+        runTask = Task { [weak self] in
+            guard let self else { return }
+            self.isRunning = true
+            defer { self.isRunning = false }
+            self.lastError = nil
+            do {
+                let r = try await op(runner)
+                self.report = r
+                self.expanded = Set(r.sections.map(\.id))
+            } catch {
+                self.lastError = error.localizedDescription
+            }
+        }
+    }
+
+    func cancelRun() { runTask?.cancel(); runTask = nil }
+
+    /// Awaits the in-flight run, if any. Lets tests deterministically wait
+    /// for the harness-owned Task; harmless in app code.
+    func waitForCompletion() async { await runTask?.value }
+}
+
+struct DoctorView: View {
+    let doctor: DoctorHarness
     let profile: ServerProfile
     let client: DashboardClient?
     let hermesVersion: HermesVersion?
 
-    @State private var report: DoctorReport?
-    @State private var isRunning = false
-    @State private var lastError: String?
-    @State private var expanded: Set<Int> = []
     @State private var dashboardReachable: Bool?
     @State private var dashboardReachabilityError: String?
 
     init(
-        runner: HermesAdminRunning?,
+        doctor: DoctorHarness,
         profile: ServerProfile,
         client: DashboardClient? = nil,
         hermesVersion: HermesVersion? = nil
     ) {
-        self.runner = runner
+        self.doctor = doctor
         self.profile = profile
         self.client = client
         self.hermesVersion = hermesVersion
@@ -32,7 +75,7 @@ struct DoctorView: View {
             // dashboard to probe, even where no admin runner exists (iPad,
             // where `runner` is always nil). Only show the hard "unavailable"
             // state when neither a runner nor a dashboard client is present.
-            if runner == nil && client == nil {
+            if doctor.runner == nil && client == nil {
                 ContentUnavailableView(
                     "Doctor unavailable",
                     systemImage: "stethoscope",
@@ -53,7 +96,7 @@ struct DoctorView: View {
         VStack(alignment: .leading, spacing: 0) {
             prereqSection
             Divider()
-            if runner != nil {
+            if doctor.runner != nil {
                 doctorRunSection
             } else {
                 // No CLI admin runner on this platform (e.g. iPad). The prereq
@@ -68,29 +111,29 @@ struct DoctorView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .manageBanner(lastError)
+        .manageBanner(doctor.lastError)
     }
 
     @ViewBuilder
     private var doctorRunSection: some View {
         HStack(spacing: 8) {
             Button {
-                Task { await runDoctor() }
+                doctor.runDoctor()
             } label: {
                 Label("Run Doctor", systemImage: "play.fill")
             }
-            .disabled(isRunning)
+            .disabled(doctor.isRunning)
 
-            if report?.suggestsFix == true {
+            if doctor.report?.suggestsFix == true {
                 Button {
-                    Task { await runFix() }
+                    doctor.runFix()
                 } label: {
                     Label("Run Fixes", systemImage: "wrench.and.screwdriver")
                 }
-                .disabled(isRunning)
+                .disabled(doctor.isRunning)
             }
 
-            if let report {
+            if let report = doctor.report {
                 Button {
                     copyBundle(report)
                 } label: {
@@ -98,10 +141,10 @@ struct DoctorView: View {
                 }
             }
 
-            if isRunning { ProgressView().controlSize(.small) }
+            if doctor.isRunning { ProgressView().controlSize(.small) }
 
             Spacer()
-            if let report {
+            if let report = doctor.report {
                 Text("Exit \(report.exitCode)")
                     .font(.caption)
                     .foregroundStyle(report.exitCode == 0 ? .green : .orange)
@@ -111,7 +154,7 @@ struct DoctorView: View {
         .padding(.vertical, 8)
         Divider()
 
-        if let report {
+        if let report = doctor.report {
             reportView(report)
         } else {
             ContentUnavailableView(
@@ -130,9 +173,9 @@ struct DoctorView: View {
                 ForEach(report.sections) { section in
                     DisclosureGroup(
                         isExpanded: Binding(
-                            get: { expanded.contains(section.id) },
+                            get: { doctor.expanded.contains(section.id) },
                             set: { newValue in
-                                if newValue { expanded.insert(section.id) } else { expanded.remove(section.id) }
+                                if newValue { doctor.expanded.insert(section.id) } else { doctor.expanded.remove(section.id) }
                             }
                         )
                     ) {
@@ -151,34 +194,6 @@ struct DoctorView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func runDoctor() async {
-        guard let runner else { return }
-        isRunning = true
-        defer { isRunning = false }
-        lastError = nil
-        do {
-            let r = try await HermesDoctor.run(runner: runner)
-            report = r
-            expanded = Set(r.sections.map(\.id))
-        } catch {
-            lastError = error.localizedDescription
-        }
-    }
-
-    private func runFix() async {
-        guard let runner else { return }
-        isRunning = true
-        defer { isRunning = false }
-        lastError = nil
-        do {
-            let r = try await HermesDoctor.runFix(runner: runner)
-            report = r
-            expanded = Set(r.sections.map(\.id))
-        } catch {
-            lastError = error.localizedDescription
-        }
     }
 
     @ViewBuilder
