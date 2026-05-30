@@ -181,6 +181,25 @@ extension ServerWindowHarness {
         }
     }
 
+    /// Acquires a dashboard scoped to a *named* Hermes profile, separate from
+    /// this window's shared dashboard. Used by the Configuration editor's
+    /// comparison column to reach a profile other than the window's active one.
+    /// The caller (the editor's `ScopedDashboardPool`) holds the returned
+    /// supervisor and releases it via ``releaseScopedDashboard(_:)``.
+    func acquireScopedDashboardClient(
+        hermesProfileName: String
+    ) async throws -> (DashboardSupervisor, DashboardClient) {
+        let (endpoint, supervisor) = try await DashboardCoordinator.shared.acquire(
+            profile: profile,
+            hermesProfileName: hermesProfileName
+        )
+        return (supervisor, endpoint.session.client())
+    }
+
+    func releaseScopedDashboard(_ supervisor: DashboardSupervisor) async {
+        await DashboardCoordinator.shared.release(supervisor)
+    }
+
     /// Cancels long-lived per-window resources when the SwiftUI window
     /// disappears. Releases this window's refcount on the per-profile dashboard
     /// supervisor — the last release terminates the spawned `hermes dashboard`

@@ -119,6 +119,23 @@ extension ServerWindowHarness {
         }
     }
 
+    /// Acquires a dashboard scoped to a *named* Hermes profile, separate from
+    /// this window's shared dashboard. Used by the Configuration editor's
+    /// comparison column to reach a profile other than the window's active one.
+    /// iOS owns its supervisors directly (no cross-window coordinator), so this
+    /// builds a fresh NIO-SSH-backed supervisor; the caller holds and releases it.
+    func acquireScopedDashboardClient(
+        hermesProfileName: String
+    ) async throws -> (DashboardSupervisor, DashboardClient) {
+        let supervisor = makeIOSDashboardSupervisor(hermesProfileName: hermesProfileName)
+        let endpoint = try await supervisor.acquire()
+        return (supervisor, endpoint.session.client())
+    }
+
+    func releaseScopedDashboard(_ supervisor: DashboardSupervisor) async {
+        await supervisor.release()
+    }
+
     func tearDown() {
         if dashboardStarted, !dashboardReleased {
             dashboardReleased = true

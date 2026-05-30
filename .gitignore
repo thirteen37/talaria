@@ -5,3 +5,9 @@ xcuserdata/
 *.xcuserstate
 .omc/
 .claude/
+
+# Xcode overwrites the embedded HermesKit package's resolved file with the app's
+# full dependency graph (e.g. a stray Sparkle pin HermesKit doesn't depend on).
+# The authoritative lock is the app workspace's Package.resolved; this derived
+# inner file only churns, so don't track it.
+HermesKit/Package.resolved

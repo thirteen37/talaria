@@ -5,11 +5,11 @@ import SwiftUI
 /// its degraded, dashboard-unavailable state. Parse errors surface inline and
 /// block Save without discarding the user's text.
 struct YAMLConfigEditor: View {
-    let harness: ConfigEditorHarness
+    let state: ConfigEditingState
 
     var body: some View {
         VStack(spacing: 0) {
-            if let error = harness.yamlParseError {
+            if let error = state.yamlParseError {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
@@ -23,10 +23,10 @@ struct YAMLConfigEditor: View {
                 .background(.orange.opacity(0.12))
             }
 
-            if harness.dashboardUnavailable {
+            if state.dashboardUnavailable {
                 // Read-only on-disk config: no dashboard to write back to.
                 ScrollView {
-                    Text(harness.yamlText.isEmpty ? "No config available." : harness.yamlText)
+                    Text(state.yamlText.isEmpty ? "No config available." : state.yamlText)
                         .font(.system(.body, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -34,8 +34,8 @@ struct YAMLConfigEditor: View {
                 }
             } else {
                 TextEditor(text: Binding(
-                    get: { harness.yamlText },
-                    set: { harness.yamlText = $0; harness.yamlChanged() }
+                    get: { state.yamlText },
+                    set: { state.yamlText = $0; state.yamlChanged() }
                 ))
                 .font(.system(.body, design: .monospaced))
                 .autocorrectionDisabled()
