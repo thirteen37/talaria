@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 import HermesKit
 
@@ -43,4 +42,3 @@ struct PathAwareHermesAdminRunner: HermesAdminRunning {
         }
     }
 }
-#endif

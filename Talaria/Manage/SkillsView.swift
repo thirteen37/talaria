@@ -86,8 +86,11 @@ struct SkillsView: View {
 
     @ViewBuilder
     private func content(harness: SkillsHarness) -> some View {
-        #if os(macOS)
-        HSplitView {
+        // Reachable only from the desktop window's Browse sidebar (macOS +
+        // iPad); the iPhone shell has no Browse, so this never renders there.
+        // `PlatformSplit` is a resizable `HSplitView` on macOS and an
+        // `HStack`+`Divider` on iPad — no `#if`.
+        PlatformSplit {
             Table(harness.rows, selection: Binding(
                 get: { harness.selectionID },
                 set: { harness.selectionID = $0 }
@@ -122,11 +125,10 @@ struct SkillsView: View {
             }
             .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
             .id(harness.rows.map(\.name).joined())
-
+        } secondary: {
             previewPane(harness: harness)
                 .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar {
             ToolbarItem {
                 Button {
@@ -145,12 +147,6 @@ struct SkillsView: View {
             ),
             severity: harness.lastError != nil ? .error : .warning
         )
-        #else
-        // The Skills surface is only reachable on macOS/iPad's full sidebar.
-        // On iOS the runner is always nil so this branch never renders;
-        // stub it out so the file compiles for iOS.
-        ContentUnavailableView("Skills unavailable", systemImage: "wand.and.stars")
-        #endif
     }
 
     @ViewBuilder

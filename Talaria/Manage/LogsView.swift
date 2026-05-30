@@ -303,9 +303,6 @@ struct LogsView: View {
     }
 
     private func copyToPasteboard(_ text: String) {
-        #if os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        #endif
+        Pasteboard.copy(text)
     }
 }

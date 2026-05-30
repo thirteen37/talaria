@@ -2,7 +2,7 @@ import SwiftUI
 
 struct SettingsScene: View {
     var body: some View {
-        ProfileEditor()
+        DesktopProfileEditor()
             .frame(minWidth: 520, minHeight: 360)
     }
 }

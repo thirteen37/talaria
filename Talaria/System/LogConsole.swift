@@ -1,9 +1,6 @@
 import Foundation
 import OSLog
 import SwiftUI
-#if canImport(UIKit)
-import UIKit
-#endif
 
 /// Reads this process's own `os.Logger` entries (subsystem prefix
 /// `com.talaria`) back out via `OSLogStore` so they can be shown on-device.
@@ -86,43 +83,14 @@ struct LogConsoleView: View {
                 }
             }
             .navigationTitle("Logs")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                toolbarContent
-            }
+            .inlineNavigationTitle()
+            .logConsoleToolbar(
+                onCopy: { copyAll() },
+                onRefresh: { Task { await reload() } },
+                onDismiss: onDismiss
+            )
             .task { await reload() }
         }
-    }
-
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-        #if os(iOS)
-        ToolbarItem(placement: .topBarLeading) {
-            Button("Done", action: onDismiss)
-        }
-        ToolbarItemGroup(placement: .topBarTrailing) {
-            Button {
-                copyAll()
-            } label: {
-                Image(systemName: "doc.on.doc")
-            }
-            .accessibilityLabel("Copy logs")
-            Button {
-                Task { await reload() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .accessibilityLabel("Refresh logs")
-        }
-        #else
-        ToolbarItemGroup {
-            Button("Copy") { copyAll() }
-            Button("Refresh") { Task { await reload() } }
-            Button("Done", action: onDismiss)
-        }
-        #endif
     }
 
     private func reload() async {
@@ -138,8 +106,6 @@ struct LogConsoleView: View {
         let text = entries
             .map { "\($0.date.formatted(date: .omitted, time: .standard)) [\($0.category)/\($0.level)] \($0.message)" }
             .joined(separator: "\n")
-        #if os(iOS)
-        UIPasteboard.general.string = text
-        #endif
+        Pasteboard.copy(text)
     }
 }
