@@ -371,7 +371,13 @@ final class ConfigEditingState: Identifiable {
         return (try? YAMLConfigCodec.yaml(from: original)) ?? ""
     }
 
-    var canExportBackup: Bool { !backupYAML.isEmpty }
+    /// Whether there's anything to back up. Mirrors `backupYAML` being non-empty
+    /// but without serializing — this is read on every toolbar recomputation
+    /// (i.e. each keystroke), so it must stay cheap.
+    var canExportBackup: Bool {
+        if dashboardUnavailable { return !yamlText.isEmpty }
+        return original != nil
+    }
 
     var backupFilename: String { "\(profileName)-config.yaml" }
 

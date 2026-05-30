@@ -16,6 +16,9 @@ struct ConfigEditorContainer: View {
     @State private var showingExporter = false
     @State private var showingImporter = false
     @State private var pendingRestoreText: String?
+    /// Built once when Download is tapped (not on every body pass) so the YAML
+    /// serialization doesn't run on each keystroke while editing.
+    @State private var exportDocument: YAMLFileDocument?
 
     /// Compare needs the room a desktop split has and at least two profiles to
     /// line up. iPhone reuses this container without it.
@@ -82,7 +85,7 @@ struct ConfigEditorContainer: View {
         .toolbar { toolbar(editor) }
         .manageBanner(banner(editor), severity: editor.source.lastError != nil || editor.lastError != nil ? .error : .warning)
         .fileExporter(isPresented: $showingExporter,
-                      document: YAMLFileDocument(text: editor.source.backupYAML),
+                      document: exportDocument,
                       contentType: .hermesYAML,
                       defaultFilename: editor.source.backupFilename) { result in
             if case .failure(let e) = result { editor.source.lastError = e.localizedDescription }
@@ -152,7 +155,10 @@ struct ConfigEditorContainer: View {
                     }
                 }
             } else {
-                Button { showingExporter = true } label: {
+                Button {
+                    exportDocument = YAMLFileDocument(text: editor.source.backupYAML)
+                    showingExporter = true
+                } label: {
                     Label("Download", systemImage: "square.and.arrow.down")
                 }
                 .disabled(!editor.source.canExportBackup)
