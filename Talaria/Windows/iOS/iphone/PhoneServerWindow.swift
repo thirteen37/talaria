@@ -23,8 +23,16 @@ struct PhoneServerWindow: View {
         Group {
             if let harness {
                 content(harness: harness)
-            } else {
+            } else if directory.profiles.isEmpty {
+                // iPhone is remote-only (no bundled local profile), so an empty
+                // list is a genuine no-server state. Distinguish it from the
+                // brief window where the harness is still building after launch
+                // (directory reload in flight) so we don't flash the empty-state
+                // CTA over configured servers.
                 noServerConfiguredView
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .navigationTitle(harness?.profile.name ?? directory.profile(id: currentProfileId)?.name ?? "Hermes")
