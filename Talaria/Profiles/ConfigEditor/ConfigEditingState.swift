@@ -250,6 +250,16 @@ final class ConfigEditingState: Identifiable {
         return ProfileConfigForm.configValue(from: leaf, schemaType: field.schema?.type)
     }
 
+    /// The field's value from the last load (`original`), not the live `working`
+    /// edit. Used by the comparison's "Differences only" filter so the filter
+    /// reads the loaded baseline — which changes only on load/save — instead of
+    /// `working`, keeping per-keystroke edits from re-running the whole-union
+    /// diff and from filtering a row out from under an active edit.
+    func originalValue(for field: ConfigFormField) -> ConfigValue {
+        guard let original, let leaf = ProfileConfigForm.value(at: field.key, in: original) else { return .missing }
+        return ProfileConfigForm.configValue(from: leaf, schemaType: field.schema?.type)
+    }
+
     private func setWorking(_ key: String, _ json: JSONValue) {
         working = ProfileConfigForm.setValue(json, at: key, in: working)
     }
@@ -364,5 +374,46 @@ final class ConfigEditingState: Identifiable {
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    // MARK: - Backup (export / restore)
+
+    /// YAML of the LAST-SAVED config (never the live edited buffer), for download.
+    /// In the degraded (dashboard-unavailable) state `yamlText` already holds the
+    /// on-disk config, so back that up instead.
+    var backupYAML: String {
+        if dashboardUnavailable { return yamlText }
+        guard let original else { return "" }
+        return (try? YAMLConfigCodec.yaml(from: original)) ?? ""
+    }
+
+    /// Whether there's anything to back up. Mirrors `backupYAML` being non-empty
+    /// but without serializing — this is read on every toolbar recomputation
+    /// (i.e. each keystroke), so it must stay cheap.
+    var canExportBackup: Bool {
+        if dashboardUnavailable { return !yamlText.isEmpty }
+        return original != nil
+    }
+
+    var backupFilename: String { "\(profileName)-config.yaml" }
+
+    /// Parses an imported file and writes it to the server as the whole document
+    /// (mirrors YAML-mode save), then reloads. No-op without a live dashboard.
+    func restore(fromYAML text: String) async {
+        guard !dashboardUnavailable else { lastError = "Dashboard is unavailable; can't restore."; return }
+        let parsed: JSONValue
+        do { parsed = try YAMLConfigCodec.jsonValue(fromYAML: text) }
+        catch { lastError = "Imported file isn't valid config YAML: \(error.localizedDescription)"; return }
+        // A blank / whitespace / comments-only file parses to an empty object;
+        // PUTting it would silently wipe the saved config, so reject it instead.
+        if case .object(let o) = parsed, o.isEmpty {
+            lastError = "Imported file is empty; nothing to restore."
+            return
+        }
+        isLoading = true
+        defer { isLoading = false }
+        guard let client = await currentClient() else { lastError = "Dashboard is unavailable; can't restore."; return }
+        do { try await client.updateConfig(parsed); load() }
+        catch { lastError = error.localizedDescription }
     }
 }
