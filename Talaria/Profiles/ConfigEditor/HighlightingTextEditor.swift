@@ -101,8 +101,12 @@ extension HighlightingTextEditor {
             private func scheduleHighlight(for textView: NSTextView) {
                 pending?.cancel()
                 let work = DispatchWorkItem { [weak textView] in
-                    guard let textView, let storage = textView.textStorage else { return }
-                    rehighlight(storage, text: textView.string)
+                    // Dispatched onto the main queue, so the text view's
+                    // main-actor state is safe to touch here.
+                    MainActor.assumeIsolated {
+                        guard let textView, let storage = textView.textStorage else { return }
+                        rehighlight(storage, text: textView.string)
+                    }
                 }
                 pending = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + highlightDebounce, execute: work)
@@ -167,11 +171,15 @@ extension HighlightingTextEditor {
             private func scheduleHighlight(for textView: UITextView) {
                 pending?.cancel()
                 let work = DispatchWorkItem { [weak textView] in
-                    guard let textView else { return }
-                    let selected = textView.selectedRange
-                    rehighlight(textView.textStorage, text: textView.text ?? "")
-                    textView.selectedRange = selected
-                    textView.typingAttributes = YAMLHighlightTheme.baseAttributes
+                    // Dispatched onto the main queue, so the text view's
+                    // main-actor state is safe to touch here.
+                    MainActor.assumeIsolated {
+                        guard let textView else { return }
+                        let selected = textView.selectedRange
+                        rehighlight(textView.textStorage, text: textView.text ?? "")
+                        textView.selectedRange = selected
+                        textView.typingAttributes = YAMLHighlightTheme.baseAttributes
+                    }
                 }
                 pending = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + highlightDebounce, execute: work)
