@@ -14,6 +14,10 @@ struct DesktopServerWindow: View {
     @State private var harness: ServerWindowHarness?
     @State private var browse: BrowseDestination? = .sessions
     @State private var showingSettings = false
+    /// Sidebar visibility, driven by our custom toggle. We manage it ourselves
+    /// (rather than letting the system own the sidebar button) so the toggle can
+    /// carry a notification badge that stays visible when the sidebar collapses.
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     /// Live profile shown in this window. Diverges from `profileId` (the
     /// `WindowGroup` launch value) once the user picks a different profile from
     /// the sidebar switcher; the harness rebuild keys off this.
@@ -183,10 +187,18 @@ struct DesktopServerWindow: View {
 
     @ViewBuilder
     private func content(harness: ServerWindowHarness) -> some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar(harness: harness)
         } detail: {
             detail(harness: harness)
+        }
+        // Swap the system sidebar toggle for our own so it can show a red dot
+        // when the window has active notifications — visible even when the
+        // sidebar is collapsed and the Notifications row is out of view.
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                sidebarToggle(harness: harness)
+            }
         }
         .alert(
             "Trust this server?",
@@ -220,12 +232,7 @@ struct DesktopServerWindow: View {
                 onSwitchProfile: switchProfile,
                 hermesProfiles: hermesProfiles,
                 activeHermesProfile: activeHermesProfile,
-                onSwitchHermesProfile: switchHermesProfile,
-                notifications: harness.notifications,
-                onOpenNotifications: {
-                    harness.store.selection = nil
-                    browse = .notifications
-                }
+                onSwitchHermesProfile: switchHermesProfile
             )
                 .onChange(of: harness.store.selection) { _, newValue in
                     if newValue != nil {
@@ -267,7 +274,7 @@ struct DesktopServerWindow: View {
 
             Section("Browse") {
                 browseRow(.sessions, store: harness.store)
-                ForEach(BrowseDestination.manageOrder.filter { $0 != .notifications }, id: \.self) { destination in
+                ForEach(BrowseDestination.manageOrder, id: \.self) { destination in
                     browseRow(destination, store: harness.store)
                 }
             }
@@ -275,6 +282,9 @@ struct DesktopServerWindow: View {
         // iPad surfaces a gear to open the editor (no Settings scene there);
         // no-op on macOS.
         .platformSettingsToolbarItem { showingSettings = true }
+        // The default sidebar toggle is replaced by `sidebarToggle` (attached to
+        // the split view) so we can badge it with a notification dot.
+        .toolbar(removing: .sidebarToggle)
         .navigationSplitViewColumnWidth(min: 220, ideal: 240)
     }
 
@@ -320,6 +330,34 @@ struct DesktopServerWindow: View {
         let user = profile.user.map { "\($0)@" } ?? ""
         let port = profile.port.map { ":\($0)" } ?? ""
         return "\(user)\(host)\(port)"
+    }
+
+    /// Replacement for the system sidebar toggle. Toggles `columnVisibility` and
+    /// shows a small red dot when the window has active notifications, so the
+    /// indicator is reachable even with the sidebar (and its Notifications row)
+    /// collapsed.
+    private func sidebarToggle(harness: ServerWindowHarness) -> some View {
+        Button {
+            withAnimation {
+                columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
+            }
+        } label: {
+            Image(systemName: "sidebar.leading")
+                .overlay(alignment: .topTrailing) {
+                    if !harness.notifications.issues.isEmpty {
+                        Circle()
+                            .fill(.red)
+                            .frame(width: 6, height: 6)
+                            .offset(x: 4, y: -3)
+                    }
+                }
+        }
+        .help("Toggle Sidebar")
+        .accessibilityLabel(
+            harness.notifications.issues.isEmpty
+                ? "Toggle Sidebar"
+                : "Toggle Sidebar, \(harness.notifications.issues.count) notification(s)"
+        )
     }
 
     private func browseRow(_ destination: BrowseDestination, store: SessionsStore) -> some View {

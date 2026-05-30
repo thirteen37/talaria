@@ -11,8 +11,6 @@ struct SessionsSidebar: View {
     /// The window's active Hermes profile name.
     let activeHermesProfile: String
     let onSwitchHermesProfile: (String) -> Void
-    let notifications: WindowNotificationCenter
-    let onOpenNotifications: () -> Void
 
     @State private var renameTarget: SessionsStore.OpenSession?
     @State private var renameText: String = ""
@@ -25,9 +23,7 @@ struct SessionsSidebar: View {
         onSwitchProfile: @escaping (UUID) -> Void = { _ in },
         hermesProfiles: [HermesProfileInfo] = [],
         activeHermesProfile: String = HermesProfiles.defaultProfileName,
-        onSwitchHermesProfile: @escaping (String) -> Void = { _ in },
-        notifications: WindowNotificationCenter,
-        onOpenNotifications: @escaping () -> Void = {}
+        onSwitchHermesProfile: @escaping (String) -> Void = { _ in }
     ) {
         self.store = store
         self.profile = profile
@@ -36,22 +32,16 @@ struct SessionsSidebar: View {
         self.hermesProfiles = hermesProfiles
         self.activeHermesProfile = activeHermesProfile
         self.onSwitchHermesProfile = onSwitchHermesProfile
-        self.notifications = notifications
-        self.onOpenNotifications = onOpenNotifications
     }
 
     var body: some View {
         Group {
             Section {
-                HStack(spacing: 6) {
-                    ProfileHeader(
-                        current: profile,
-                        profiles: profiles,
-                        onSelect: onSwitchProfile
-                    )
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    NotificationBell(center: notifications, onOpen: onOpenNotifications)
-                }
+                ProfileHeader(
+                    current: profile,
+                    profiles: profiles,
+                    onSelect: onSwitchProfile
+                )
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 // Second stacked menu: the window's active Hermes profile.
@@ -194,6 +184,8 @@ struct SessionsSidebar: View {
         let profiles: [ServerProfile]
         let onSelect: (UUID) -> Void
 
+        @State private var isHovering = false
+
         var body: some View {
             Menu {
                 ForEach(profiles) { p in
@@ -212,20 +204,30 @@ struct SessionsSidebar: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: current.kind == .ssh ? "network" : "desktopcomputer")
-                        .foregroundStyle(.secondary)
+                        .imageScale(.small)
+                        .foregroundStyle(.primary)
                     Text(current.name)
                         .font(.headline)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
                     Spacer(minLength: 0)
+                    Image(systemName: "chevron.down")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.primary)
                 }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isHovering ? Color.primary.opacity(0.08) : Color.clear)
+                )
                 .contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .fixedSize(horizontal: false, vertical: true)
+            .onHover { isHovering = $0 }
         }
     }
 
@@ -237,6 +239,8 @@ struct SessionsSidebar: View {
         let active: String
         let profiles: [HermesProfileInfo]
         let onSelect: (String) -> Void
+
+        @State private var isHovering = false
 
         var body: some View {
             Menu {
@@ -256,21 +260,30 @@ struct SessionsSidebar: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "person.crop.circle")
+                        .imageScale(.small)
                         .foregroundStyle(.secondary)
                     Text("Profile: \(active)")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                    Image(systemName: "chevron.down")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
                     Spacer(minLength: 0)
+                    Image(systemName: "chevron.down")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
                 }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isHovering ? Color.primary.opacity(0.08) : Color.clear)
+                )
                 .contentShape(Rectangle())
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .fixedSize(horizontal: false, vertical: true)
+            .onHover { isHovering = $0 }
         }
     }
 

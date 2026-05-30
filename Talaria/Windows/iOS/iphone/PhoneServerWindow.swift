@@ -234,13 +234,7 @@ struct PhoneServerWindow: View {
                 onSwitchProfile: switchProfile,
                 hermesProfiles: hermesProfiles,
                 activeHermesProfile: activeHermesProfile,
-                onSwitchHermesProfile: switchHermesProfile,
-                notifications: harness.notifications,
-                // Bell opens the Browse sheet directly on Notifications.
-                onOpenNotifications: {
-                    browseDeepLink = .notifications
-                    showingBrowse = true
-                }
+                onSwitchHermesProfile: switchHermesProfile
             )
 
             if let error = harness.store.lastError {
