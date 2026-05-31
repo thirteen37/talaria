@@ -199,12 +199,12 @@ struct CustomEndpointForm: View {
     }
 
     private func reveal() {
-        guard let slug = existing?.slug else { return }
+        guard let existing else { return }
         revealing = true
         revealError = nil
         Task {
             do {
-                if let value = try await harness.revealEndpointKey(slug: slug) {
+                if let value = try await harness.revealEndpointKey(for: existing) {
                     keyInput = value
                     showKey = true
                 } else {
@@ -227,7 +227,8 @@ struct CustomEndpointForm: View {
             models: models,
             defaultModel: existing?.defaultModel,
             discoverModels: discoverModels,
-            hasAPIKey: existing?.hasAPIKey ?? false
+            hasAPIKey: existing?.hasAPIKey ?? false,
+            source: existing?.source ?? .providersDict(slug: "")
         )
         let trimmedKey = keyInput.trimmingCharacters(in: .whitespaces)
         let newKey = trimmedKey.isEmpty ? nil : trimmedKey

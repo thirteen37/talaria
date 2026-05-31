@@ -6,6 +6,15 @@ import Testing
 @MainActor
 @Suite
 struct ModelsHarnessEndpointTests {
+    /// A `providers.<slug>` endpoint, the shape the reveal tests exercise.
+    private func dictEndpoint(slug: String) -> CustomEndpoint {
+        CustomEndpoint(
+            slug: slug, name: slug, baseURL: "https://host/v1",
+            models: [], defaultModel: nil, discoverModels: true, hasAPIKey: true,
+            source: .providersDict(slug: slug)
+        )
+    }
+
     @Test
     func revealReturnsValueFromEnvRevealRoute() async throws {
         let http = StatusStubHTTP(responses: [
@@ -16,7 +25,7 @@ struct ModelsHarnessEndpointTests {
         ])
         let harness = ModelsHarness(client: makeClient(http))
 
-        let value = try await harness.revealEndpointKey(slug: "my-llm")
+        let value = try await harness.revealEndpointKey(for: dictEndpoint(slug: "my-llm"))
 
         #expect(value == "sk-secret")
         #expect(harness.lastError == nil)
@@ -34,7 +43,7 @@ struct ModelsHarnessEndpointTests {
         ])
         let harness = ModelsHarness(client: makeClient(http))
 
-        let value = try await harness.revealEndpointKey(slug: "my-llm")
+        let value = try await harness.revealEndpointKey(for: dictEndpoint(slug: "my-llm"))
 
         #expect(value == "sk-from-config")
     }
@@ -51,7 +60,7 @@ struct ModelsHarnessEndpointTests {
         ])
         let harness = ModelsHarness(client: makeClient(http))
 
-        let value = try await harness.revealEndpointKey(slug: "my-llm")
+        let value = try await harness.revealEndpointKey(for: dictEndpoint(slug: "my-llm"))
 
         #expect(value == nil)
     }
@@ -66,7 +75,7 @@ struct ModelsHarnessEndpointTests {
         let harness = ModelsHarness(client: makeClient(http))
 
         await #expect(throws: DashboardClientError.self) {
-            _ = try await harness.revealEndpointKey(slug: "my-llm")
+            _ = try await harness.revealEndpointKey(for: dictEndpoint(slug: "my-llm"))
         }
     }
 
@@ -109,6 +118,73 @@ struct ModelsHarnessEndpointTests {
         let added = try #require(providers["my-llm-2"] as? [String: Any])
         #expect(added["name"] as? String == "My LLM")
         #expect(added["base_url"] as? String == "https://new/v1")
+    }
+
+    @Test
+    func saveNewEndpointDeDupesAgainstHiddenDictKeyToAvoidOverwrite() async throws {
+        // The config holds a list entry AND a content-identical providers.<slug>
+        // dict entry, so list(in:) hides the dict entry as a duplicate. Adding a
+        // new endpoint whose name slugifies to that hidden key must not reuse the
+        // key — upsert would otherwise overwrite the dict entry, destroying its
+        // api_key and unmodeled settings.
+        let http = StatusStubHTTP(responses: [
+            .init(path: "/api/config", body: Data(#"""
+            {"custom_providers":[{"name":"My LLM","base_url":"https://host/v1"}],"providers":{"my-llm":{"name":"My LLM","base_url":"https://host/v1","api_key":"sk-keep","headers":{"X-Org":"acme"}}}}
+            """#.utf8)),                                                   // GET (slug + merge)
+            .init(path: "/api/config", body: Data(#"{"ok":true}"#.utf8)),  // PUT
+            .init(path: "/api/model/options", body: Data(#"{"providers":[]}"#.utf8)),
+            .init(path: "/api/model/auxiliary", body: Data(#"{"tasks":[],"main":{}}"#.utf8)),
+            .init(path: "/api/config", body: Data("{}".utf8)),             // refresh GET
+        ])
+        let harness = ModelsHarness(client: makeClient(http))
+        let newEndpoint = CustomEndpoint(
+            slug: "", name: "My LLM", baseURL: "https://new/v1",
+            models: [], defaultModel: nil, discoverModels: true, hasAPIKey: false
+        )
+
+        let ok = await harness.saveEndpoint(newEndpoint, newKey: nil)
+        #expect(ok == true)
+
+        let put = try #require(http.recordedRequests.first {
+            $0.httpMethod == "PUT" && $0.url?.path == "/api/config"
+        })
+        let putData = try #require(put.httpBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: putData) as? [String: Any])
+        let providers = try #require((json["config"] as? [String: Any])?["providers"] as? [String: Any])
+        // Existing dict entry untouched — its key and unmodeled settings survive.
+        let existing = try #require(providers["my-llm"] as? [String: Any])
+        #expect(existing["api_key"] as? String == "sk-keep")
+        #expect(existing["headers"] as? [String: Any] != nil)
+        // New endpoint landed under a distinct slug, not the hidden key.
+        let added = try #require(providers["my-llm-3"] as? [String: Any])
+        #expect(added["name"] as? String == "My LLM")
+        #expect(added["base_url"] as? String == "https://new/v1")
+    }
+
+    @Test
+    func saveNewEndpointRejectsAnExactDuplicateInsteadOfSilentlyHidingIt() async throws {
+        // A new endpoint matching an existing custom_providers entry on
+        // (name, base_url, model) would be written to providers.<slug> but then
+        // hidden by list-wins dedup on refresh. Reject it up front with an error
+        // and write nothing, rather than report a success that never shows.
+        let http = StatusStubHTTP(responses: [
+            .init(path: "/api/config", body: Data(#"""
+            {"custom_providers":[{"name":"My LLM","base_url":"https://host/v1"}]}
+            """#.utf8)),                                                   // GET (merge)
+        ])
+        let harness = ModelsHarness(client: makeClient(http))
+        let dup = CustomEndpoint(
+            slug: "", name: "My LLM", baseURL: "https://host/v1",
+            models: [], defaultModel: nil, discoverModels: true, hasAPIKey: false
+        )
+
+        let ok = await harness.saveEndpoint(dup, newKey: nil)
+
+        #expect(ok == false)
+        #expect(harness.lastError != nil)
+        #expect(!http.recordedRequests.contains {
+            $0.httpMethod == "PUT" && $0.url?.path == "/api/config"
+        })
     }
 
     @Test
@@ -169,11 +245,302 @@ struct ModelsHarnessEndpointTests {
         ])
         let harness = ModelsHarness(client: makeClient(http))
 
-        await harness.removeEndpoint(slug: "my-llm")
+        await harness.removeEndpoint(dictEndpoint(slug: "my-llm"))
 
         #expect(harness.lastError == nil)
         // refresh() ran (it fetches options) — proving the success path drove it.
         #expect(http.recordedRequests.contains { $0.url?.path == "/api/model/options" })
+    }
+
+    // MARK: - custom_providers list-path endpoints
+
+    @Test
+    func editListEndpointUpdatesListElementInPlaceWithNoProvidersDict() async throws {
+        // Editing an endpoint that lives in `custom_providers:` must rewrite that
+        // list element in place — never create a `providers.<slug>` duplicate —
+        // and preserve sibling keys (here `model_aliases`) + unmodeled per-entry
+        // keys (here `api_mode`).
+        let http = StatusStubHTTP(responses: [
+            .init(path: "/api/config", body: Data(#"""
+            {"model_aliases":{"x":"y"},"custom_providers":[{"name":"My LLM","base_url":"https://old/v1","api_mode":"chat_completions","api_key":"sk-literal"}]}
+            """#.utf8)),                                                   // GET (merge)
+            .init(path: "/api/config", body: Data(#"{"ok":true}"#.utf8)),  // PUT
+            .init(path: "/api/model/options", body: Data(#"{"providers":[]}"#.utf8)),
+            .init(path: "/api/model/auxiliary", body: Data(#"{"tasks":[],"main":{}}"#.utf8)),
+            .init(path: "/api/config", body: Data("{}".utf8)),             // refresh GET
+        ])
+        let harness = ModelsHarness(client: makeClient(http))
+        let edited = CustomEndpoint(
+            slug: "my-llm", name: "My LLM", baseURL: "https://new/v1",
+            models: [], defaultModel: nil, discoverModels: true, hasAPIKey: true,
+            source: .customProvidersList(
+                .init(index: 0, name: "My LLM", baseURL: "https://old/v1", defaultModel: nil)
+            )
+        )
+
+        let ok = await harness.saveEndpoint(edited, newKey: nil)
+        #expect(ok == true)
+
+        let put = try #require(http.recordedRequests.first {
+            $0.httpMethod == "PUT" && $0.url?.path == "/api/config"
+        })
+        let body = try #require(put.httpBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let config = try #require(json["config"] as? [String: Any])
+        // No providers dict was created.
+        #expect(config["providers"] == nil)
+        // Sibling top-level key preserved.
+        #expect((config["model_aliases"] as? [String: Any])?["x"] as? String == "y")
+        let list = try #require(config["custom_providers"] as? [[String: Any]])
+        #expect(list.count == 1)
+        #expect(list[0]["base_url"] as? String == "https://new/v1")
+        // Unmodeled per-entry key preserved; blank key field keeps the literal.
+        #expect(list[0]["api_mode"] as? String == "chat_completions")
+        #expect(list[0]["api_key"] as? String == "sk-literal")
+    }
+
+    @Test
+    func editListEndpointReportsFailureAndWritesNothingWhenEntryVanished() async throws {
+        // The target list entry was removed elsewhere since the last refresh.
+        // The save must fail up front (so the sheet stays open with an error) and
+        // write neither the typed key nor the config — no silent loss, no orphan.
+        let http = StatusStubHTTP(responses: [
+            .init(path: "/api/config", body: Data(#"""
+            {"custom_providers":[{"name":"Other","base_url":"https://other/v1"}]}
+            """#.utf8)),                                                   // GET (merge) — target gone
+        ])
+        let harness = ModelsHarness(client: makeClient(http))
+        let edited = CustomEndpoint(
+            slug: "gone", name: "Gone", baseURL: "https://edited/v1",
+            models: [], defaultModel: nil, discoverModels: true, hasAPIKey: false,
+            source: .customProvidersList(
+                .init(index: 0, name: "Gone", baseURL: "https://gone/v1", defaultModel: nil)
+            )
+        )
+
+        let ok = await harness.saveEndpoint(edited, newKey: "sk-typed")
+
+        #expect(ok == false)
+        #expect(harness.lastError != nil)
+        #expect(!http.recordedRequests.contains { $0.url?.path == "/api/env" })      // no key written
+        #expect(!http.recordedRequests.contains {                                    // no config write
+            $0.httpMethod == "PUT" && $0.url?.path == "/api/config"
+        })
+    }
+
+    @Test
+    func editListEndpointRenameWithNewKeyDeletesTheOrphanedOldVar() async throws {
+        // The entry references HERMES_CUSTOM_OLD_API_KEY, but the endpoint's slug
+        // has drifted to "new" (the name changed in a prior edit). Setting a new
+        // key writes under the new derived var and deletes the stale app-managed
+        // old one, matching the dict path's no-orphan behavior.
+        let http = StatusStubHTTP(responses: [
+            .init(path: "/api/config", body: Data(#"""
+            {"custom_providers":[{"name":"New Name","base_url":"https://host/v1","key_env":"HERMES_CUSTOM_OLD_API_KEY"}]}
+            """#.utf8)),                                                   // GET (merge)
+            .init(path: "/api/env", body: Data(#"{"ok":true}"#.utf8)),     // PUT new var
+            .init(path: "/api/config", body: Data(#"{"ok":true}"#.utf8)),  // PUT config
+            .init(path: "/api/env", body: Data(#"{"ok":true}"#.utf8)),     // DELETE old var
+            .init(path: "/api/model/options", body: Data(#"{"providers":[]}"#.utf8)),
+            .init(path: "/api/model/auxiliary", body: Data(#"{"tasks":[],"main":{}}"#.utf8)),
+            .init(path: "/api/config", body: Data("{}".utf8)),             // refresh GET
+        ])
+        let harness = ModelsHarness(client: makeClient(http))
+        let edited = CustomEndpoint(
+            slug: "new", name: "New Name", baseURL: "https://host/v1",
+            models: [], defaultModel: nil, discoverModels: true, hasAPIKey: true,
+            source: .customProvidersList(
+                .init(index: 0, name: "New Name", baseURL: "https://host/v1", defaultModel: nil)
+            )
+        )
+
+        let ok = await harness.saveEndpoint(edited, newKey: "sk-new")
+        #expect(ok == true)
+
+        let envReqs = http.recordedRequests.filter { $0.url?.path == "/api/env" }
+        let put = try #require(envReqs.first { $0.httpMethod == "PUT" })
+        let putData = try #require(put.httpBody)
+        let putBody = try #require(try JSONSerialization.jsonObject(with: putData) as? [String: Any])
+        #expect(putBody["key"] as? String == "HERMES_CUSTOM_NEW_API_KEY")
+        #expect(putBody["value"] as? String == "sk-new")
+        let del = try #require(envReqs.first { $0.httpMethod == "DELETE" })
+        let delData = try #require(del.httpBody)
+        let delBody = try #require(try JSONSerialization.jsonObject(with: delData) as? [String: Any])
+        #expect(delBody["key"] as? String == "HERMES_CUSTOM_OLD_API_KEY")
+    }
+
+    @Test
+    func editListEndpointWithNewKeyWritesEnvVarAndKeyEnvStrippingLiteral() async throws {
+        // Entering a new key for a list endpoint stores the secret in `.env`
+        // under the derived var and writes a `key_env:` reference, dropping the
+        // literal `api_key` so the secret never lands in config.
+        let http = StatusStubHTTP(responses: [
+            .init(path: "/api/config", body: Data(#"""
+            {"custom_providers":[{"name":"My LLM","base_url":"https://host/v1","api_key":"sk-old-literal"}]}
+            """#.utf8)),                                                   // GET (merge)
+            .init(path: "/api/env", body: Data(#"{"ok":true}"#.utf8)),     // PUT env var
+            .init(path: "/api/config", body: Data(#"{"ok":true}"#.utf8)),  // PUT config
+            .init(path: "/api/model/options", body: Data(#"{"providers":[]}"#.utf8)),
+            .init(path: "/api/model/auxiliary", body: Data(#"{"tasks":[],"main":{}}"#.utf8)),
+            .init(path: "/api/config", body: Data("{}".utf8)),             // refresh GET
+        ])
+        let harness = ModelsHarness(client: makeClient(http))
+        let edited = CustomEndpoint(
+            slug: "my-llm", name: "My LLM", baseURL: "https://host/v1",
+            models: [], defaultModel: nil, discoverModels: true, hasAPIKey: true,
+            source: .customProvidersList(
+                .init(index: 0, name: "My LLM", baseURL: "https://host/v1", defaultModel: nil)
+            )
+        )
+
+        let ok = await harness.saveEndpoint(edited, newKey: "sk-new")
+        #expect(ok == true)
+
+        // Secret written to .env under the derived var.
+        let envPut = try #require(http.recordedRequests.first {
+            $0.httpMethod == "PUT" && $0.url?.path == "/api/env"
+        })
+        let envData = try #require(envPut.httpBody)
+        let envBody = try #require(try JSONSerialization.jsonObject(with: envData) as? [String: Any])
+        #expect(envBody["key"] as? String == "HERMES_CUSTOM_MY_LLM_API_KEY")
+        #expect(envBody["value"] as? String == "sk-new")
+
+        let put = try #require(http.recordedRequests.first {
+            $0.httpMethod == "PUT" && $0.url?.path == "/api/config"
+        })
+        let putData = try #require(put.httpBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: putData) as? [String: Any])
+        let list = try #require((json["config"] as? [String: Any])?["custom_providers"] as? [[String: Any]])
+        #expect(list[0]["key_env"] as? String == "HERMES_CUSTOM_MY_LLM_API_KEY")
+        #expect(list[0]["api_key"] == nil)
+    }
+
+    @Test
+    func removeListEndpointDropsListElementOnly() async throws {
+        let http = StatusStubHTTP(responses: [
+            .init(path: "/api/config", body: Data(#"""
+            {"custom_providers":[{"name":"Gone","base_url":"https://gone/v1"},{"name":"Keep","base_url":"https://keep/v1"}]}
+            """#.utf8)),                                                   // GET (fresh)
+            .init(path: "/api/config", body: Data(#"{"ok":true}"#.utf8)),  // PUT (remove)
+            .init(path: "/api/env", statusCode: 404, body: Data()),        // DELETE (no derived var)
+            .init(path: "/api/model/options", body: Data(#"{"providers":[]}"#.utf8)),
+            .init(path: "/api/model/auxiliary", body: Data(#"{"tasks":[],"main":{}}"#.utf8)),
+            .init(path: "/api/config", body: Data("{}".utf8)),             // refresh GET
+        ])
+        let harness = ModelsHarness(client: makeClient(http))
+        let endpoint = CustomEndpoint(
+            slug: "gone", name: "Gone", baseURL: "https://gone/v1",
+            models: [], defaultModel: nil, discoverModels: true, hasAPIKey: false,
+            source: .customProvidersList(
+                .init(index: 0, name: "Gone", baseURL: "https://gone/v1", defaultModel: nil)
+            )
+        )
+
+        await harness.removeEndpoint(endpoint)
+
+        #expect(harness.lastError == nil)
+        let put = try #require(http.recordedRequests.first {
+            $0.httpMethod == "PUT" && $0.url?.path == "/api/config"
+        })
+        let putData = try #require(put.httpBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: putData) as? [String: Any])
+        let list = try #require((json["config"] as? [String: Any])?["custom_providers"] as? [[String: Any]])
+        #expect(list.count == 1)
+        #expect(list[0]["name"] as? String == "Keep")
+    }
+
+    @Test
+    func revealListEndpointReadsStoredKeyEnvNotTheDriftedSlug() async throws {
+        // The list entry was renamed after an app-managed key was set, so its
+        // synthesized slug ("renamed") no longer matches the stored
+        // `key_env: HERMES_CUSTOM_MY_LLM_API_KEY`. Reveal must read the stored
+        // var, not the slug-derived one (which would 404 → "no key").
+        let http = StatusStubHTTP(responses: [
+            .init(path: "/api/config", body: Data(#"""
+            {"custom_providers":[{"name":"Renamed","base_url":"https://host/v1","key_env":"HERMES_CUSTOM_MY_LLM_API_KEY"}]}
+            """#.utf8)),
+            .init(
+                path: "/api/env/reveal",
+                body: Data(#"{"key":"HERMES_CUSTOM_MY_LLM_API_KEY","value":"sk-secret"}"#.utf8)
+            ),
+        ])
+        let harness = ModelsHarness(client: makeClient(http))
+        let endpoint = CustomEndpoint(
+            slug: "renamed", name: "Renamed", baseURL: "https://host/v1",
+            models: [], defaultModel: nil, discoverModels: true, hasAPIKey: true,
+            source: .customProvidersList(
+                .init(index: 0, name: "Renamed", baseURL: "https://host/v1", defaultModel: nil)
+            )
+        )
+
+        let value = try await harness.revealEndpointKey(for: endpoint)
+        #expect(value == "sk-secret")
+
+        let reveal = try #require(http.recordedRequests.first { $0.url?.path == "/api/env/reveal" })
+        let revealData = try #require(reveal.httpBody)
+        let body = try #require(try JSONSerialization.jsonObject(with: revealData) as? [String: Any])
+        // Revealed the entry's stored var, not HERMES_CUSTOM_RENAMED_API_KEY.
+        #expect(body["key"] as? String == "HERMES_CUSTOM_MY_LLM_API_KEY")
+    }
+
+    @Test
+    func removeListEndpointDeletesStoredKeyEnvNotTheDriftedSlug() async throws {
+        let http = StatusStubHTTP(responses: [
+            .init(path: "/api/config", body: Data(#"""
+            {"custom_providers":[{"name":"Renamed","base_url":"https://host/v1","key_env":"HERMES_CUSTOM_MY_LLM_API_KEY"}]}
+            """#.utf8)),                                                   // GET (fresh)
+            .init(path: "/api/config", body: Data(#"{"ok":true}"#.utf8)),  // PUT (remove)
+            .init(path: "/api/env", body: Data(#"{"ok":true}"#.utf8)),     // DELETE env
+            .init(path: "/api/model/options", body: Data(#"{"providers":[]}"#.utf8)),
+            .init(path: "/api/model/auxiliary", body: Data(#"{"tasks":[],"main":{}}"#.utf8)),
+            .init(path: "/api/config", body: Data("{}".utf8)),             // refresh GET
+        ])
+        let harness = ModelsHarness(client: makeClient(http))
+        let endpoint = CustomEndpoint(
+            slug: "renamed", name: "Renamed", baseURL: "https://host/v1",
+            models: [], defaultModel: nil, discoverModels: true, hasAPIKey: true,
+            source: .customProvidersList(
+                .init(index: 0, name: "Renamed", baseURL: "https://host/v1", defaultModel: nil)
+            )
+        )
+
+        await harness.removeEndpoint(endpoint)
+
+        #expect(harness.lastError == nil)
+        let del = try #require(http.recordedRequests.first {
+            $0.httpMethod == "DELETE" && $0.url?.path == "/api/env"
+        })
+        let delData = try #require(del.httpBody)
+        let body = try #require(try JSONSerialization.jsonObject(with: delData) as? [String: Any])
+        #expect(body["key"] as? String == "HERMES_CUSTOM_MY_LLM_API_KEY")
+    }
+
+    @Test
+    func removeListEndpointLeavesUserOwnedKeyVarUntouched() async throws {
+        // The entry references the user's own var (not an app-managed
+        // HERMES_CUSTOM_*), so removal must NOT delete it — it could be shared.
+        let http = StatusStubHTTP(responses: [
+            .init(path: "/api/config", body: Data(#"""
+            {"custom_providers":[{"name":"Mine","base_url":"https://host/v1","api_key_env":"MY_SHARED_KEY"}]}
+            """#.utf8)),                                                   // GET (fresh)
+            .init(path: "/api/config", body: Data(#"{"ok":true}"#.utf8)),  // PUT (remove)
+            .init(path: "/api/model/options", body: Data(#"{"providers":[]}"#.utf8)),
+            .init(path: "/api/model/auxiliary", body: Data(#"{"tasks":[],"main":{}}"#.utf8)),
+            .init(path: "/api/config", body: Data("{}".utf8)),             // refresh GET
+        ])
+        let harness = ModelsHarness(client: makeClient(http))
+        let endpoint = CustomEndpoint(
+            slug: "mine", name: "Mine", baseURL: "https://host/v1",
+            models: [], defaultModel: nil, discoverModels: true, hasAPIKey: true,
+            source: .customProvidersList(
+                .init(index: 0, name: "Mine", baseURL: "https://host/v1", defaultModel: nil)
+            )
+        )
+
+        await harness.removeEndpoint(endpoint)
+
+        #expect(harness.lastError == nil)
+        #expect(!http.recordedRequests.contains { $0.httpMethod == "DELETE" && $0.url?.path == "/api/env" })
     }
 
     private func makeClient(_ http: StatusStubHTTP) -> DashboardClient {
