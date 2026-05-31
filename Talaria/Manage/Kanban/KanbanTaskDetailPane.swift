@@ -272,8 +272,11 @@ struct KanbanTaskDetailPane: View {
                 TextField("Add a comment", text: $newComment, axis: .vertical).lineLimit(1...4)
                 Button("Post") {
                     let text = newComment
-                    newComment = ""
-                    Task { await harness.addComment(taskId: card.id, body: text) }
+                    Task {
+                        if await harness.addComment(taskId: card.id, body: text) {
+                            newComment = ""
+                        }
+                    }
                 }
                 .disabled(newComment.trimmingCharacters(in: .whitespaces).isEmpty)
             }
@@ -297,8 +300,11 @@ struct KanbanTaskDetailPane: View {
                 TextField("Add parent task id", text: $newParentID)
                 Button("Link") {
                     let parent = newParentID.trimmingCharacters(in: .whitespaces)
-                    newParentID = ""
-                    Task { await harness.linkParent(parentId: parent, to: card.id) }
+                    Task {
+                        if await harness.linkParent(parentId: parent, to: card.id) {
+                            newParentID = ""
+                        }
+                    }
                 }
                 .disabled(newParentID.trimmingCharacters(in: .whitespaces).isEmpty)
             }
@@ -314,8 +320,11 @@ struct KanbanTaskDetailPane: View {
                 TextField("Add child task id", text: $newChildID)
                 Button("Link") {
                     let child = newChildID.trimmingCharacters(in: .whitespaces)
-                    newChildID = ""
-                    Task { await harness.linkChild(childId: child, of: card.id) }
+                    Task {
+                        if await harness.linkChild(childId: child, of: card.id) {
+                            newChildID = ""
+                        }
+                    }
                 }
                 .disabled(newChildID.trimmingCharacters(in: .whitespaces).isEmpty)
             }

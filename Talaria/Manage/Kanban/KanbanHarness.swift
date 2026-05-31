@@ -267,7 +267,11 @@ final class KanbanHarness {
 
     // MARK: - Comments & links
 
-    func addComment(taskId: String, body: String) async {
+    /// Returns `true` on success so the caller can clear its input field only
+    /// after the post lands — keeping the typed text on failure (a blip) instead
+    /// of discarding it, matching the create flow.
+    @discardableResult
+    func addComment(taskId: String, body: String) async -> Bool {
         do {
             try await client.kanbanAddComment(taskId: taskId, body: body)
             await loadDetail(id: taskId)
@@ -275,28 +279,36 @@ final class KanbanHarness {
             // and updates the board card's comment-count chip immediately rather
             // than waiting for the next poll.
             await refresh()
+            return true
         } catch {
             lastError = error.localizedDescription
+            return false
         }
     }
 
-    func linkParent(parentId: String, to childId: String) async {
+    @discardableResult
+    func linkParent(parentId: String, to childId: String) async -> Bool {
         do {
             try await client.kanbanLink(parentId: parentId, childId: childId)
             await loadDetail(id: childId)
             await refresh()
+            return true
         } catch {
             lastError = error.localizedDescription
+            return false
         }
     }
 
-    func linkChild(childId: String, of parentId: String) async {
+    @discardableResult
+    func linkChild(childId: String, of parentId: String) async -> Bool {
         do {
             try await client.kanbanLink(parentId: parentId, childId: childId)
             await loadDetail(id: parentId)
             await refresh()
+            return true
         } catch {
             lastError = error.localizedDescription
+            return false
         }
     }
 
