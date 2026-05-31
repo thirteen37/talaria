@@ -55,7 +55,13 @@ struct BrowseDetailView: View {
         case .models:
             ModelsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .environment:
-            EnvironmentView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            EnvironmentView(
+                client: harness.dashboardClient,
+                hermesVersion: harness.profile.version,
+                runner: harness.store.adminRunner,
+                snapshotTransfer: harness.snapshotTransfer,
+                profile: harness.profile
+            )
         case .logs:
             LogsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .doctor:

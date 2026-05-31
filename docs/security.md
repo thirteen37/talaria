@@ -18,6 +18,7 @@ No tracking, no third-party SDKs, no data collected from the user.
 
 - Do not store SSH passphrases. macOS remote dashboard startup and CLI fallbacks delegate authentication to the system `ssh` binary, ssh-agent, and `~/.ssh/config`.
 - Do not write Hermes SQLite files directly.
+- **Reading the Hermes `.env` to enumerate custom env vars is a deliberate, documented exception to the dashboard-API-only rule.** The Environment screen reads the `.env` file directly — locally via the filesystem, or on a remote profile via the same SSH `exec cat` transport (`RemoteSnapshotTransfer`) snapshots use — purely to *list* user-named keys the dashboard's `GET /api/env` doesn't know about. The path is resolved via `hermes config env-path` (the profile-scoped admin runner). All env **mutations** (set/update/delete) and full-value **reveal** still go through the dashboard API (`PUT`/`DELETE`/`POST /api/env/reveal`); plaintext read from the file is used only to compute a redacted preview and is not retained.
 - Keep profile secrets out of `profiles.json`; use Keychain only when a future feature needs stored tokens.
 - Prefer explicit executable paths captured during profile probing to avoid shell PATH surprises.
 - Log protocol frames only at debug level and avoid logging credential material.
