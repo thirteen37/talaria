@@ -1,29 +1,66 @@
 import Foundation
 
-/// A user-defined OpenAI-compatible endpoint — one entry in the `providers:`
-/// dict of Hermes' `config.yaml`. The dict key is the stable `slug`; `name` is
-/// the editable display label. The API key itself is never modeled here: it
-/// lives in `~/.hermes/.env` under a derived var name, and `config.yaml` keeps
-/// only a `${VAR}` reference, so this type carries `hasAPIKey` rather than the
-/// secret.
+/// A user-defined OpenAI-compatible endpoint. Hermes stores these in **two**
+/// on-disk shapes and reads both (see `get_compatible_custom_providers`): a
+/// `custom_providers:` YAML *list* (what `hermes model` writes) and a
+/// `providers:` *dict* keyed by slug (the v12+ schema). `name` is the editable
+/// display label. The API key itself is never modeled here: the dict path keeps
+/// it in `~/.hermes/.env` under a derived var with a `${VAR}` reference in
+/// config, so this type carries `hasAPIKey` rather than the secret.
 public struct CustomEndpoint: Equatable, Sendable, Identifiable {
-    /// The `providers.<slug>` dict key — stable across renames so the derived
-    /// env-var name never moves.
+    /// Where this endpoint lives on disk, so an edit/remove targets the right
+    /// place instead of always creating a `providers.<slug>` entry.
+    public enum Source: Equatable, Sendable {
+        /// `providers.<slug>` — the dict key is a stable on-disk identity.
+        case providersDict(slug: String)
+        /// `custom_providers[…]` — a list element. Unlike a dict key, a list
+        /// position is *not* stable: a concurrent reorder/insert/delete (another
+        /// window on the shared dashboard, a hand edit) shifts it. So the write
+        /// path re-resolves the element by its original content (``anchor``)
+        /// against the freshly-fetched config, using the index only to
+        /// disambiguate identical entries.
+        case customProvidersList(ListAnchor)
+    }
+
+    /// The original identity of a `custom_providers` list element, captured when
+    /// the config was read, used to re-find it at write time. `index` is the
+    /// position then; `name`/`baseURL`/`defaultModel` are the normalized content
+    /// (Hermes' dedup key) preferred over the position when they disagree.
+    public struct ListAnchor: Equatable, Sendable {
+        public var index: Int
+        public var name: String
+        public var baseURL: String
+        public var defaultModel: String?
+
+        public init(index: Int, name: String, baseURL: String, defaultModel: String?) {
+            self.index = index
+            self.name = name
+            self.baseURL = baseURL
+            self.defaultModel = defaultModel
+        }
+    }
+
+    /// Stable UI identity and the basis for the derived env-var name. For a
+    /// `providersDict` entry this is the dict key; for a `customProvidersList`
+    /// entry it's a slug synthesized from the name for display only (the on-disk
+    /// identity is the list index in ``source``).
     public let slug: String
     public var name: String
     public var baseURL: String
     /// Manually-listed model IDs (`models:` dict keys), merged with live
     /// discovery by Hermes. Empty when relying purely on auto-detect.
     public var models: [String]
-    /// Optional `model:` default.
+    /// Optional `model:`/`default_model:` default.
     public var defaultModel: String?
     /// `discover_models` — when true (the default) Hermes live-fetches the
     /// endpoint's model list.
     public var discoverModels: Bool
-    /// Whether an API key is configured (derived from the config `api_key`
-    /// field being non-empty). The value is read on demand via the env reveal
-    /// route, not held here.
+    /// Whether an API key is configured — derived from a non-empty `api_key`
+    /// **or** a `key_env`/`api_key_env` reference. The value itself is read on
+    /// demand via the env reveal route, not held here.
     public var hasAPIKey: Bool
+    /// Where the endpoint lives on disk — drives where edits/removes are written.
+    public var source: Source
 
     public var id: String { slug }
 
@@ -34,7 +71,8 @@ public struct CustomEndpoint: Equatable, Sendable, Identifiable {
         models: [String],
         defaultModel: String?,
         discoverModels: Bool,
-        hasAPIKey: Bool
+        hasAPIKey: Bool,
+        source: Source = .providersDict(slug: "")
     ) {
         self.slug = slug
         self.name = name
@@ -43,6 +81,7 @@ public struct CustomEndpoint: Equatable, Sendable, Identifiable {
         self.defaultModel = defaultModel
         self.discoverModels = discoverModels
         self.hasAPIKey = hasAPIKey
+        self.source = source
     }
 
     // MARK: - Derived names
@@ -85,44 +124,122 @@ public struct CustomEndpoint: Equatable, Sendable, Identifiable {
 
     // MARK: - Config (de)serialization
 
-    /// Decodes the `providers` object into endpoints, sorted by name then slug
-    /// for a stable display order. A missing/non-object `providers` → `[]`.
+    /// Decodes endpoints from **both** on-disk shapes, mirroring Hermes'
+    /// `get_compatible_custom_providers()`: the `custom_providers:` list (what
+    /// `hermes model` writes) and the `providers:` dict. List entries win on a
+    /// `(name, base_url, model)` collision, matching Hermes' dedup. The result
+    /// is sorted by name then slug for a stable display order.
     public static func list(in config: JSONValue) -> [CustomEndpoint] {
-        guard case let .object(root) = config,
-              case let .object(providers) = root["providers"] else {
-            return []
+        guard case let .object(root) = config else { return [] }
+
+        var endpoints: [CustomEndpoint] = []
+        var seen: Set<String> = []      // (name, base_url, model) dedup keys
+        var usedSlugs: [String] = []    // display slugs taken so far
+
+        func dedupKey(_ fields: ParsedFields) -> String {
+            "\(fields.name)\u{1}\(fields.baseURL)\u{1}\(fields.defaultModel ?? "")"
         }
-        let endpoints = providers.map { slug, value -> CustomEndpoint in
-            let fields: [String: JSONValue]
-            if case let .object(object) = value { fields = object } else { fields = [:] }
 
-            let name = string(fields["name"]).flatMap { $0.isEmpty ? nil : $0 } ?? slug
-            let baseURL = string(fields["base_url"]) ?? ""
-            let defaultModel = string(fields["model"]).flatMap { $0.isEmpty ? nil : $0 }
-            let discover: Bool
-            if case let .bool(flag) = fields["discover_models"] { discover = flag } else { discover = true }
-            let hasKey = (string(fields["api_key"]).map { !$0.isEmpty }) ?? false
+        // Reserve the `providers` dict keys up front: they're fixed on-disk
+        // identities, so a synthesized list slug must avoid them or two distinct
+        // endpoints would share an `id` (colliding in the SwiftUI ForEach and the
+        // slug-keyed busy set).
+        if case let .object(providers) = root["providers"] {
+            usedSlugs.append(contentsOf: providers.keys)
+        }
 
-            var models: [String] = []
-            if case let .object(modelsObject) = fields["models"] {
-                models = modelsObject.keys.sorted()
-            } else if case let .array(modelsArray) = fields["models"] {
-                models = modelsArray.compactMap { string($0) }
+        // 1. custom_providers list — canonical CLI format; wins on collision.
+        if case let .array(list) = root["custom_providers"] {
+            for (index, value) in list.enumerated() {
+                guard case let .object(object) = value else { continue }
+                let parsed = parseFields(object, fallbackName: nil)
+                let key = dedupKey(parsed)
+                guard !seen.contains(key) else { continue }
+                seen.insert(key)
+                let slug = slug(forName: parsed.name, existing: usedSlugs)
+                usedSlugs.append(slug)
+                let anchor = ListAnchor(
+                    index: index,
+                    name: parsed.name,
+                    baseURL: parsed.baseURL,
+                    defaultModel: parsed.defaultModel
+                )
+                endpoints.append(parsed.endpoint(slug: slug, source: .customProvidersList(anchor)))
             }
+        }
 
-            return CustomEndpoint(
+        // 2. providers dict — v12+ schema; skipped where it duplicates a list entry.
+        if case let .object(providers) = root["providers"] {
+            for (slug, value) in providers {
+                let object: [String: JSONValue]
+                if case let .object(fields) = value { object = fields } else { object = [:] }
+                let parsed = parseFields(object, fallbackName: slug)
+                let key = dedupKey(parsed)
+                guard !seen.contains(key) else { continue }
+                seen.insert(key)
+                usedSlugs.append(slug)
+                endpoints.append(parsed.endpoint(slug: slug, source: .providersDict(slug: slug)))
+            }
+        }
+
+        return endpoints.sorted { lhs, rhs in
+            lhs.name == rhs.name ? lhs.slug < rhs.slug : lhs.name < rhs.name
+        }
+    }
+
+    /// Normalized fields shared by both on-disk shapes. Mirrors Hermes'
+    /// `_normalize_custom_provider_entry`: URL from `base_url`/`url`/`api`,
+    /// default model from `model`/`default_model`, a key from `api_key` **or**
+    /// `key_env`/`api_key_env`, and `models` from either a dict or a list.
+    private struct ParsedFields {
+        var name: String
+        var baseURL: String
+        var defaultModel: String?
+        var discoverModels: Bool
+        var models: [String]
+        var hasAPIKey: Bool
+
+        func endpoint(slug: String, source: Source) -> CustomEndpoint {
+            CustomEndpoint(
                 slug: slug,
                 name: name,
                 baseURL: baseURL,
                 models: models,
                 defaultModel: defaultModel,
-                discoverModels: discover,
-                hasAPIKey: hasKey
+                discoverModels: discoverModels,
+                hasAPIKey: hasAPIKey,
+                source: source
             )
         }
-        return endpoints.sorted { lhs, rhs in
-            lhs.name == rhs.name ? lhs.slug < rhs.slug : lhs.name < rhs.name
+    }
+
+    private static func parseFields(_ fields: [String: JSONValue], fallbackName: String?) -> ParsedFields {
+        let name = string(fields["name"]).flatMap { $0.isEmpty ? nil : $0 } ?? fallbackName ?? "endpoint"
+        let baseURL = string(fields["base_url"]) ?? string(fields["url"]) ?? string(fields["api"]) ?? ""
+        let defaultModel = (string(fields["model"]) ?? string(fields["default_model"]))
+            .flatMap { $0.isEmpty ? nil : $0 }
+        let discover: Bool
+        if case let .bool(flag) = fields["discover_models"] { discover = flag } else { discover = true }
+
+        var models: [String] = []
+        if case let .object(modelsObject) = fields["models"] {
+            models = modelsObject.keys.sorted()
+        } else if case let .array(modelsArray) = fields["models"] {
+            models = modelsArray.compactMap { string($0) }
         }
+
+        let hasLiteralKey = (string(fields["api_key"]).map { !$0.isEmpty }) ?? false
+        let hasKeyEnv = ((string(fields["key_env"]) ?? string(fields["api_key_env"]))
+            .map { !$0.isEmpty }) ?? false
+
+        return ParsedFields(
+            name: name,
+            baseURL: baseURL,
+            defaultModel: defaultModel,
+            discoverModels: discover,
+            models: models,
+            hasAPIKey: hasLiteralKey || hasKeyEnv
+        )
     }
 
     /// How `upsert` should treat the endpoint's `api_key` field.
@@ -198,6 +315,128 @@ public struct CustomEndpoint: Equatable, Sendable, Identifiable {
         providers.removeValue(forKey: slug)
         root["providers"] = .object(providers)
         return .object(root)
+    }
+
+    /// Rewrites the `custom_providers` element identified by `anchor` in place
+    /// from `endpoint`, preserving keys the app doesn't model (`api_mode`,
+    /// `rate_limit_delay`, `extra_body`, per-model overrides for kept models, …)
+    /// and **not** creating a `providers.<slug>` entry. The element is re-found
+    /// by its original content against the freshly-fetched config (the position
+    /// is only a tiebreaker), so a concurrent reorder can't make the write land
+    /// on an unrelated provider. When the original element is gone (deleted
+    /// elsewhere since the read) the write is a no-op rather than overwriting a
+    /// stranger or appending a duplicate. The URL is canonicalized onto
+    /// `base_url` (the `url`/`api` aliases are dropped) and the default model
+    /// onto `model`. The `apiKey` action governs the key — see ``APIKeyWrite``;
+    /// for the list path a `.set` writes a `key_env:` reference (stripping any
+    /// literal `api_key`), since `hermes model` stores the secret literally.
+    public static func upsertListEntry(
+        _ endpoint: CustomEndpoint,
+        apiKey action: APIKeyWrite,
+        anchor: ListAnchor,
+        in config: JSONValue
+    ) -> JSONValue {
+        var root: [String: JSONValue]
+        if case let .object(object) = config { root = object } else { root = [:] }
+        var list: [JSONValue]
+        if case let .array(array) = root["custom_providers"] { list = array } else { list = [] }
+
+        // Re-resolve by content; if the original element is gone, leave the
+        // config untouched rather than corrupting an unrelated entry.
+        guard let index = listIndex(matching: anchor, in: list),
+              case let .object(found) = list[index] else {
+            return .object(root)
+        }
+        var entry = found
+        var existingModels: [String: JSONValue] = [:]
+        if case let .object(models) = entry["models"] { existingModels = models }
+
+        entry["name"] = .string(endpoint.name)
+        // Canonicalize the URL onto base_url so there's a single source of truth.
+        entry["base_url"] = .string(endpoint.baseURL)
+        entry.removeValue(forKey: "url")
+        entry.removeValue(forKey: "api")
+
+        switch action {
+        case .set:
+            entry["key_env"] = .string(apiKeyEnvVarName(forSlug: endpoint.slug))
+            entry.removeValue(forKey: "api_key")
+        case .keep:
+            break // leave the existing api_key/key_env untouched
+        case .remove:
+            entry.removeValue(forKey: "api_key")
+            entry.removeValue(forKey: "key_env")
+            entry.removeValue(forKey: "api_key_env")
+        }
+
+        if let defaultModel = endpoint.defaultModel, !defaultModel.isEmpty {
+            entry["model"] = .string(defaultModel)
+        } else {
+            entry.removeValue(forKey: "model")
+        }
+        entry.removeValue(forKey: "default_model")
+
+        if endpoint.models.isEmpty {
+            entry.removeValue(forKey: "models")
+        } else {
+            entry["models"] = .object(Dictionary(uniqueKeysWithValues: endpoint.models.map { id in
+                (id, existingModels[id] ?? .object([:]))
+            }))
+        }
+        entry["discover_models"] = .bool(endpoint.discoverModels)
+
+        list[index] = .object(entry)
+        root["custom_providers"] = .array(list)
+        return .object(root)
+    }
+
+    /// Removes the `custom_providers` element identified by `anchor`, re-resolved
+    /// by content against the fresh config (position is only a tiebreaker), so a
+    /// concurrent reorder can't delete the wrong provider. A no-op when the
+    /// original element is gone.
+    public static func removeListEntry(anchor: ListAnchor, from config: JSONValue) -> JSONValue {
+        guard case var .object(root) = config,
+              case var .array(list) = root["custom_providers"],
+              let index = listIndex(matching: anchor, in: list) else {
+            return config
+        }
+        list.remove(at: index)
+        root["custom_providers"] = .array(list)
+        return .object(root)
+    }
+
+    /// The raw fields of the `custom_providers` element identified by `anchor`,
+    /// re-resolved by content against `config` — so a reader (e.g. the API-key
+    /// reveal) finds the same element a write would, even after a reorder. Nil
+    /// when the element is gone or `config`/`custom_providers` isn't the expected
+    /// shape.
+    public static func listEntry(for anchor: ListAnchor, in config: JSONValue) -> [String: JSONValue]? {
+        guard case let .object(root) = config,
+              case let .array(list) = root["custom_providers"],
+              let index = listIndex(matching: anchor, in: list),
+              case let .object(entry) = list[index] else {
+            return nil
+        }
+        return entry
+    }
+
+    /// Finds the `custom_providers` element matching `anchor`'s original content
+    /// (`name`/`base_url`/`model`, normalized the same way ``list(in:)`` reads
+    /// them). When several elements share that content, the one at the anchored
+    /// index is preferred; otherwise the first match. Nil when none match.
+    private static func listIndex(matching anchor: ListAnchor, in list: [JSONValue]) -> Int? {
+        var matches: [Int] = []
+        for (index, value) in list.enumerated() {
+            guard case let .object(object) = value else { continue }
+            let parsed = parseFields(object, fallbackName: nil)
+            if parsed.name == anchor.name
+                && parsed.baseURL == anchor.baseURL
+                && parsed.defaultModel == anchor.defaultModel {
+                matches.append(index)
+            }
+        }
+        if matches.contains(anchor.index) { return anchor.index }
+        return matches.first
     }
 
     private static func string(_ value: JSONValue?) -> String? {

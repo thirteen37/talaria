@@ -182,6 +182,9 @@ final class ModelsHarness {
             return false
         }
 
+        // A new endpoint (empty slug) lands in the `providers:` dict under a slug
+        // de-duped against the *fresh* config. An edit keeps its slug and source,
+        // so the write targets wherever the entry actually lives.
         let draft: CustomEndpoint
         if endpoint.slug.isEmpty {
             let slug = CustomEndpoint.slug(
@@ -195,7 +198,8 @@ final class ModelsHarness {
                 models: endpoint.models,
                 defaultModel: endpoint.defaultModel,
                 discoverModels: endpoint.discoverModels,
-                hasAPIKey: endpoint.hasAPIKey
+                hasAPIKey: endpoint.hasAPIKey,
+                source: .providersDict(slug: slug)
             )
         } else {
             draft = endpoint
@@ -211,7 +215,14 @@ final class ModelsHarness {
                     value: newKey
                 )
             }
-            try await $0.updateConfig(CustomEndpoint.upsert(draft, apiKey: action, in: fresh))
+            let updated: JSONValue
+            switch draft.source {
+            case .providersDict:
+                updated = CustomEndpoint.upsert(draft, apiKey: action, in: fresh)
+            case let .customProvidersList(anchor):
+                updated = CustomEndpoint.upsertListEntry(draft, apiKey: action, anchor: anchor, in: fresh)
+            }
+            try await $0.updateConfig(updated)
         }
     }
 
@@ -222,11 +233,18 @@ final class ModelsHarness {
     /// meaningful action and must drive the success/refresh path rather than
     /// stranding the removed endpoint in the list. A leftover `.env` line is
     /// harmless; the user can retry remove to re-attempt cleanup.
-    func removeEndpoint(slug: String) async {
-        await runEndpoint(slug: slug) {
+    func removeEndpoint(_ endpoint: CustomEndpoint) async {
+        await runEndpoint(slug: endpoint.slug) {
             let fresh = try await $0.getConfig()
-            try await $0.updateConfig(CustomEndpoint.remove(slug: slug, from: fresh))
-            try? await $0.deleteEnvVar(key: CustomEndpoint.apiKeyEnvVarName(forSlug: slug))
+            let updated: JSONValue
+            switch endpoint.source {
+            case let .providersDict(slug):
+                updated = CustomEndpoint.remove(slug: slug, from: fresh)
+            case let .customProvidersList(anchor):
+                updated = CustomEndpoint.removeListEntry(anchor: anchor, from: fresh)
+            }
+            try await $0.updateConfig(updated)
+            try? await $0.deleteEnvVar(key: CustomEndpoint.apiKeyEnvVarName(forSlug: endpoint.slug))
         }
     }
 
@@ -237,22 +255,33 @@ final class ModelsHarness {
     /// Any other failure (network, 5xx, unauthorized, rate-limit) is rethrown
     /// so the caller shows a real error rather than an empty field that looks
     /// like a cleared key.
-    func revealEndpointKey(slug: String) async throws -> String? {
-        let varName = CustomEndpoint.apiKeyEnvVarName(forSlug: slug)
+    func revealEndpointKey(for endpoint: CustomEndpoint) async throws -> String? {
+        let varName = CustomEndpoint.apiKeyEnvVarName(forSlug: endpoint.slug)
         do {
             return try await client.revealEnvVar(key: varName)
         } catch let DashboardClientError.http(statusCode, _) where statusCode == 404 {
-            return try await expandedConfigKey(slug: slug)
+            return try await expandedConfigKey(for: endpoint)
         }
     }
 
-    /// The endpoint's `api_key` from a fresh config, expanded — nil when it's
+    /// The endpoint's literal `api_key` from a fresh config — read from wherever
+    /// the entry lives (`providers.<slug>` or `custom_providers[index]`, the
+    /// latter being where `hermes model` stores a literal key). Nil when it's
     /// missing or only an unresolved `${VAR}` template (referenced var unset).
-    private func expandedConfigKey(slug: String) async throws -> String? {
-        guard case let .object(root) = try await client.getConfig(),
-              case let .object(providers) = root["providers"],
-              case let .object(entry) = providers[slug],
-              case let .string(apiKey) = entry["api_key"],
+    private func expandedConfigKey(for endpoint: CustomEndpoint) async throws -> String? {
+        let config = try await client.getConfig()
+        guard case let .object(root) = config else { return nil }
+        let entry: [String: JSONValue]
+        switch endpoint.source {
+        case let .providersDict(slug):
+            guard case let .object(providers) = root["providers"],
+                  case let .object(object) = providers[slug] else { return nil }
+            entry = object
+        case let .customProvidersList(anchor):
+            guard let object = CustomEndpoint.listEntry(for: anchor, in: config) else { return nil }
+            entry = object
+        }
+        guard case let .string(apiKey) = entry["api_key"],
               !apiKey.isEmpty,
               !(apiKey.hasPrefix("${") && apiKey.hasSuffix("}")) else {
             return nil
@@ -410,7 +439,7 @@ struct ModelsView: View {
         ) {
             Button("Remove", role: .destructive) {
                 if let endpoint = endpointToRemove {
-                    Task { await harness.removeEndpoint(slug: endpoint.slug) }
+                    Task { await harness.removeEndpoint(endpoint) }
                 }
                 endpointToRemove = nil
             }
