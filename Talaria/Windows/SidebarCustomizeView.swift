@@ -18,7 +18,11 @@ struct SidebarCustomizeView: View {
                     }
                     .onMove(perform: layout.move)
                 } footer: {
+                    #if os(iOS)
+                    Text("Tap Edit to reorder. Hidden pages stay here so you can show them again.")
+                    #else
                     Text("Drag to reorder. Hidden pages stay here so you can show them again.")
+                    #endif
                 }
 
                 Section {
@@ -28,17 +32,24 @@ struct SidebarCustomizeView: View {
                     .help("Restore the default order and show all pages")
                 }
             }
-            // iOS needs always-on edit mode for the drag handles; macOS lists
-            // are reorderable by drag without it (and `editMode` is unavailable
-            // there).
             #if os(iOS)
-            .environment(\.editMode, .constant(.active))
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .navigationTitle("Customize Sidebar")
             .toolbar {
+                // iOS gates drag-reorder behind an explicit Edit mode (an
+                // always-on `.active` editMode would route taps to reorder and
+                // leave the per-row Toggle / Reset button non-interactive on
+                // device). macOS lists reorder by drag in normal mode, so they
+                // need no Edit toggle — and `EditButton` is iOS-only anyway.
+                #if os(iOS)
+                ToolbarItem(placement: .topBarLeading) {
+                    EditButton()
+                        .help("Reorder pages")
+                }
+                #endif
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Close") { dismiss() }
                         .help("Close the customizer")
                 }
             }
