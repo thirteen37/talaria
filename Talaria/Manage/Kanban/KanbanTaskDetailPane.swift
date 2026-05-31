@@ -25,6 +25,9 @@ struct KanbanTaskDetailPane: View {
     @State private var showDeleteConfirm = false
     @State private var logText: String?
     @State private var isLoadingLog = false
+    /// Set while a manual detail-load retry is in flight, so the pane shows
+    /// "Loading…" instead of the failure state during the re-fetch.
+    @State private var isRetryingDetail = false
     /// The `card.id` whose authoritative `/tasks/{id}` payload has already been
     /// seeded into the editable fields, so a later detail reload (from posting a
     /// comment or editing a link) doesn't clobber in-progress edits.
@@ -56,6 +59,10 @@ struct KanbanTaskDetailPane: View {
     /// saving is blocked — a `PATCH` from the placeholder would send `body == ""`
     /// for any card whose summary omits the body and silently clear it server-side.
     private var detailLoaded: Bool { seededDetailID == card.id }
+
+    /// The authoritative detail fetch for this card failed and no retry is in
+    /// flight — show the failure + Retry affordance rather than a stuck spinner.
+    private var detailFailed: Bool { harness.detailLoadFailedID == card.id && !isRetryingDetail }
 
     private var saveDisabled: Bool {
         !detailLoaded
@@ -154,6 +161,18 @@ struct KanbanTaskDetailPane: View {
         showDeleteConfirm = false
         logText = nil
         isLoadingLog = false
+        isRetryingDetail = false
+    }
+
+    /// Re-fetches the authoritative detail after a transient load failure. The
+    /// poll never reloads detail by design, so this manual retry is the in-pane
+    /// recovery path.
+    private func retryDetail() {
+        isRetryingDetail = true
+        Task {
+            await harness.loadDetail(id: card.id)
+            isRetryingDetail = false
+        }
     }
 
     // MARK: - Editor
@@ -176,9 +195,20 @@ struct KanbanTaskDetailPane: View {
                 }
             }
             if !detailLoaded {
-                Label("Loading full task details… editing is disabled until they load.", systemImage: "clock")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if detailFailed {
+                    HStack(spacing: 8) {
+                        Label("Couldn't load full task details — editing is disabled.", systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                        Button("Retry") { retryDetail() }
+                            .font(.caption)
+                            .help("Reload this task's details")
+                    }
+                } else {
+                    Label("Loading full task details… editing is disabled until they load.", systemImage: "clock")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             HStack {
                 Button(role: .destructive) { showDeleteConfirm = true } label: {
@@ -263,6 +293,9 @@ struct KanbanTaskDetailPane: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
+            } else if detailFailed {
+                Button("Retry loading comments") { retryDetail() }
+                    .font(.caption)
             } else if detail == nil {
                 ProgressView().controlSize(.small)
             } else {

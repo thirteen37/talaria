@@ -34,6 +34,10 @@ final class KanbanHarness {
     var selectedBoardSlug: String?
     var selectedTaskID: String?
     var taskDetail: KanbanTaskDetail?
+    /// The task id whose last detail (`GET /tasks/{id}`) load failed. Lets the
+    /// detail pane show a retry affordance instead of a perpetual "Loading…"
+    /// when the one-shot fetch fails transiently (the poll never reloads detail).
+    var detailLoadFailedID: String?
     var draft: KanbanDraft?
     var includeArchived: Bool = false
     var isLoading: Bool = false
@@ -136,9 +140,11 @@ final class KanbanHarness {
             let detail = try await client.kanbanTask(id: id)
             guard selectedTaskID == id else { return }
             taskDetail = detail
+            detailLoadFailedID = nil
         } catch {
             guard selectedTaskID == id else { return }
             lastError = error.localizedDescription
+            detailLoadFailedID = id
         }
     }
 
@@ -157,12 +163,14 @@ final class KanbanHarness {
         draft = nil
         selectedTaskID = id
         taskDetail = nil
+        detailLoadFailedID = nil
         Task { await loadDetail(id: id) }
     }
 
     func clearSelection() {
         selectedTaskID = nil
         taskDetail = nil
+        detailLoadFailedID = nil
     }
 
     // MARK: - Drag move
