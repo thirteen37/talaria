@@ -267,6 +267,10 @@ final class KanbanHarness {
         do {
             try await client.kanbanAddComment(taskId: taskId, body: body)
             await loadDetail(id: taskId)
+            // Match the other mutations: refresh clears any stale error banner
+            // and updates the board card's comment-count chip immediately rather
+            // than waiting for the next poll.
+            await refresh()
         } catch {
             lastError = error.localizedDescription
         }
