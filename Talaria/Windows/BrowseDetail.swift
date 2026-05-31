@@ -54,6 +54,8 @@ struct BrowseDetailView: View {
             SoulEditorContainer(windowHarness: harness)
         case .models:
             ModelsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+        case .environment:
+            EnvironmentView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .logs:
             LogsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .doctor:

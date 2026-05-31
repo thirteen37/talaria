@@ -20,6 +20,12 @@ public enum HermesCapability: String, CaseIterable, Codable, Sendable {
     /// Below it the Models screen shows a `capabilityBanner` warning rather
     /// than breaking.
     case requiresModelAPI
+    /// `hermes dashboard`'s `/api/env*` routes (`GET`/`PUT`/`DELETE /api/env`,
+    /// `POST /api/env/reveal`) backing the Environment management screen. Ships
+    /// in the same `web_server.py` as the dashboard itself, so it shares the
+    /// dashboard pin. Below it the Environment screen shows a `capabilityBanner`
+    /// warning rather than breaking.
+    case requiresEnvAPI
 }
 
 public struct CapabilityTable: Sendable {
@@ -70,5 +76,10 @@ public struct CapabilityTable: Sendable {
         // live 0.14.0 / release 2026.5.16 instance), so the model API shares
         // the dashboard's introducing version. No separate, later gate.
         .requiresModelAPI: HermesVersion(major: 0, minor: 14, patch: 0),
+        // `/api/env*` (env-var read/set/delete/reveal) are defined in the same
+        // `web_server.py` that ships the 0.14.0 dashboard (verified against the
+        // live 0.14.0 / release 2026.5.16 instance), so the env API shares the
+        // dashboard's introducing version. No separate, later gate.
+        .requiresEnvAPI: HermesVersion(major: 0, minor: 14, patch: 0),
     ]
 }
