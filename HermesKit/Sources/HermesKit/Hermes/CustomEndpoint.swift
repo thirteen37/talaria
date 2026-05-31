@@ -360,7 +360,11 @@ public struct CustomEndpoint: Equatable, Sendable, Identifiable {
         switch action {
         case .set:
             entry["key_env"] = .string(apiKeyEnvVarName(forSlug: endpoint.slug))
+            // Strip both the literal and the `api_key_env` alias so the freshly
+            // written `key_env` is the only key reference — a stale alias could
+            // otherwise shadow it if Hermes resolves it first.
             entry.removeValue(forKey: "api_key")
+            entry.removeValue(forKey: "api_key_env")
         case .keep:
             break // leave the existing api_key/key_env untouched
         case .remove:

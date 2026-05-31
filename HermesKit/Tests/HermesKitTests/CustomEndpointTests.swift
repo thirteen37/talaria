@@ -518,6 +518,7 @@ struct CustomEndpointTests {
                     "name": .string("My LLM"),
                     "base_url": .string("https://host/v1"),
                     "api_key": .string("sk-old-literal"),
+                    "api_key_env": .string("MY_OLD_VAR"),
                 ]),
             ]),
         ])
@@ -538,7 +539,8 @@ struct CustomEndpointTests {
             Issue.record("expected list entry"); return
         }
         #expect(entry["key_env"] == .string("HERMES_CUSTOM_MY_LLM_API_KEY"))
-        #expect(entry["api_key"] == nil) // literal stripped
+        #expect(entry["api_key"] == nil)     // literal stripped
+        #expect(entry["api_key_env"] == nil) // stale alias stripped so it can't shadow key_env
     }
 
     @Test
