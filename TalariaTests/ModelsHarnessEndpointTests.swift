@@ -9,7 +9,10 @@ struct ModelsHarnessEndpointTests {
     @Test
     func revealReturnsValueFromEnvRevealRoute() async throws {
         let http = StatusStubHTTP(responses: [
-            .init(path: "/api/env/reveal", body: Data(#"{"value":"sk-secret"}"#.utf8))
+            .init(
+                path: "/api/env/reveal",
+                body: Data(#"{"key":"HERMES_CUSTOM_MY_LLM_API_KEY","value":"sk-secret"}"#.utf8)
+            )
         ])
         let harness = ModelsHarness(client: makeClient(http))
 

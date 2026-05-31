@@ -69,6 +69,7 @@ window consumers, and tears the child down when the last consumer releases it.
 | Profiles | `GET` / `POST` on `/api/profiles`, `PATCH` / `DELETE` on `/api/profiles/{name}` |
 | Config editor | `GET /api/config/schema`, `GET /api/config`, `PUT /api/config` |
 | Soul editor | `GET /api/soul`, `PUT /api/soul` |
+| Environment (.env) | `GET /api/env`, `PUT /api/env`, `DELETE /api/env`, `POST /api/env/reveal` |
 
 The default server window shares one dashboard per `ServerProfile`. Profile
 editing can acquire additional scoped dashboards with `hermes -p <name>
