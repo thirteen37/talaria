@@ -40,6 +40,7 @@ There are two distinct data paths, and code must use the right one:
 1. **Live chat** speaks ACP over newline-delimited JSON-RPC frames (`Transport` → `Client`).
 2. **Everything else** (sessions, skills, cron, logs, updates, profile config) is backed by the **Hermes dashboard HTTP API** — Talaria spawns `hermes dashboard` on an ephemeral loopback port and talks to `/api/*`. Talaria **never reads or writes Hermes SQLite files directly.**
 3. A few operations have **no dashboard route yet** and fall back to spawning the CLI: `hermes sessions rename`, `hermes tools enable/disable/list`, and `hermes doctor`.
+4. One deliberate, documented exception to "never read Hermes files directly": the Environment screen **reads the Hermes `.env` directly** (local filesystem, or remote SSH `exec cat` via `RemoteSnapshotTransfer`; path from `hermes config env-path`) purely to *enumerate* user-named custom vars that `GET /api/env` doesn't list. All env **mutations** still go through the dashboard `PUT`/`DELETE /api/env`. See `docs/security.md`.
 
 `DashboardSupervisor` owns one `hermes dashboard` child: it polls `/api/status`, scrapes the session token from the dashboard SPA, reference-counts consumers, and kills the child when the last one releases. `DashboardCoordinator` caches one supervisor per `(ServerProfile, Hermes profile)` pair — every window shares the default-profile dashboard, while editing a *named* profile in the config editor spins up an isolated, profile-scoped dashboard (`hermes -p <name> dashboard`).
 
