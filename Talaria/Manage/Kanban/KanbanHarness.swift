@@ -345,22 +345,31 @@ final class KanbanHarness {
         }
     }
 
-    func createBoard(slug: String, name: String?, switchTo: Bool) async {
+    /// Returns `true` on success so the manage sheet can keep the editor open
+    /// (with the typed slug/name intact) and surface the error when a create is
+    /// rejected — e.g. a duplicate or invalid slug.
+    @discardableResult
+    func createBoard(slug: String, name: String?, switchTo: Bool) async -> Bool {
         do {
             try await client.kanbanCreateBoard(slug: slug, name: name, switchTo: switchTo)
             if switchTo { selectedBoardSlug = slug }
             await refresh()
+            return true
         } catch {
             lastError = error.localizedDescription
+            return false
         }
     }
 
-    func renameBoard(slug: String, name: String) async {
+    @discardableResult
+    func renameBoard(slug: String, name: String) async -> Bool {
         do {
             try await client.kanbanUpdateBoard(slug: slug, name: name)
             await refresh()
+            return true
         } catch {
             lastError = error.localizedDescription
+            return false
         }
     }
 

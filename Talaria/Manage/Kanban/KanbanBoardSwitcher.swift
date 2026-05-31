@@ -90,6 +90,16 @@ struct KanbanBoardManageSheet: View {
 
             controlStrip
 
+            // Board mutation errors set `harness.lastError`, which otherwise
+            // renders only in KanbanView's banner *behind* this sheet — surface
+            // it here so a rejected create/rename/delete is visible.
+            if let error = harness.lastError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             if let draft {
                 editor(draft)
             }
@@ -179,15 +189,21 @@ struct KanbanBoardManageSheet: View {
     }
 
     private func commit(_ draft: BoardDraft) {
-        switch draft.mode {
-        case .create:
-            let slug = draft.slug.trimmingCharacters(in: .whitespaces)
-            let name = draft.name.trimmingCharacters(in: .whitespaces)
-            Task { await harness.createBoard(slug: slug, name: name.isEmpty ? nil : name, switchTo: false) }
-        case let .rename(slug):
-            let name = draft.name.trimmingCharacters(in: .whitespaces)
-            Task { await harness.renameBoard(slug: slug, name: name) }
+        // Close the editor only after the mutation lands; on failure keep it open
+        // (with the typed slug/name) so the user can correct and retry — the
+        // error shows in the sheet's own banner.
+        Task {
+            let ok: Bool
+            switch draft.mode {
+            case .create:
+                let slug = draft.slug.trimmingCharacters(in: .whitespaces)
+                let name = draft.name.trimmingCharacters(in: .whitespaces)
+                ok = await harness.createBoard(slug: slug, name: name.isEmpty ? nil : name, switchTo: false)
+            case let .rename(slug):
+                let name = draft.name.trimmingCharacters(in: .whitespaces)
+                ok = await harness.renameBoard(slug: slug, name: name)
+            }
+            if ok { self.draft = nil }
         }
-        self.draft = nil
     }
 }
