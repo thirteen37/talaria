@@ -27,10 +27,21 @@ final class EnvironmentHarness {
     var showAdvanced: Bool = false
 
     private let client: DashboardClient
+    /// Reads the Hermes `.env` directly (local fs / SSH `cat`) purely to
+    /// enumerate user-named custom keys the dashboard's `GET /api/env` doesn't
+    /// know about. Nil when no runner/transfer is wired (e.g. iPad-local) — the
+    /// screen then shows only the known vars. All mutations still go through the
+    /// dashboard API.
+    private let fileReader: EnvFileReading?
 
-    init(client: DashboardClient) {
+    init(client: DashboardClient, fileReader: EnvFileReading? = nil) {
         self.client = client
+        self.fileReader = fileReader
     }
+
+    /// Name rule shared with Hermes (`save_env_value`): a leading letter or
+    /// underscore, then letters / digits / underscores.
+    static let customNamePattern = "^[A-Za-z_][A-Za-z0-9_]*$"
 
     var selected: DashboardEnvVar? {
         guard let id = selectionID else { return nil }
@@ -41,12 +52,54 @@ final class EnvironmentHarness {
         isLoading = true
         defer { isLoading = false }
         do {
-            vars = try await client.listEnvVars()
+            var merged = try await client.listEnvVars()
             revealed = [:]
             lastError = nil
+            // Enumerate user-named custom keys by reading the `.env` directly,
+            // and append the ones the dashboard doesn't already know about
+            // (known wins over file). A file-read failure is non-fatal — keep
+            // the known vars and surface the reason as a banner note rather than
+            // clobbering the list.
+            if let fileReader {
+                do {
+                    let entries = try await fileReader.read()
+                    var seen = Set(merged.map(\.name))
+                    for entry in entries where !seen.contains(entry.key) {
+                        seen.insert(entry.key)
+                        merged.append(DashboardEnvVar(
+                            name: entry.key,
+                            isSet: true,
+                            redactedValue: redactEnvValue(entry.value),
+                            description: "",
+                            url: nil,
+                            category: "custom",
+                            isPassword: false,
+                            tools: [],
+                            advanced: false
+                        ))
+                    }
+                } catch {
+                    lastError = error.localizedDescription
+                }
+            }
+            vars = merged
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    /// Adds a user-named custom var. Validates the name against
+    /// ``customNamePattern`` (Hermes rejects anything else server-side too),
+    /// then reuses ``save(key:value:)`` so the `PUT /api/env` + refresh path is
+    /// identical to editing a known var. The new key surfaces under **Custom**
+    /// after the refresh.
+    func add(key: String, value: String) async {
+        let name = key.trimmingCharacters(in: .whitespaces)
+        guard name.range(of: Self.customNamePattern, options: .regularExpression) != nil else {
+            lastError = "“\(name)” isn’t a valid variable name. Use a letter or underscore, then letters, digits, or underscores."
+            return
+        }
+        await save(key: name, value: value)
     }
 
     func save(key: String, value: String) async {
@@ -92,13 +145,43 @@ final class EnvironmentHarness {
 struct EnvironmentView: View {
     let client: DashboardClient?
     let hermesVersion: HermesVersion?
+    /// Profile-scoped admin runner used to resolve the `.env` path
+    /// (`hermes config env-path`). Nil leaves custom-var enumeration off.
+    let runner: HermesAdminRunning?
+    /// SSH transfer for reading a remote profile's `.env`; nil for local
+    /// profiles (and the system-ssh macOS path, where there's no transfer to
+    /// read a remote `.env` with — see ``canEnumerateCustomVars``).
+    let snapshotTransfer: RemoteSnapshotTransfer?
+    /// The window's profile — its `kind` selects the local-fs vs SSH read path.
+    let profile: ServerProfile?
 
     @State private var harness: EnvironmentHarness?
     @State private var searchText: String = ""
+    @State private var showingAddSheet = false
 
-    init(client: DashboardClient?, hermesVersion: HermesVersion? = nil) {
+    init(
+        client: DashboardClient?,
+        hermesVersion: HermesVersion? = nil,
+        runner: HermesAdminRunning? = nil,
+        snapshotTransfer: RemoteSnapshotTransfer? = nil,
+        profile: ServerProfile? = nil
+    ) {
         self.client = client
         self.hermesVersion = hermesVersion
+        self.runner = runner
+        self.snapshotTransfer = snapshotTransfer
+        self.profile = profile
+    }
+
+    /// Whether the `.env` read path is actually available. Needs a runner to
+    /// resolve the path (`hermes config env-path`), plus either a local profile
+    /// (filesystem read) or an SSH transfer (remote `cat`). On the macOS
+    /// system-ssh remote path `snapshotTransfer` is nil, so custom-var
+    /// enumeration — and the Add button — stay off there rather than failing
+    /// every refresh with a "no SSH transfer" banner and offering an Add that
+    /// writes vars which never re-appear.
+    private var canEnumerateCustomVars: Bool {
+        runner != nil && (profile?.kind == .local || snapshotTransfer != nil)
     }
 
     var body: some View {
@@ -122,7 +205,17 @@ struct EnvironmentView: View {
         .task(id: client != nil) {
             guard let client else { harness = nil; return }
             if harness != nil { return }
-            let h = EnvironmentHarness(client: client)
+            // Only build a file reader when the read path is actually available
+            // (see `canEnumerateCustomVars`). Without it the screen shows known
+            // vars only — no persistent "no SSH transfer" banner.
+            let reader: EnvFileReading? = canEnumerateCustomVars
+                ? HermesEnvFileReader(
+                    runner: runner,
+                    snapshotTransfer: snapshotTransfer,
+                    isLocal: profile?.kind == .local
+                )
+                : nil
+            let h = EnvironmentHarness(client: client, fileReader: reader)
             harness = h
             await h.refresh()
         }
@@ -154,6 +247,11 @@ struct EnvironmentView: View {
         // row. Clearing `selectionID` also clears `revealed` via its `didSet`.
         .onChange(of: searchText) { _, _ in reconcileSelection(harness: harness) }
         .onChange(of: harness.showAdvanced) { _, _ in reconcileSelection(harness: harness) }
+        .sheet(isPresented: $showingAddSheet) {
+            AddCustomVarSheet { name, value in
+                Task { await harness.add(key: name, value: value) }
+            }
+        }
     }
 
     /// Drops the selection if the selected var no longer passes the current
@@ -243,6 +341,21 @@ struct EnvironmentView: View {
             }
             .help("Show advanced (rarely-needed) variables")
 
+            // Adding a custom var only makes sense when the file reader can
+            // enumerate it back (the dashboard's GET /api/env won't list custom
+            // keys), so gate the button on the read path being available — not
+            // just a runner. Otherwise a macOS system-ssh remote would offer an
+            // Add that writes a var which then never re-appears.
+            if canEnumerateCustomVars {
+                Button {
+                    showingAddSheet = true
+                } label: {
+                    Label("Add variable", systemImage: "plus")
+                }
+                .accessibilityLabel("Add variable")
+                .help("Add a custom environment variable")
+            }
+
             Button {
                 Task { await harness.refresh() }
             } label: {
@@ -251,6 +364,55 @@ struct EnvironmentView: View {
             .disabled(harness.isLoading)
             .help("Reload the environment variables")
         }
+    }
+}
+
+/// Sheet for creating a user-named custom variable. The name is validated
+/// (and `is_managed()` rejections surfaced) by ``EnvironmentHarness/add(key:value:)``
+/// through the screen's banner — the value field is a plain `TextField` because
+/// custom vars are `isPassword: false` and reveal still works after creation.
+private struct AddCustomVarSheet: View {
+    let onAdd: (String, String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var name: String = ""
+    @State private var value: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Add Variable")
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Name").font(.caption).foregroundStyle(.secondary)
+                TextField("MY_API_BASE", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+                    #if !os(macOS)
+                    .textInputAutocapitalization(.characters)
+                    #endif
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Value").font(.caption).foregroundStyle(.secondary)
+                TextField("Value", text: $value)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled()
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                Button("Add") {
+                    onAdd(name, value)
+                    dismiss()
+                }
+                .keyboardShortcut(.return, modifiers: [.command])
+                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding()
+        .frame(minWidth: 360)
     }
 }
 
@@ -264,6 +426,7 @@ enum EnvCategory: String, CaseIterable, Identifiable {
     case tool
     case skill
     case setting
+    case custom
     case other
 
     var id: String { rawValue }
@@ -279,6 +442,7 @@ enum EnvCategory: String, CaseIterable, Identifiable {
         case .tool: return "Tools & Services"
         case .skill: return "Skills"
         case .setting: return "Settings"
+        case .custom: return "Custom"
         case .other: return "Other"
         }
     }
