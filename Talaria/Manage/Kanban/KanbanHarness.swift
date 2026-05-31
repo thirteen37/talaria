@@ -110,8 +110,12 @@ final class KanbanHarness {
             return
         }
         // Board list is supplementary — a failure here shouldn't blank the board.
+        // Note `includeArchived` is deliberately *not* forwarded here: that
+        // toggle ("Show archived tasks") filters the archived task column, not
+        // the board switcher. Forwarding it would also pull archived *boards*
+        // into the menu / manage sheet, which is a separate concept.
         do {
-            let response = try await client.kanbanBoards(includeArchived: includeArchived)
+            let response = try await client.kanbanBoards(includeArchived: false)
             boards = response.boards
             if selectedBoardSlug == nil {
                 selectedBoardSlug = response.current
