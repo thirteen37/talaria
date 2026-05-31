@@ -20,11 +20,13 @@ struct SidebarCustomizeView: View {
                         row(destination)
                     }
                     .onMove(perform: layout.move)
+                } header: {
+                    Text("Show in Sidebar")
                 } footer: {
                     #if os(iOS)
-                    Text("Tap Edit to reorder. Hidden pages stay here so you can show them again.")
+                    Text("Switch a page off to hide it from the sidebar — it stays here so you can show it again. Tap Edit, then drag the handles to reorder.")
                     #else
-                    Text("Drag to reorder. Hidden pages stay here so you can show them again.")
+                    Text("Switch a page off to hide it from the sidebar — it stays here so you can show it again. Drag the handles to reorder.")
                     #endif
                 }
 
@@ -63,13 +65,22 @@ struct SidebarCustomizeView: View {
 
     private func row(_ destination: BrowseDestination) -> some View {
         let isVisible = !layout.isHidden(destination)
-        return Toggle(isOn: Binding(
-            get: { isVisible },
-            set: { layout.setHidden(destination, hidden: !$0) }
-        )) {
-            Label(destination.title, systemImage: destination.systemImage)
+        return HStack(spacing: 8) {
+            #if os(macOS)
+            // macOS lists have no built-in reorder affordance, so show a grab
+            // handle to signal (and give a safe spot for) drag-to-reorder.
+            Image(systemName: "line.3.horizontal")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            #endif
+            Toggle(isOn: Binding(
+                get: { isVisible },
+                set: { layout.setHidden(destination, hidden: !$0) }
+            )) {
+                Label(destination.title, systemImage: destination.systemImage)
+            }
+            .toggleStyle(.switch)
+            .accessibilityLabel("\(destination.title) visible")
         }
-        .toggleStyle(.switch)
-        .accessibilityLabel("\(destination.title) visible")
     }
 }
