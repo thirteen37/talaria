@@ -56,7 +56,7 @@ struct ChatView: View {
                 )
             }
         }
-        .navigationTitle("Chat")
+        .navigationTitle(viewModel.title ?? "Chat")
         // Inline title (iOS) keeps the chat's vertical space for the transcript
         // instead of the tall large-title header; no-op on macOS.
         .inlineNavigationTitle()
@@ -97,6 +97,11 @@ final class LocalChatViewModel {
     var prompt = ""
     var messages: [ChatTranscriptMessage] = []
     var isSending = false
+    /// Hermes' auto-generated session title, written by `SessionsStore` from the
+    /// agent → client `session_info_update`. Mirrors `OpenSession.title` so the
+    /// chat header / window title (which only has the view model in scope) can
+    /// show the real name instead of "Chat".
+    var title: String?
     var statusText: String?
     var hasError = false
     var pendingPermission: PermissionPromptState?
