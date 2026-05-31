@@ -287,6 +287,7 @@ struct KanbanTaskDetailPane: View {
         Section("Dependencies") {
             linkList(
                 title: "Parents",
+                singular: "parent",
                 ids: detail?.links.parents ?? [],
                 onRemove: { parent in
                     Task { await harness.unlink(parentId: parent, childId: card.id, anchorId: card.id) }
@@ -303,6 +304,7 @@ struct KanbanTaskDetailPane: View {
             }
             linkList(
                 title: "Children",
+                singular: "child",
                 ids: detail?.links.children ?? [],
                 onRemove: { child in
                     Task { await harness.unlink(parentId: card.id, childId: child, anchorId: card.id) }
@@ -321,7 +323,12 @@ struct KanbanTaskDetailPane: View {
     }
 
     @ViewBuilder
-    private func linkList(title: String, ids: [String], onRemove: @escaping (String) -> Void) -> some View {
+    private func linkList(
+        title: String,
+        singular: String,
+        ids: [String],
+        onRemove: @escaping (String) -> Void
+    ) -> some View {
         if ids.isEmpty {
             LabeledContent(title) { Text("None").foregroundStyle(.secondary) }
         } else {
@@ -333,7 +340,7 @@ struct KanbanTaskDetailPane: View {
                         Image(systemName: "minus.circle")
                     }
                     .buttonStyle(.borderless)
-                    .help("Remove this \(title.dropLast().lowercased()) link")
+                    .help("Remove this \(singular) link")
                 }
             }
         }
