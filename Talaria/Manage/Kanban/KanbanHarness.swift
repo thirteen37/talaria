@@ -309,9 +309,17 @@ final class KanbanHarness {
     func switchBoard(slug: String) async {
         do {
             try await client.kanbanSwitchBoard(slug: slug)
-            selectedBoardSlug = slug
             clearSelection()
-            await refresh()
+            if selectedBoardSlug == slug {
+                // Same slug → `pollKey` is unchanged, so the poll task won't
+                // restart; load explicitly.
+                await refresh()
+            } else {
+                // Changing the slug restarts KanbanView's `pollKey`-keyed task,
+                // whose loud first tick loads the new board — an explicit
+                // refresh here would just double-fetch.
+                selectedBoardSlug = slug
+            }
         } catch {
             lastError = error.localizedDescription
         }

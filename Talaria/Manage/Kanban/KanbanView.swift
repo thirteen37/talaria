@@ -68,7 +68,12 @@ struct KanbanView: View {
             while !Task.isCancelled {
                 await harness.refresh(isPoll: !loud)
                 loud = false
-                try? await Task.sleep(for: .seconds(4))
+                // Back off hard once the plugin is known-missing: a 404 keeps
+                // `pluginUnavailable` set, so re-probe every 60s instead of
+                // hammering the absent `/board` route every 4s. A quiet probe
+                // still auto-recovers (clears the flag, restoring the 4s cadence)
+                // if the plugin is installed later.
+                try? await Task.sleep(for: harness.pluginUnavailable ? .seconds(60) : .seconds(4))
             }
         }
     }
