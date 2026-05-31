@@ -52,6 +52,8 @@ struct BrowseDetailView: View {
             ConfigEditorContainer(windowHarness: harness, profiles: hermesProfiles)
         case .soul:
             SoulEditorContainer(windowHarness: harness)
+        case .personalities:
+            PersonalitiesView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .models:
             ModelsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .environment:
