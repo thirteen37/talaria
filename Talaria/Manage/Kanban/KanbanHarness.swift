@@ -93,6 +93,7 @@ final class KanbanHarness {
         if !isPoll { isLoading = true }
         defer { if !isPoll { isLoading = false } }
         do {
+            let hadNoBoard = board == nil
             let fetched = try await client.kanbanBoard(
                 board: selectedBoardSlug,
                 includeArchived: includeArchived
@@ -102,6 +103,12 @@ final class KanbanHarness {
             if !isPoll {
                 lastError = nil
                 lastWarning = nil
+            } else if hadNoBoard {
+                // A silent poll that recovers from a failed/empty initial load
+                // (no board was showing) should clear the stale error banner so
+                // it doesn't strand over a now-working board. A mutation error
+                // (board already populated) still survives the poll.
+                lastError = nil
             }
         } catch let DashboardClientError.http(statusCode, _) where statusCode == 404 {
             pluginUnavailable = true
