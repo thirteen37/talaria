@@ -800,17 +800,18 @@ public struct DashboardClient: Sendable {
 
     // MARK: - Soul
 
-    public func getSoul() async throws -> String {
-        let response: SoulResponse = try await get(path: "/api/soul")
+    public func getSoul(profile: String) async throws -> String {
+        let response: SoulResponse = try await get(path: "/api/profiles/\(profile)/soul")
         return response.content
     }
 
-    public func updateSoul(_ content: String) async throws {
-        try await sendNoContent(method: "PUT", path: "/api/soul", body: SoulUpdateBody(content: content))
+    public func updateSoul(profile: String, content: String) async throws {
+        try await sendNoContent(method: "PUT", path: "/api/profiles/\(profile)/soul", body: SoulUpdateBody(content: content))
     }
 
     private struct SoulResponse: Decodable {
         let content: String
+        let exists: Bool?   // present on GET; optional keeps decode lenient
     }
 
     private struct SoulUpdateBody: Encodable {
