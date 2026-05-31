@@ -13,6 +13,12 @@ public enum HermesCapability: String, CaseIterable, Codable, Sendable {
     /// `capabilityBanner` warning and remain on their "connecting…" placeholder
     /// because the spawn fails. (No hard upgrade gate today.)
     case requiresDashboard
+    /// `hermes dashboard`'s `/api/model/*` routes (`options`, `auxiliary`,
+    /// `set`) backing the Models management screen. Ships in the same
+    /// `web_server.py` as the dashboard itself, so it shares the dashboard pin.
+    /// Below it the Models screen shows a `capabilityBanner` warning rather
+    /// than breaking.
+    case requiresModelAPI
 }
 
 public struct CapabilityTable: Sendable {
@@ -56,5 +62,10 @@ public struct CapabilityTable: Sendable {
         // warning — not a profile-load gate; an older-Hermes profile still
         // loads, its dashboard surfaces just won't come online.
         .requiresDashboard: HermesVersion(major: 0, minor: 14, patch: 0),
+        // `/api/model/{options,auxiliary,set}` are defined in the same
+        // `web_server.py` that ships the 0.14.0 dashboard (verified against the
+        // live 0.14.0 / release 2026.5.16 instance), so the model API shares
+        // the dashboard's introducing version. No separate, later gate.
+        .requiresModelAPI: HermesVersion(major: 0, minor: 14, patch: 0),
     ]
 }

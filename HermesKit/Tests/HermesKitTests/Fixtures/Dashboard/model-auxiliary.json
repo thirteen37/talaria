@@ -1,0 +1,16 @@
+{
+  "tasks": [
+    {"task": "vision", "provider": "openrouter", "model": "google/gemini-2.5-flash", "base_url": ""},
+    {"task": "web_extract", "provider": "auto", "model": "", "base_url": ""},
+    {"task": "compression", "provider": "auto", "model": "", "base_url": ""},
+    {"task": "skills_hub", "provider": "auto", "model": "", "base_url": ""},
+    {"task": "approval", "provider": "auto", "model": "", "base_url": ""},
+    {"task": "mcp", "provider": "auto", "model": "", "base_url": ""},
+    {"task": "title_generation", "provider": "auto", "model": "", "base_url": ""},
+    {"task": "triage_specifier", "provider": "auto", "model": "", "base_url": ""},
+    {"task": "kanban_decomposer", "provider": "auto", "model": "", "base_url": ""},
+    {"task": "profile_describer", "provider": "auto", "model": "", "base_url": ""},
+    {"task": "curator", "provider": "auto", "model": "", "base_url": ""}
+  ],
+  "main": {"provider": "openrouter", "model": "anthropic/claude-opus-4.7"}
+}
