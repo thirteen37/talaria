@@ -92,6 +92,15 @@ struct KanbanTaskDetailPane: View {
         }
         // Re-seed once the authoritative detail payload arrives for this card.
         .onChange(of: harness.taskDetail?.task) { _, _ in applySeed() }
+        // After the first seed, follow server-routed status changes — a Save or
+        // a drag-move the server lands in a different column than requested (e.g.
+        // a promotion into `done`). The picker's own selection changes `status`
+        // but not `baseline.status`, so this only fires for an authoritative
+        // change, never for an in-progress user pick — clearing the phantom edit
+        // that would otherwise re-enable Save with the stale requested status.
+        .onChange(of: baseline.status) { _, newStatus in
+            if detailLoaded { status = newStatus }
+        }
         .alert("Delete task?", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) {
                 Task { await harness.deleteTask(id: card.id) }

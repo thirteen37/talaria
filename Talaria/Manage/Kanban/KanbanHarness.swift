@@ -176,6 +176,11 @@ final class KanbanHarness {
             let response = try await client.kanbanUpdateTask(id: id, status: to)
             pendingMoves.remove(id)
             await refresh()
+            // If the moved card is the one open in the detail pane, reload its
+            // detail so `taskDetail.task.status` reflects where the server
+            // actually routed it (status routing may differ from `to`), keeping
+            // the pane's Status picker in sync.
+            if selectedTaskID == id { await loadDetail(id: id) }
             // Surface the warning *after* refresh — refresh() clears it on
             // success, so setting it beforehand would wipe it. It rides its own
             // `.warning` channel (the move succeeded), separate from `lastError`.
