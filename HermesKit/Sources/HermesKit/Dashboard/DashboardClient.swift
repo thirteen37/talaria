@@ -746,6 +746,54 @@ public struct DashboardClient: Sendable {
         let config: JSONValue
     }
 
+    // MARK: - Env
+
+    /// Writes a secret into `~/.hermes/.env` under `key`. The route accepts any
+    /// valid env-var name (it only validates the name regex), so custom
+    /// `HERMES_CUSTOM_<SLUG>_API_KEY` names persist here while `config.yaml`
+    /// keeps only the `${key}` reference.
+    public func setEnvVar(key: String, value: String) async throws {
+        let body = EnvKeyValueBody(key: key, value: value)
+        try await sendNoContent(method: "PUT", path: "/api/env", body: body)
+    }
+
+    /// Removes `key` from `~/.hermes/.env`. Tolerates a 404 — a hand-edited
+    /// `.env` may already lack the key, and the caller only wants it gone.
+    public func deleteEnvVar(key: String) async throws {
+        do {
+            try await sendNoContent(method: "DELETE", path: "/api/env", body: EnvKeyBody(key: key))
+        } catch let DashboardClientError.http(statusCode, _) where statusCode == 404 {
+            return
+        }
+    }
+
+    /// Reveals the real `.env` value for an arbitrary var name via
+    /// `POST /api/env/reveal` (token-gated, rate-limited, audit-logged upstream).
+    /// Non-2xx responses surface to the caller as `DashboardClientError`: a 404
+    /// (key stored elsewhere) lets the caller fall back to the expanded config
+    /// value, while a 429 (rate limited) or other error is a real failure.
+    public func revealEnvVar(key: String) async throws -> String {
+        let response: EnvRevealResponse = try await sendDecoding(
+            method: "POST",
+            path: "/api/env/reveal",
+            body: EnvKeyBody(key: key)
+        )
+        return response.value
+    }
+
+    private struct EnvKeyValueBody: Encodable {
+        let key: String
+        let value: String
+    }
+
+    private struct EnvKeyBody: Encodable {
+        let key: String
+    }
+
+    private struct EnvRevealResponse: Decodable {
+        let value: String
+    }
+
     // MARK: - Soul
 
     public func getSoul() async throws -> String {
