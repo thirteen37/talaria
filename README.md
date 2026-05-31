@@ -14,7 +14,7 @@ This repository contains the Sprint 7 dashboard-mode build:
 
 - `Talaria`: macOS SwiftUI app — ACP chat, dashboard-backed sessions, profiles, Manage surfaces (Skills / Tools / Cron / Logs / Doctor / Updates), Sparkle auto-update.
 - `HermesKit`: Swift package for ACP/JSON-RPC, transports, dashboard HTTP client/supervisor, CLI fallbacks, profile models, and capability gates.
-- `docs`: architecture, security, release, ACP coverage, roadmap, and manual test-plan notes.
+- `docs`: architecture, security, release, integration coverage, roadmap, and manual test-plan notes.
 
 ## References
 
