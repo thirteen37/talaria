@@ -83,6 +83,7 @@ Dashboard coverage today (Hermes 0.14.0 / release 2026.5.16):
 | Sessions rename | _no route — still on `hermes sessions rename` CLI_ |
 | Updates | `GET /api/status` + `POST /api/hermes/update` + `GET /api/actions/hermes-update/status` |
 | Skills | `GET /api/skills`, `PUT /api/skills/toggle` |
+| Plugins | `GET /api/dashboard/plugins/hub`, `POST /api/dashboard/agent-plugins/install`, `POST …/agent-plugins/{name}/enable`/`disable`/`update`, `DELETE …/agent-plugins/{name}`, `PUT /api/dashboard/plugin-providers` |
 | Cron | full CRUD on `/api/cron/jobs` + `/pause` + `/resume` + `/trigger` |
 | Logs | polled `GET /api/logs` (`file`, `lines`, `level`, `component`, `search` query params) |
 | Profiles config editor | `GET /api/config/schema`, `GET /api/config`, `PUT /api/config`, `GET /api/profiles` (plus per-profile scoping via `hermes -p <name> dashboard`) |

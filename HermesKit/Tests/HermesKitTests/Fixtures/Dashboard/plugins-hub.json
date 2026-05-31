@@ -1,0 +1,47 @@
+{
+  "plugins": [
+    {
+      "name": "browser/browser_use",
+      "version": "1.0.0",
+      "description": "Drive a headless browser to fill forms and scrape pages.",
+      "source": "bundled",
+      "runtime_status": "inactive",
+      "has_dashboard_manifest": false,
+      "dashboard_manifest": null,
+      "path": "/opt/hermes/plugins/browser/browser_use",
+      "can_remove": false,
+      "can_update_git": false,
+      "auth_required": false,
+      "auth_command": "",
+      "user_hidden": false
+    },
+    {
+      "name": "linear",
+      "version": "0.4.2",
+      "description": "Manage Linear issues, projects, and teams.",
+      "source": "git",
+      "runtime_status": "enabled",
+      "has_dashboard_manifest": true,
+      "dashboard_manifest": { "tab": "Linear" },
+      "path": "/home/hermes/.hermes/plugins/linear",
+      "can_remove": true,
+      "can_update_git": true,
+      "auth_required": true,
+      "auth_command": "hermes plugin auth linear",
+      "user_hidden": false
+    }
+  ],
+  "orphan_dashboard_plugins": [],
+  "providers": {
+    "memory_provider": "hindsight",
+    "memory_options": [
+      { "name": "hindsight", "description": "Vector-backed long-term memory." },
+      { "name": "sqlite", "description": "Local SQLite recall store." }
+    ],
+    "context_engine": "compressor",
+    "context_options": [
+      { "name": "compressor", "description": "Summarizing context compressor." },
+      { "name": "passthrough", "description": "No context engineering." }
+    ]
+  }
+}
