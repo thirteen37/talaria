@@ -58,8 +58,8 @@ public struct DashboardStatus: Codable, Equatable, Sendable {
     public let version: String
     public let releaseDate: String?
     /// Gateway fields are optional so this still decodes against a pre-gateway
-    /// dashboard payload (and `DashboardUpdatesService` / `DoctorView`, which
-    /// read only `version`, keep working unchanged). The dashboard's
+    /// dashboard payload, and callers that read only `version` keep working
+    /// unchanged. The dashboard's
     /// `gateway_state` is one of `running` / `stopped` / `startup_failed` /
     /// `draining` / null — it does **not** report install state (that's a
     /// local service-file check the HTTP route doesn't surface).
