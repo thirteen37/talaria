@@ -52,6 +52,11 @@ struct KanbanBoardManageSheet: View {
     @State private var selection: String?
     @State private var draft: BoardDraft?
     @State private var boardToDelete: KanbanBoardSummary?
+    /// Error from a board create/rename/delete performed *in this sheet* — kept
+    /// separate from `harness.lastError` so opening the sheet doesn't surface an
+    /// unrelated stale surface-banner error (e.g. a prior failed drag-move) as if
+    /// a board mutation failed.
+    @State private var boardError: String?
 
     private struct BoardDraft: Equatable {
         enum Mode: Equatable { case create, rename(slug: String) }
@@ -90,10 +95,10 @@ struct KanbanBoardManageSheet: View {
 
             controlStrip
 
-            // Board mutation errors set `harness.lastError`, which otherwise
-            // renders only in KanbanView's banner *behind* this sheet — surface
-            // it here so a rejected create/rename/delete is visible.
-            if let error = harness.lastError {
+            // Surface failures from board mutations done in this sheet (rejected
+            // create/rename/delete), which would otherwise render only in
+            // KanbanView's banner *behind* the sheet.
+            if let error = boardError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
                     .foregroundStyle(.red)
@@ -117,7 +122,12 @@ struct KanbanBoardManageSheet: View {
             presenting: boardToDelete
         ) { board in
             Button("Delete", role: .destructive) {
-                Task { await harness.deleteBoard(slug: board.slug) }
+                Task {
+                    boardError = nil
+                    if await harness.deleteBoard(slug: board.slug) == false {
+                        boardError = harness.lastError
+                    }
+                }
             }
             Button("Cancel", role: .cancel) { boardToDelete = nil }
         } message: { board in
@@ -193,6 +203,7 @@ struct KanbanBoardManageSheet: View {
         // (with the typed slug/name) so the user can correct and retry — the
         // error shows in the sheet's own banner.
         Task {
+            boardError = nil
             let ok: Bool
             switch draft.mode {
             case .create:
@@ -203,7 +214,7 @@ struct KanbanBoardManageSheet: View {
                 let name = draft.name.trimmingCharacters(in: .whitespaces)
                 ok = await harness.renameBoard(slug: slug, name: name)
             }
-            if ok { self.draft = nil }
+            if ok { self.draft = nil } else { boardError = harness.lastError }
         }
     }
 }

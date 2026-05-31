@@ -392,13 +392,16 @@ final class KanbanHarness {
         }
     }
 
-    func deleteBoard(slug: String) async {
+    @discardableResult
+    func deleteBoard(slug: String) async -> Bool {
         do {
             try await client.kanbanDeleteBoard(slug: slug)
             if selectedBoardSlug == slug { selectedBoardSlug = nil }
             await refresh()
+            return true
         } catch {
             lastError = error.localizedDescription
+            return false
         }
     }
 
