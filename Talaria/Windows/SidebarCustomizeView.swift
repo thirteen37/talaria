@@ -21,7 +21,12 @@ struct SidebarCustomizeView: View {
                     }
                     .onMove(perform: layout.move)
                 } header: {
-                    Text("Show in Sidebar")
+                    // Right-aligned so the caption sits above the trailing
+                    // toggle column it describes, not the page names.
+                    HStack {
+                        Spacer()
+                        Text("Show in Sidebar")
+                    }
                 } footer: {
                     #if os(iOS)
                     Text("Switch a page off to hide it from the sidebar — it stays here so you can show it again. Tap Edit, then drag the handles to reorder.")
