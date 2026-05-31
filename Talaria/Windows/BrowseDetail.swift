@@ -32,6 +32,8 @@ struct BrowseDetailView: View {
             ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
         case .cron:
             CronView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+        case .kanban:
+            KanbanView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .hermesProfiles:
             ProfilesView(
                 client: harness.dashboardClient,

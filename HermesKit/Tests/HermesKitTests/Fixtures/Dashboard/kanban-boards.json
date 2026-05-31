@@ -1,0 +1,25 @@
+{
+  "boards": [
+    {
+      "slug": "default",
+      "name": "Default",
+      "description": "Primary work board",
+      "icon": "tray.full",
+      "color": "#4F8AFE",
+      "is_current": true,
+      "counts": { "triage": 1, "ready": 1, "running": 1, "done": 1 },
+      "total": 4
+    },
+    {
+      "slug": "ops",
+      "name": "Ops",
+      "description": null,
+      "icon": "gearshape",
+      "color": "#FF8A00",
+      "is_current": false,
+      "counts": { "todo": 3 },
+      "total": 3
+    }
+  ],
+  "current": "default"
+}

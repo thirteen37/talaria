@@ -1,0 +1,109 @@
+{
+  "columns": [
+    {
+      "name": "triage",
+      "tasks": [
+        {
+          "id": "task-001",
+          "title": "Investigate flaky login test",
+          "body": "The login integration test fails ~1 in 5 runs on CI.",
+          "status": "triage",
+          "assignee": null,
+          "priority": 2,
+          "created_by": "yuxi",
+          "created_at": 1748000000,
+          "started_at": null,
+          "completed_at": null,
+          "workspace_kind": "scratch",
+          "tenant": null,
+          "skills": ["debugging"],
+          "session_id": null,
+          "age": {
+            "created_age_seconds": 3600,
+            "started_age_seconds": null,
+            "time_to_complete_seconds": null
+          },
+          "latest_summary": null,
+          "link_counts": { "parents": 0, "children": 1 },
+          "comment_count": 2,
+          "progress": { "done": 0, "total": 1 },
+          "warnings": {
+            "count": 1,
+            "kinds": { "stale": 1 },
+            "latest_at": 1748001000,
+            "highest_severity": "warning"
+          }
+        }
+      ]
+    },
+    { "name": "todo", "tasks": [] },
+    { "name": "scheduled", "tasks": [] },
+    {
+      "name": "ready",
+      "tasks": [
+        {
+          "id": "task-002",
+          "title": "Ship release notes",
+          "status": "ready",
+          "assignee": "hermes",
+          "priority": 0,
+          "created_at": 1748002000,
+          "workspace_kind": "dir",
+          "link_counts": { "parents": 1, "children": 0 },
+          "comment_count": 0
+        }
+      ]
+    },
+    {
+      "name": "running",
+      "tasks": [
+        {
+          "id": "task-003",
+          "title": "Build nightly artifact",
+          "status": "running",
+          "assignee": "ci-bot",
+          "priority": 1,
+          "created_at": 1748003000,
+          "started_at": 1748003600,
+          "workspace_kind": "worktree",
+          "diagnostics": [
+            {
+              "kind": "timeout",
+              "severity": "error",
+              "count": 1,
+              "last_seen_at": 1748004000,
+              "message": "Worker exceeded soft timeout"
+            }
+          ]
+        }
+      ]
+    },
+    { "name": "blocked", "tasks": [] },
+    { "name": "review", "tasks": [] },
+    {
+      "name": "done",
+      "tasks": [
+        {
+          "id": "task-004",
+          "title": "Wire dashboard polling",
+          "status": "done",
+          "assignee": "yuxi",
+          "priority": 0,
+          "created_at": 1747900000,
+          "started_at": 1747901000,
+          "completed_at": 1747910000,
+          "workspace_kind": "scratch",
+          "age": {
+            "created_age_seconds": 110000,
+            "started_age_seconds": 109000,
+            "time_to_complete_seconds": 9000
+          }
+        }
+      ]
+    }
+  ],
+  "tenants": ["default", "ops"],
+  "assignees": ["yuxi", "hermes", "ci-bot"],
+  "latest_event_id": 4821,
+  "now": 1748004200
+}

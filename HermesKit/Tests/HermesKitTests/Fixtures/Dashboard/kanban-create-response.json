@@ -1,0 +1,19 @@
+{
+  "task": {
+    "id": "task-100",
+    "title": "Draft Q3 roadmap",
+    "body": "Outline the next quarter's priorities.",
+    "status": "triage",
+    "assignee": "yuxi",
+    "priority": 3,
+    "created_by": "yuxi",
+    "created_at": 1748005000,
+    "started_at": null,
+    "completed_at": null,
+    "workspace_kind": "scratch",
+    "tenant": null,
+    "skills": null,
+    "session_id": null
+  },
+  "warning": "Parent task-050 is not yet done."
+}

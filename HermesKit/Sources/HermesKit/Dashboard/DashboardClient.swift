@@ -477,11 +477,16 @@ public struct DashboardClient: Sendable {
 
     // MARK: - Plumbing
 
-    private func get<T: Decodable>(path: String, queryItems: [URLQueryItem] = []) async throws -> T {
+    // `get` / `sendDecoding` / `sendNoContent` are `internal` (not `private`)
+    // so the kanban surface — split into `DashboardClient+Kanban.swift` because
+    // it adds ~18 methods — can reuse the exact same request plumbing. The
+    // stored properties and the lower `dispatch`/`sendOnce*` layer stay private,
+    // so nothing leaks outside `HermesKit`.
+    func get<T: Decodable>(path: String, queryItems: [URLQueryItem] = []) async throws -> T {
         try await sendDecoding(method: "GET", path: path, queryItems: queryItems)
     }
 
-    private func sendDecoding<T: Decodable>(
+    func sendDecoding<T: Decodable>(
         method: String,
         path: String,
         queryItems: [URLQueryItem] = [],
@@ -495,7 +500,7 @@ public struct DashboardClient: Sendable {
         }
     }
 
-    private func sendNoContent(
+    func sendNoContent(
         method: String,
         path: String,
         queryItems: [URLQueryItem] = [],
