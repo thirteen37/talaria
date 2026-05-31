@@ -64,14 +64,30 @@ struct SlashMenu: View {
                 Button {
                     select(command)
                 } label: {
-                    rowLabel(for: command)
-                    .frame(maxWidth: .infinity, minHeight: rowMinHeight, alignment: .leading)
-                    .padding(.horizontal, 8)
+                    rowContent(for: command)
                 }
                 .buttonStyle(.plain)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Button-free copy of the rows used only for height measurement, so the
+    /// reader doesn't reconstruct a throwaway `Button`/closure tree. Shares
+    /// `rowContent` with `commandRows`, so the measured height matches exactly.
+    private var measuredRows: some View {
+        VStack(alignment: .leading, spacing: rowSpacing) {
+            ForEach(commands, id: \.name) { command in
+                rowContent(for: command)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func rowContent(for command: AvailableCommand) -> some View {
+        rowLabel(for: command)
+            .frame(maxWidth: .infinity, minHeight: rowMinHeight, alignment: .leading)
+            .padding(.horizontal, 8)
     }
 
     @ViewBuilder
@@ -99,27 +115,33 @@ struct SlashMenu: View {
     @ViewBuilder
     private func stackedCommandLabel(_ command: AvailableCommand) -> some View {
         let description = descriptionText(for: command)
-        if description.isEmpty {
+        // Two independent Text views in a VStack rather than a concatenated
+        // `Text + Text("\n…")` — separate views lay out and draw reliably.
+        VStack(alignment: .leading, spacing: 2) {
             commandName(command)
-        } else {
-            (Text("/\(command.name)")
-                .font(.callout.weight(.semibold))
-                .foregroundColor(.primary)
-            + Text("\n\(description)")
-                .font(.caption)
-                .foregroundColor(.secondary))
-                .lineLimit(3)
-                .truncationMode(.tail)
-                .fixedSize(horizontal: false, vertical: true)
+            if !description.isEmpty {
+                commandDescription(command)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
     private func commandDescription(_ command: AvailableCommand) -> some View {
         Text(descriptionText(for: command))
             .font(.caption)
-            .foregroundColor(.secondary)
+            // NOT `.secondary`: the hierarchical secondary style renders invisibly
+            // over the menu's `.regularMaterial` on-device (vibrancy flattens it to
+            // ~zero alpha — confirmed by on-device style probes). A dimmed `.primary`
+            // stays visible and still adapts to light/dark.
+            .foregroundColor(.primary)
+            .opacity(secondaryTextOpacity)
             .truncationMode(.tail)
     }
+
+    /// Matches the system secondary-label contrast without relying on the
+    /// `.secondary` hierarchical style (see `commandDescription`).
+    private let secondaryTextOpacity: Double = 0.6
 
     private func descriptionText(for command: AvailableCommand) -> String {
         let description = command.description.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -150,7 +172,7 @@ struct SlashMenu: View {
     }
 
     private var contentHeightReader: some View {
-        commandRows
+        measuredRows
             .fixedSize(horizontal: false, vertical: true)
             .hidden()
             .allowsHitTesting(false)
