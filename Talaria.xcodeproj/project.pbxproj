@@ -118,6 +118,7 @@
 		B26F121BF99FC608925F341F /* UpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 299E76E8B6B759627A8B41DD /* UpdateController.swift */; };
 		B4CCE0645ED3484EDAF2E61F /* EditableComparisonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BF654A05F720DAA02C0B069 /* EditableComparisonView.swift */; };
 		B9A1BE8BABCD8D8AC1125F51 /* DiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFE066B74B82DFA8FC5F8F24 /* DiffView.swift */; };
+		BDB471B2215A1BCDFD343D1E /* PersonalitiesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAE2D7B8D2BD1CC41F962529 /* PersonalitiesView.swift */; };
 		BFCAF447270A3E3C393BA983 /* BrowseDestination.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D9089ABA90F410BC7A0349A /* BrowseDestination.swift */; };
 		C17F8CCB5512C2060C689455 /* YAMLFileDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40BCC93769E881572E354E67 /* YAMLFileDocument.swift */; };
 		C214FD4CCCF298E8F06FBB11 /* ToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3EDBB9C99D2FF50800A31BE /* ToolsView.swift */; };
@@ -146,6 +147,7 @@
 		E87F25E1393C9E04B841BFF0 /* YAMLHighlightTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A4915ACEFA306626EEECA63 /* YAMLHighlightTheme.swift */; };
 		E89DCDB0C9AD12397615716C /* Markdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0726E977A155E433A5401996 /* Markdown.swift */; };
 		E96EB01A117C0954E4F23C37 /* LogConsole.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71FE69AC7DA73A5FB9244123 /* LogConsole.swift */; };
+		EDF9746D845FDD430E22E100 /* PersonalitiesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAE2D7B8D2BD1CC41F962529 /* PersonalitiesView.swift */; };
 		F0223600063B00912A0FB4F9 /* PermissionPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748E28FC6797F351A6EBB220 /* PermissionPrompt.swift */; };
 		F033CFB1F155DD7F285C0F1E /* ProfileEditorRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA23ADC5BC8B713EA424CDD /* ProfileEditorRoot.swift */; };
 		F2A079666F57E632357E163E /* RootWindowScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 711D18166117D38A95717B0D /* RootWindowScene.swift */; };
@@ -262,6 +264,7 @@
 		D22C1A2F3286887BEC9A982E /* TalariaApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalariaApp.swift; sourceTree = "<group>"; };
 		D73190DC0343E43442753E5E /* StatusBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBar.swift; sourceTree = "<group>"; };
 		DA57702C4F0773DF6231FDD1 /* ChatModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatModels.swift; sourceTree = "<group>"; };
+		DAE2D7B8D2BD1CC41F962529 /* PersonalitiesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersonalitiesView.swift; sourceTree = "<group>"; };
 		DD5A8C9E26CB5316AE819FD5 /* ProfileProber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileProber.swift; sourceTree = "<group>"; };
 		DDC6CCD5B8F3E1D29743B8A5 /* ChatNavigationUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatNavigationUITests.swift; sourceTree = "<group>"; };
 		DE7C6DE41D3712DB0E94D405 /* SessionIdFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionIdFormatter.swift; sourceTree = "<group>"; };
@@ -429,6 +432,7 @@
 				A12A6961B7D8E937263627BB /* LogsView.swift */,
 				F71BFC25850A646580866C0D /* ManageHarness.swift */,
 				02B3715B46F1604D50C32259 /* ModelsView.swift */,
+				DAE2D7B8D2BD1CC41F962529 /* PersonalitiesView.swift */,
 				1C4F883529CB17540706EF66 /* PluginsView.swift */,
 				1DD849FF61E9E7FE99C2441B /* ProfilesView.swift */,
 				6E5FD3271C03262E8A67B725 /* SkillsView.swift */,
@@ -818,6 +822,7 @@
 				9E5C26D2592A7D03F690F860 /* ModelsView.swift in Sources */,
 				C859F63DE8CEC424B7C05398 /* PathAwareHermesAdminRunner.swift in Sources */,
 				1964C2ACA58980B5A5A68B49 /* PermissionPrompt.swift in Sources */,
+				EDF9746D845FDD430E22E100 /* PersonalitiesView.swift in Sources */,
 				54A82F7BD3081070B11BE221 /* PlatformSeam.swift in Sources */,
 				586813A54625FC9635FB6B3C /* PluginsView.swift in Sources */,
 				60BABDAAC494107AA6363743 /* ProbeCapabilityView.swift in Sources */,
@@ -893,6 +898,7 @@
 				5EC0E7BD239BC0CF5E419732 /* MockACPTransport.swift in Sources */,
 				B0B101AA0FC4CBA169096F38 /* ModelsView.swift in Sources */,
 				F0223600063B00912A0FB4F9 /* PermissionPrompt.swift in Sources */,
+				BDB471B2215A1BCDFD343D1E /* PersonalitiesView.swift in Sources */,
 				46DB99C0E7AAE0FB6CA7B107 /* PhoneBrowseSheet.swift in Sources */,
 				799C1A386BCE91C49D9426F8 /* PhoneProfileEditor.swift in Sources */,
 				9792D03B27B3B380039498CD /* PhoneServerWindow.swift in Sources */,
