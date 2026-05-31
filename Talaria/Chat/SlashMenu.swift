@@ -20,8 +20,12 @@ struct SlashMenu: View {
 
     private var estimatedContentHeight: CGFloat {
         let count = CGFloat(commands.count)
-        guard count > 0 else { return rowMinHeight }
-        return count * rowMinHeight + (count - 1) * rowSpacing
+        guard count > 0 else { return estimatedRowHeight }
+        return count * estimatedRowHeight + (count - 1) * rowSpacing
+    }
+
+    private var estimatedRowHeight: CGFloat {
+        usesStackedRows ? 52 : rowMinHeight
     }
 
     private var usesStackedRows: Bool {
@@ -38,7 +42,6 @@ struct SlashMenu: View {
         }
         .scrollBounceBehavior(.basedOnSize)
         .frame(maxWidth: menuWidth, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
         .background(contentHeightReader)
         .frame(height: menuHeight)
         .onPreferenceChange(SlashMenuContentHeightKey.self) { height in
@@ -74,12 +77,7 @@ struct SlashMenu: View {
     @ViewBuilder
     private func rowLabel(for command: AvailableCommand) -> some View {
         if usesStackedRows {
-            VStack(alignment: .leading, spacing: 2) {
-                commandName(command)
-                commandDescription(command)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            stackedCommandLabel(command)
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -95,13 +93,60 @@ struct SlashMenu: View {
     private func commandName(_ command: AvailableCommand) -> some View {
         Text("/\(command.name)")
             .font(.callout.weight(.semibold))
+            .foregroundColor(.primary)
+    }
+
+    @ViewBuilder
+    private func stackedCommandLabel(_ command: AvailableCommand) -> some View {
+        let description = descriptionText(for: command)
+        if description.isEmpty {
+            commandName(command)
+        } else {
+            (Text("/\(command.name)")
+                .font(.callout.weight(.semibold))
+                .foregroundColor(.primary)
+            + Text("\n\(description)")
+                .font(.caption)
+                .foregroundColor(.secondary))
+                .lineLimit(3)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private func commandDescription(_ command: AvailableCommand) -> some View {
-        Text(command.description)
+        Text(descriptionText(for: command))
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundColor(.secondary)
             .truncationMode(.tail)
+    }
+
+    private func descriptionText(for command: AvailableCommand) -> String {
+        let description = command.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !description.isEmpty {
+            return description
+        }
+
+        switch command.name {
+        case "help":
+            return "List available commands"
+        case "model":
+            return "Show or switch models"
+        case "tools":
+            return "List available tools"
+        case "context":
+            return "Show conversation message counts"
+        case "reset":
+            return "Clear conversation history"
+        case "compact":
+            return "Compress conversation context"
+        case "steer":
+            return "Inject guidance into the running turn"
+        case "queue":
+            return "Show queued work"
+        default:
+            return ""
+        }
     }
 
     private var contentHeightReader: some View {
