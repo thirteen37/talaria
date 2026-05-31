@@ -211,12 +211,14 @@ struct CronView: View {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
             .disabled(harness.isLoading)
+            .help("Refresh the cron jobs")
             Button {
                 harness.beginAdd()
             } label: {
                 Label("Add", systemImage: "plus")
             }
             .disabled(harness.draft != nil)
+            .help("Add a cron job")
             Button {
                 guard let job = harness.selectedJob else { return }
                 Task { await harness.delete(job) }
@@ -224,6 +226,7 @@ struct CronView: View {
                 Label("Delete", systemImage: "trash")
             }
             .disabled(harness.selectionID == nil)
+            .help("Delete the selected cron job")
             Button {
                 guard let job = harness.selectedJob else { return }
                 Task { await harness.runNow(job) }
@@ -231,6 +234,7 @@ struct CronView: View {
                 Label("Run Now", systemImage: "play")
             }
             .disabled(harness.selectionID == nil)
+            .help("Run the selected cron job now")
         }
     }
 

@@ -2,11 +2,84 @@ import Foundation
 import Testing
 @testable import HermesKit
 
+/// Records every command's argv so `HermesProfiles` write builders can be
+/// verified without spawning a real hermes process. Returns a canned result
+/// (success by default, or a configured failure).
+private final class RecordingAdminRunner: HermesAdminRunning, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _arguments: [[String]] = []
+    private let result: HermesAdminResult
+
+    init(result: HermesAdminResult = HermesAdminResult(exitCode: 0, stdout: "", stderr: "")) {
+        self.result = result
+    }
+
+    var arguments: [[String]] { lock.withLock { _arguments } }
+
+    func run(_ command: HermesAdminCommand) async throws -> HermesAdminResult {
+        lock.withLock { _arguments.append(command.arguments) }
+        return result
+    }
+
+    func runStream(_ command: HermesAdminCommand) -> AsyncThrowingStream<AdminEvent, Error> {
+        lock.withLock { _arguments.append(command.arguments) }
+        return AsyncThrowingStream { $0.finish() }
+    }
+}
+
 @Suite
 struct HermesProfilesTests {
     private func fixture(_ name: String) throws -> String {
         let url = try #require(Bundle.module.url(forResource: "Fixtures/\(name)", withExtension: "txt"))
         return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    // MARK: - Write builders
+
+    @Test
+    func createBuildsCloneArgv() async throws {
+        let runner = RecordingAdminRunner()
+        try await HermesProfiles.create(runner: runner, name: "work", cloneFrom: "default")
+        #expect(runner.arguments == [["profile", "create", "work", "--clone", "--clone-from", "default"]])
+    }
+
+    @Test
+    func createClonesFromArbitrarySource() async throws {
+        let runner = RecordingAdminRunner()
+        try await HermesProfiles.create(runner: runner, name: "office", cloneFrom: "work")
+        #expect(runner.arguments == [["profile", "create", "office", "--clone", "--clone-from", "work"]])
+    }
+
+    @Test
+    func renameBuildsRenameArgv() async throws {
+        let runner = RecordingAdminRunner()
+        try await HermesProfiles.rename(runner: runner, from: "work", to: "office")
+        #expect(runner.arguments == [["profile", "rename", "work", "office"]])
+    }
+
+    @Test
+    func deleteBuildsDeleteArgvWithYes() async throws {
+        let runner = RecordingAdminRunner()
+        try await HermesProfiles.delete(runner: runner, name: "work")
+        #expect(runner.arguments == [["profile", "delete", "work", "-y"]])
+    }
+
+    @Test
+    func writeMapsUnknownCommandToCommandUnavailable() async throws {
+        let runner = RecordingAdminRunner(
+            result: HermesAdminResult(exitCode: 2, stdout: "", stderr: "hermes: no such command 'profile'\n")
+        )
+        await #expect(throws: HermesProfilesError.self) {
+            try await HermesProfiles.create(runner: runner, name: "work", cloneFrom: "default")
+        }
+        do {
+            try await HermesProfiles.create(runner: runner, name: "work", cloneFrom: "default")
+        } catch let error as HermesProfilesError {
+            guard case .commandUnavailable = error else {
+                #expect(Bool(false), "expected commandUnavailable, got \(error)")
+                return
+            }
+        }
     }
 
     @Test

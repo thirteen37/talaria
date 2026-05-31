@@ -26,22 +26,27 @@ struct YAMLConfigEditor: View {
             if state.dashboardUnavailable {
                 // Read-only on-disk config: no dashboard to write back to.
                 ScrollView {
-                    Text(state.yamlText.isEmpty ? "No config available." : state.yamlText)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                        .padding(12)
+                    if state.yamlText.isEmpty {
+                        Text("No config available.")
+                            .font(.system(.body, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                            .padding(12)
+                    } else {
+                        Text(AttributedString(YAMLHighlightTheme.attributed(state.yamlText)))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                            .padding(12)
+                    }
                 }
             } else {
-                TextEditor(text: Binding(
-                    get: { state.yamlText },
-                    set: { state.yamlText = $0; state.yamlChanged() }
-                ))
-                .font(.system(.body, design: .monospaced))
-                .autocorrectionDisabled()
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                #endif
+                HighlightingTextEditor(
+                    text: Binding(
+                        get: { state.yamlText },
+                        set: { state.yamlText = $0 }
+                    ),
+                    onChange: { state.yamlChanged() }
+                )
                 .padding(4)
             }
         }

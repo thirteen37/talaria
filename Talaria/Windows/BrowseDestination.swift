@@ -9,6 +9,8 @@ enum BrowseDestination: Hashable {
     case skills
     case tools
     case cron
+    case gateway
+    case hermesProfiles
     case logs
     case doctor
     case updates
@@ -23,6 +25,8 @@ enum BrowseDestination: Hashable {
         case .skills: return "Skills"
         case .tools: return "Tools"
         case .cron: return "Cron"
+        case .gateway: return "Gateway"
+        case .hermesProfiles: return "Profiles"
         case .profiles: return "Configuration"
         case .soul: return "Soul"
         case .logs: return "Logs"
@@ -39,6 +43,8 @@ enum BrowseDestination: Hashable {
         case .skills: return "sparkles"
         case .tools: return "wrench.and.screwdriver"
         case .cron: return "calendar"
+        case .gateway: return "antenna.radiowaves.left.and.right"
+        case .hermesProfiles: return "square.stack.3d.up"
         case .profiles: return "slider.horizontal.3"
         case .soul: return "heart.text.square"
         case .logs: return "doc.text"
@@ -52,6 +58,6 @@ enum BrowseDestination: Hashable {
     /// sidebar order. Excludes `.sessions`, which iPhone reaches via the chat
     /// stack and the All-Sessions toolbar button rather than Browse.
     static let manageOrder: [BrowseDestination] = [
-        .skills, .tools, .cron, .profiles, .soul, .logs, .doctor, .updates, .notifications,
+        .skills, .tools, .cron, .gateway, .hermesProfiles, .profiles, .soul, .logs, .doctor, .updates, .notifications,
     ]
 }

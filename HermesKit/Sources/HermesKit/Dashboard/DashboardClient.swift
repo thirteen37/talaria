@@ -36,13 +36,51 @@ public enum DashboardClientError: Error, Equatable, Sendable, LocalizedError {
     }
 }
 
+/// One messaging platform's connection state inside `gateway_platforms`.
+/// `state` is a free-form string from Hermes (`connected`, `connecting`,
+/// `error`, …); `errorCode` / `errorMessage` are populated when a platform
+/// fails to connect.
+public struct GatewayPlatform: Codable, Equatable, Sendable {
+    public let state: String?
+    public let errorCode: String?
+    public let errorMessage: String?
+    public let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case errorCode = "error_code"
+        case errorMessage = "error_message"
+        case updatedAt = "updated_at"
+    }
+}
+
 public struct DashboardStatus: Codable, Equatable, Sendable {
     public let version: String
     public let releaseDate: String?
+    /// Gateway fields are optional so this still decodes against a pre-gateway
+    /// dashboard payload (and `DashboardUpdatesService` / `DoctorView`, which
+    /// read only `version`, keep working unchanged). The dashboard's
+    /// `gateway_state` is one of `running` / `stopped` / `startup_failed` /
+    /// `draining` / null — it does **not** report install state (that's a
+    /// local service-file check the HTTP route doesn't surface).
+    public let gatewayRunning: Bool?
+    public let gatewayPid: Int?
+    public let gatewayState: String?
+    public let gatewayHealthURL: String?
+    public let gatewayPlatforms: [String: GatewayPlatform]?
+    public let gatewayExitReason: String?
+    public let gatewayUpdatedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case version
         case releaseDate = "release_date"
+        case gatewayRunning = "gateway_running"
+        case gatewayPid = "gateway_pid"
+        case gatewayState = "gateway_state"
+        case gatewayHealthURL = "gateway_health_url"
+        case gatewayPlatforms = "gateway_platforms"
+        case gatewayExitReason = "gateway_exit_reason"
+        case gatewayUpdatedAt = "gateway_updated_at"
     }
 }
 
@@ -363,6 +401,46 @@ public struct DashboardClient: Sendable {
     public func listProfiles() async throws -> [DashboardProfile] {
         let response: ProfilesResponse = try await get(path: "/api/profiles")
         return response.profiles
+    }
+
+    /// Creates a profile by cloning the default. The dashboard API only clones
+    /// from default (`clone_from_default`); cloning an arbitrary source profile
+    /// has to go through the CLI. `no_skills` skips copying the `skills/` tree.
+    public func createProfile(name: String, cloneFromDefault: Bool = true, noSkills: Bool = false) async throws {
+        let body = ProfileCreateBody(name: name, cloneFromDefault: cloneFromDefault, noSkills: noSkills)
+        try await sendNoContent(method: "POST", path: "/api/profiles", body: body)
+    }
+
+    /// Renames a profile in place. `default` is rejected by the server.
+    public func renameProfile(name: String, newName: String) async throws {
+        let body = ProfileRenameBody(newName: newName)
+        try await sendNoContent(method: "PATCH", path: "/api/profiles/\(name)", body: body)
+    }
+
+    /// Deletes a profile. The server forces `yes=True`, so no extra confirmation
+    /// flag is sent; `default` is rejected.
+    public func deleteProfile(name: String) async throws {
+        try await sendNoContent(method: "DELETE", path: "/api/profiles/\(name)")
+    }
+
+    private struct ProfileCreateBody: Encodable {
+        let name: String
+        let cloneFromDefault: Bool
+        let noSkills: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case name
+            case cloneFromDefault = "clone_from_default"
+            case noSkills = "no_skills"
+        }
+    }
+
+    private struct ProfileRenameBody: Encodable {
+        let newName: String
+
+        enum CodingKeys: String, CodingKey {
+            case newName = "new_name"
+        }
     }
 
     private struct ProfilesResponse: Decodable {

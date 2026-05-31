@@ -11,6 +11,12 @@ struct PhoneBrowseSheet: View {
     /// Hermes profiles on the server, surfaced by the window — fed to the
     /// Configuration editor's compare dropdown.
     var hermesProfiles: [HermesProfileInfo] = []
+    /// The window's active Hermes profile (`-p <name>`), highlighted in the
+    /// Profiles management table.
+    var activeHermesProfile: String = HermesProfiles.defaultProfileName
+    /// Invoked after a Profiles mutation so the window refreshes its switcher
+    /// and reconciles the active profile if it was renamed/deleted.
+    var onProfilesChanged: () -> Void = {}
     /// Optional deep link (e.g. the bell → Notifications): seeds the stack so
     /// the sheet opens directly on that surface.
     var initial: BrowseDestination?
@@ -51,6 +57,8 @@ struct PhoneBrowseSheet: View {
                     harness: harness,
                     destination: destination,
                     hermesProfiles: hermesProfiles,
+                    activeHermesProfile: activeHermesProfile,
+                    onProfilesChanged: onProfilesChanged,
                     // Keep deep links inside this sheet's stack (e.g. a
                     // notification's "Open Doctor" pushes Doctor here).
                     onOpenDestination: { dest in path.append(dest) }
@@ -59,6 +67,7 @@ struct PhoneBrowseSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done", action: onDismiss)
+                        .help("Close")
                 }
             }
         }

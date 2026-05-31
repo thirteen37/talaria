@@ -142,6 +142,21 @@ struct PhoneServerWindow: View {
         hermesProfiles = profiles
     }
 
+    /// Re-runs the Hermes-profile listing after a Profiles mutation so the
+    /// switcher reflects the change. If the active `-p <name>` was renamed or
+    /// deleted, falls back to `default` so the window isn't scoped to a dead
+    /// profile.
+    @MainActor
+    private func reconcileHermesProfiles(harness: ServerWindowHarness) {
+        Task {
+            await loadHermesProfiles(harness: harness)
+            guard self.harness === harness else { return }
+            if !hermesProfiles.contains(where: { $0.name == activeHermesProfile }) {
+                switchHermesProfile(to: HermesProfiles.defaultProfileName)
+            }
+        }
+    }
+
     /// In-place server swap. Resets the Hermes profile to `default` so a new
     /// server never inherits a possibly-nonexistent named profile (both feed
     /// one key, so a single `.task` fire results).
@@ -226,13 +241,7 @@ struct PhoneServerWindow: View {
                 onSwitchProfile: switchProfile,
                 hermesProfiles: hermesProfiles,
                 activeHermesProfile: activeHermesProfile,
-                onSwitchHermesProfile: switchHermesProfile,
-                notifications: harness.notifications,
-                // Bell opens the Browse sheet directly on Notifications.
-                onOpenNotifications: {
-                    browseDeepLink = .notifications
-                    showingBrowse = true
-                }
+                onSwitchHermesProfile: switchHermesProfile
             )
 
             if let error = harness.store.lastError {
@@ -273,6 +282,7 @@ struct PhoneServerWindow: View {
                     Image(systemName: "square.grid.2x2")
                 }
                 .accessibilityLabel("Browse")
+                .help("Browse servers and settings")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -281,6 +291,7 @@ struct PhoneServerWindow: View {
                     Image(systemName: "clock.arrow.circlepath")
                 }
                 .accessibilityLabel("All sessions")
+                .help("View all sessions")
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
@@ -289,6 +300,7 @@ struct PhoneServerWindow: View {
                     Image(systemName: "ladybug")
                 }
                 .accessibilityLabel("Logs")
+                .help("View logs")
             }
         }
         // Settings is reached via Browse → Settings: the row dismisses Browse,
@@ -303,6 +315,8 @@ struct PhoneServerWindow: View {
             PhoneBrowseSheet(
                 harness: harness,
                 hermesProfiles: hermesProfiles,
+                activeHermesProfile: activeHermesProfile,
+                onProfilesChanged: { reconcileHermesProfiles(harness: harness) },
                 initial: browseDeepLink,
                 onOpenSettings: {
                     pendingSettings = true
@@ -326,6 +340,7 @@ struct PhoneServerWindow: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Done") { showingAllSessions = false }
+                            .help("Close all sessions")
                     }
                 }
             }

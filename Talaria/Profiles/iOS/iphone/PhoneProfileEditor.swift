@@ -28,10 +28,12 @@ struct PhoneProfileEditor: View {
                             Image(systemName: "plus")
                         }
                         .accessibilityLabel("Add server")
+                        .help("Add a server")
                     }
                     if let onDismiss {
                         ToolbarItem(placement: .topBarTrailing) {
                             Button("Done", action: onDismiss)
+                                .help("Close")
                         }
                     }
                 }
@@ -254,6 +256,7 @@ private struct PhoneProfileDetail: View {
                 Button("Save") { onSave(passwordInput, passwordChanged) }
                     .disabled(!canSaveNow)
                     .fontWeight(.semibold)
+                    .help("Save the server profile")
             }
         }
     }
