@@ -25,6 +25,12 @@ final class ModelsHarness {
     /// `mainBusy` so it gates the reset action (not the unrelated main "Change"
     /// button) and blocks a second `__reset__` before the first completes.
     var bulkBusy: Bool = false
+    /// User-defined OpenAI-compatible endpoints from `config.yaml`'s `providers`
+    /// dict. Best-effort: a config fetch failure leaves the picker working.
+    var customEndpoints: [CustomEndpoint] = []
+    /// Endpoint slugs with a save/remove write in flight, so a single row's
+    /// controls disable without blocking the rest of the screen.
+    var endpointBusy: Set<String> = []
 
     private let client: DashboardClient
 
@@ -64,6 +70,7 @@ final class ModelsHarness {
         defer { isLoading = false }
         async let optionsTask = client.getModelOptions()
         async let assignmentsTask = client.getModelAssignments()
+        async let configTask = client.getConfig()
 
         var firstError: String?
         do {
@@ -75,6 +82,12 @@ final class ModelsHarness {
             assignments = try await assignmentsTask
         } catch {
             firstError = firstError ?? error.localizedDescription
+        }
+        // Config powers the custom-endpoints section. Tolerate its failure
+        // without blocking the picker — an older/transient dashboard still
+        // serves options + assignments, and the previous endpoint list stays.
+        if let config = try? await configTask {
+            customEndpoints = CustomEndpoint.list(in: config)
         }
         lastError = firstError
     }
@@ -143,6 +156,129 @@ final class ModelsHarness {
         }
     }
 
+    // MARK: - Custom endpoints
+
+    /// Saves an endpoint (add or edit). Config is fetched once up front; for a
+    /// brand-new endpoint the stable slug is derived from *that* fresh config's
+    /// provider keys (not the possibly-stale in-memory list) and the merge
+    /// writes back into the same object — so a slug added by another window or a
+    /// hand edit since the last refresh is both de-duped against and preserved.
+    ///
+    /// The `api_key` field is governed by what the user did: entering a new key
+    /// stores the secret in `.env` and writes the derived `${VAR}` reference
+    /// (`.set`); leaving the field blank on a keyed endpoint keeps the existing
+    /// reference verbatim (`.keep`) so a non-derived `${MY_VAR}`/literal isn't
+    /// repointed at an unset derived var; otherwise no key is written
+    /// (`.remove`).
+    /// Returns whether the save completed, so the form can keep the sheet (and
+    /// the typed key) open on failure rather than dismissing and losing input.
+    @discardableResult
+    func saveEndpoint(_ endpoint: CustomEndpoint, newKey: String?) async -> Bool {
+        let fresh: JSONValue
+        do {
+            fresh = try await client.getConfig()
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+
+        let draft: CustomEndpoint
+        if endpoint.slug.isEmpty {
+            let slug = CustomEndpoint.slug(
+                forName: endpoint.name,
+                existing: CustomEndpoint.list(in: fresh).map(\.slug)
+            )
+            draft = CustomEndpoint(
+                slug: slug,
+                name: endpoint.name,
+                baseURL: endpoint.baseURL,
+                models: endpoint.models,
+                defaultModel: endpoint.defaultModel,
+                discoverModels: endpoint.discoverModels,
+                hasAPIKey: endpoint.hasAPIKey
+            )
+        } else {
+            draft = endpoint
+        }
+
+        let action: CustomEndpoint.APIKeyWrite =
+            (newKey?.isEmpty == false) ? .set : (draft.hasAPIKey ? .keep : .remove)
+
+        return await runEndpoint(slug: draft.slug) {
+            if let newKey, !newKey.isEmpty {
+                try await $0.setEnvVar(
+                    key: CustomEndpoint.apiKeyEnvVarName(forSlug: draft.slug),
+                    value: newKey
+                )
+            }
+            try await $0.updateConfig(CustomEndpoint.upsert(draft, apiKey: action, in: fresh))
+        }
+    }
+
+    /// Removes an endpoint: drops `providers.<slug>` from config, then deletes
+    /// its derived `.env` var. The env deletion is best-effort cleanup of a key
+    /// the config no longer references, so any failure there (not just the 404
+    /// the client already tolerates) is swallowed — the config removal is the
+    /// meaningful action and must drive the success/refresh path rather than
+    /// stranding the removed endpoint in the list. A leftover `.env` line is
+    /// harmless; the user can retry remove to re-attempt cleanup.
+    func removeEndpoint(slug: String) async {
+        await runEndpoint(slug: slug) {
+            let fresh = try await $0.getConfig()
+            try await $0.updateConfig(CustomEndpoint.remove(slug: slug, from: fresh))
+            try? await $0.deleteEnvVar(key: CustomEndpoint.apiKeyEnvVarName(forSlug: slug))
+        }
+    }
+
+    /// Reveals an endpoint's stored key on demand. Primary path is the env
+    /// reveal route. Only a 404 (key stored under a non-derived name, e.g.
+    /// hand-edited config) falls back to the expanded `api_key` from a fresh
+    /// config — returning nil when that's just an unresolved `${VAR}` literal.
+    /// Any other failure (network, 5xx, unauthorized, rate-limit) is rethrown
+    /// so the caller shows a real error rather than an empty field that looks
+    /// like a cleared key.
+    func revealEndpointKey(slug: String) async throws -> String? {
+        let varName = CustomEndpoint.apiKeyEnvVarName(forSlug: slug)
+        do {
+            return try await client.revealEnvVar(key: varName)
+        } catch let DashboardClientError.http(statusCode, _) where statusCode == 404 {
+            return try await expandedConfigKey(slug: slug)
+        }
+    }
+
+    /// The endpoint's `api_key` from a fresh config, expanded — nil when it's
+    /// missing or only an unresolved `${VAR}` template (referenced var unset).
+    private func expandedConfigKey(slug: String) async throws -> String? {
+        guard case let .object(root) = try await client.getConfig(),
+              case let .object(providers) = root["providers"],
+              case let .object(entry) = providers[slug],
+              case let .string(apiKey) = entry["api_key"],
+              !apiKey.isEmpty,
+              !(apiKey.hasPrefix("${") && apiKey.hasSuffix("}")) else {
+            return nil
+        }
+        return apiKey
+    }
+
+    /// Whether a save/remove is in flight for `slug`, so its row's controls
+    /// disable without freezing the rest of the screen.
+    func isEndpointBusy(slug: String) -> Bool { endpointBusy.contains(slug) }
+
+    @discardableResult
+    private func runEndpoint(slug: String, _ body: (DashboardClient) async throws -> Void) async -> Bool {
+        endpointBusy.insert(slug)
+        defer { endpointBusy.remove(slug) }
+        do {
+            try await body(client)
+            lastError = nil
+            await refresh()
+            return true
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+    }
+
     /// Shared write wrapper: marks the target busy, runs the dashboard call,
     /// surfaces any error, closes the picker, and refreshes on success.
     private func write(target: ModelPickerTarget?, _ body: (DashboardClient) async throws -> Void) async {
@@ -179,6 +315,24 @@ struct ModelsView: View {
     /// an unlabeled toolbar button sitting next to Refresh, so a mis-click
     /// shouldn't silently wipe every per-slot override.
     @State private var showResetConfirm: Bool = false
+    /// Add/edit sheet for a custom endpoint (nil = closed).
+    @State private var endpointSheet: EndpointSheet?
+    /// Endpoint queued for removal, awaiting confirmation.
+    @State private var endpointToRemove: CustomEndpoint?
+
+    /// Identifies the endpoint sheet so `.sheet(item:)` rebuilds when switching
+    /// between Add and a specific endpoint's Edit.
+    private enum EndpointSheet: Identifiable {
+        case add
+        case edit(CustomEndpoint)
+
+        var id: String {
+            switch self {
+            case .add: return "__add__"
+            case let .edit(endpoint): return endpoint.slug
+            }
+        }
+    }
 
     init(client: DashboardClient?, hermesVersion: HermesVersion? = nil) {
         self.client = client
@@ -238,6 +392,32 @@ struct ModelsView: View {
         } message: {
             Text("Every auxiliary slot returns to “auto”, reusing your main model. Per-slot overrides are lost. This cannot be undone.")
         }
+        .sheet(item: $endpointSheet) { sheet in
+            switch sheet {
+            case .add:
+                CustomEndpointForm(harness: harness, existing: nil)
+            case let .edit(endpoint):
+                CustomEndpointForm(harness: harness, existing: endpoint)
+            }
+        }
+        .confirmationDialog(
+            "Remove “\(endpointToRemove?.name ?? "")”?",
+            isPresented: Binding(
+                get: { endpointToRemove != nil },
+                set: { if !$0 { endpointToRemove = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive) {
+                if let endpoint = endpointToRemove {
+                    Task { await harness.removeEndpoint(slug: endpoint.slug) }
+                }
+                endpointToRemove = nil
+            }
+            Button("Cancel", role: .cancel) { endpointToRemove = nil }
+        } message: {
+            Text("The endpoint and its stored API key are deleted. Any model slot still assigned to it will no longer resolve. This cannot be undone.")
+        }
     }
 
     // MARK: - Assignments form
@@ -261,6 +441,26 @@ struct ModelsView: View {
                 Text("Auxiliary models")
             } footer: {
                 Text("Auxiliary slots default to “auto”, reusing your main model. Override a slot to use a cheaper or faster model for that side-job.")
+            }
+
+            Section {
+                ForEach(harness.customEndpoints) { endpoint in
+                    endpointRow(harness: harness, endpoint: endpoint)
+                }
+                if harness.customEndpoints.isEmpty, !harness.isLoading {
+                    Text("No custom endpoints yet.")
+                        .foregroundStyle(.secondary)
+                }
+                Button {
+                    endpointSheet = .add
+                } label: {
+                    Label("Add endpoint", systemImage: "plus")
+                }
+                .help("Add a custom OpenAI-compatible endpoint")
+            } header: {
+                Text("Custom endpoints")
+            } footer: {
+                Text("OpenAI-compatible endpoints become selectable providers above. API keys are stored in ~/.hermes/.env and referenced from config.yaml — never written there in plaintext.")
             }
         }
         .formStyle(.grouped)
@@ -324,6 +524,46 @@ struct ModelsView: View {
         let provider = slot.provider ?? ""
         if model.isEmpty { return provider.isEmpty ? "auto (use main model)" : provider }
         return provider.isEmpty ? model : "\(provider) · \(model)"
+    }
+
+    // MARK: - Custom endpoint rows
+
+    @ViewBuilder
+    private func endpointRow(harness: ModelsHarness, endpoint: CustomEndpoint) -> some View {
+        let busy = harness.isEndpointBusy(slug: endpoint.slug)
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(endpoint.name)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(endpointSubtitle(endpoint))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            if endpoint.hasAPIKey {
+                Image(systemName: "key.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("API key configured")
+                    .help("An API key is configured for this endpoint")
+            }
+            Button("Edit") { endpointSheet = .edit(endpoint) }
+                .disabled(busy)
+                .help("Edit “\(endpoint.name)”")
+            Button("Remove") { endpointToRemove = endpoint }
+                .disabled(busy)
+                .help("Remove “\(endpoint.name)” and its stored API key")
+        }
+    }
+
+    private func endpointSubtitle(_ endpoint: CustomEndpoint) -> String {
+        let models = endpoint.discoverModels
+            ? "auto-detect"
+            : "\(endpoint.models.count) model\(endpoint.models.count == 1 ? "" : "s")"
+        return endpoint.baseURL.isEmpty ? models : "\(endpoint.baseURL) · \(models)"
     }
 
     // MARK: - Picker pane
