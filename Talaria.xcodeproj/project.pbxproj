@@ -19,6 +19,7 @@
 		15A7FC4163AEF6367E9D802F /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 01A9F9047947C5476F232D23 /* Sparkle */; };
 		1964C2ACA58980B5A5A68B49 /* PermissionPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748E28FC6797F351A6EBB220 /* PermissionPrompt.swift */; };
 		1A1F3DE30BDCE1C40778F6B4 /* HostKeyConfirmationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D9036C1EE4E2376B7311222 /* HostKeyConfirmationCoordinator.swift */; };
+		1BABD89411F2EFEE5EF43674 /* AppBuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EDD04464AA2C3F0E70C54D5 /* AppBuildInfo.swift */; };
 		1C8FCA7408B8AACE039E5CA0 /* RecentServers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F61968C9D6A00AA0704AE7B /* RecentServers.swift */; };
 		1CB486B12C0C991FB9C567DC /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2D698123A7F03A11D05B3938 /* PrivacyInfo.xcprivacy */; };
 		1D86001F1932D4D1C9682798 /* DoctorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A30DFD8DFB5E048EC77638CD /* DoctorView.swift */; };
@@ -64,6 +65,7 @@
 		5B16B9E3E352309807458920 /* UpdatesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BE3C2E6EB6E8620978EE451 /* UpdatesView.swift */; };
 		5BF18457E28EAF773C62F3CA /* DesktopProfileEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23313EAA36A931AB0092B232 /* DesktopProfileEditor.swift */; };
 		5CC00868EAC36906049EE9A3 /* SessionsStoreReadOnlyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3305AB6CC2FE91C23C78F9CA /* SessionsStoreReadOnlyTests.swift */; };
+		5DB03C775524426F671F2530 /* AppBuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EDD04464AA2C3F0E70C54D5 /* AppBuildInfo.swift */; };
 		5EA432274794842C57B5C6BE /* SessionsCwdStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 574D3C3473960761D9EEF81C /* SessionsCwdStore.swift */; };
 		5EC0E7BD239BC0CF5E419732 /* MockACPTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 323C950380308737D5290B8F /* MockACPTransport.swift */; };
 		6066CFA11D8F136AF73EDC2F /* YAMLFileDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40BCC93769E881572E354E67 /* YAMLFileDocument.swift */; };
@@ -217,6 +219,7 @@
 		574D3C3473960761D9EEF81C /* SessionsCwdStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsCwdStore.swift; sourceTree = "<group>"; };
 		58CBDD31C2455B43FD8029D7 /* HighlightingTextEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HighlightingTextEditor.swift; sourceTree = "<group>"; };
 		5E05DB8DF8D9AFD4FE25E26E /* ConfigFieldControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigFieldControl.swift; sourceTree = "<group>"; };
+		5EDD04464AA2C3F0E70C54D5 /* AppBuildInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppBuildInfo.swift; sourceTree = "<group>"; };
 		5F6D42240D0DFA40A9B1E0FC /* DesktopServerWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesktopServerWindow.swift; sourceTree = "<group>"; };
 		675EDBC01285C29152612D09 /* EnvironmentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvironmentView.swift; sourceTree = "<group>"; };
 		690152DEACAA0648E113BDAC /* ProfileFieldBindings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileFieldBindings.swift; sourceTree = "<group>"; };
@@ -407,6 +410,7 @@
 		559AF69A4351F89C500ED5EC /* System */ = {
 			isa = PBXGroup;
 			children = (
+				5EDD04464AA2C3F0E70C54D5 /* AppBuildInfo.swift */,
 				BEC6EAC9742C997DB3F416F0 /* AppLog.swift */,
 				71FE69AC7DA73A5FB9244123 /* LogConsole.swift */,
 				CDAC774B6984161F68546501 /* iOS */,
@@ -781,6 +785,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5DB03C775524426F671F2530 /* AppBuildInfo.swift in Sources */,
 				1EECCDC4AE1FAACFF07BE0AD /* AppLog.swift in Sources */,
 				7621DC3ED55B2069E6CE1F9F /* BrowseDestination.swift in Sources */,
 				3294913DBA7E308109C8DB64 /* BrowseDetail.swift in Sources */,
@@ -858,6 +863,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1BABD89411F2EFEE5EF43674 /* AppBuildInfo.swift in Sources */,
 				B12C7ACB8C23C086A85E0842 /* AppLog.swift in Sources */,
 				BFCAF447270A3E3C393BA983 /* BrowseDestination.swift in Sources */,
 				C8A306E119586CE2E6731380 /* BrowseDetail.swift in Sources */,

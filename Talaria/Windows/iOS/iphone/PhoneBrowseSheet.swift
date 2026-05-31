@@ -48,6 +48,13 @@ struct PhoneBrowseSheet: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                } footer: {
+                    Text(AppBuildInfo.summary)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .textSelection(.enabled)
+                        .accessibilityLabel("App build: \(AppBuildInfo.summary)")
                 }
             }
             .navigationTitle("Browse")
