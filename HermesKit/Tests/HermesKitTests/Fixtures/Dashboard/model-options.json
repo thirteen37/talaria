@@ -1,0 +1,31 @@
+{
+  "providers": [
+    {
+      "slug": "openrouter",
+      "name": "OpenRouter",
+      "is_current": true,
+      "is_user_defined": false,
+      "models": [
+        "anthropic/claude-opus-4.7",
+        "google/gemini-2.5-flash",
+        "deepseek/deepseek-chat"
+      ],
+      "total_models": 3,
+      "source": "built-in"
+    },
+    {
+      "slug": "anthropic",
+      "name": "Anthropic",
+      "is_current": false,
+      "is_user_defined": false,
+      "models": [
+        "claude-opus-4-7",
+        "claude-haiku-4-5"
+      ],
+      "total_models": 2,
+      "source": "built-in"
+    }
+  ],
+  "model": "anthropic/claude-opus-4.7",
+  "provider": "openrouter"
+}

@@ -26,6 +26,15 @@ public struct SystemDashboardProcessLauncher: DashboardProcessLauncher {
         // doesn't fill and block the child.
         process.standardOutput = FileHandle.nullDevice
 
+        // Heartbeat pipe: the watchdog (`spec` wraps the dashboard in one) blocks
+        // reading this on stdin and only ever sees EOF when the app's write end
+        // closes. We are the sole writer and never write to it; the kernel closes
+        // it on *any* app death (quit, crash, SIGKILL), tripping the watchdog.
+        // Foundation hands only the read end to the child, so the app's write end
+        // stays exclusively ours.
+        let heartbeat = Pipe()
+        process.standardInput = heartbeat
+
         var stderrCont: AsyncStream<String>.Continuation?
         let stderrStream = AsyncStream<String> { c in stderrCont = c }
         let stderrContinuation = stderrCont!
@@ -47,6 +56,7 @@ public struct SystemDashboardProcessLauncher: DashboardProcessLauncher {
         return SystemDashboardProcess(
             process: process,
             stderrPipe: stderrPipe,
+            heartbeat: heartbeat,
             stderrStream: stderrStream,
             stderrContinuation: stderrContinuation
         )
@@ -57,6 +67,11 @@ final class SystemDashboardProcess: DashboardProcess, @unchecked Sendable {
     private let process: Process
     let stderr: AsyncStream<String>
     private let stderrPipe: Pipe
+    /// The heartbeat pipe whose write end this object exclusively owns. Retained
+    /// (and never written) for the object's lifetime so the kernel only closes
+    /// it — tripping the watchdog's EOF — when the app actually dies. Explicitly
+    /// closed in `terminate()` after the in-session kill.
+    private let heartbeat: Pipe
     private let stderrContinuation: AsyncStream<String>.Continuation
     private let exitStream: AsyncStream<Int32>
     private let exitContinuation: AsyncStream<Int32>.Continuation
@@ -66,12 +81,14 @@ final class SystemDashboardProcess: DashboardProcess, @unchecked Sendable {
     init(
         process: Process,
         stderrPipe: Pipe,
+        heartbeat: Pipe,
         stderrStream: AsyncStream<String>,
         stderrContinuation: AsyncStream<String>.Continuation
     ) {
         self.process = process
         self.stderr = stderrStream
         self.stderrPipe = stderrPipe
+        self.heartbeat = heartbeat
         self.stderrContinuation = stderrContinuation
         var capturedExit: AsyncStream<Int32>.Continuation?
         self.exitStream = AsyncStream<Int32> { c in capturedExit = c }
@@ -98,18 +115,32 @@ final class SystemDashboardProcess: DashboardProcess, @unchecked Sendable {
     }
 
     func terminate() async {
-        guard process.isRunning else { return }
-        process.terminate() // SIGTERM
-        // Give the process a short window to flush stderr and exit gracefully
-        // before escalating. Most well-behaved daemons respond within ms;
-        // a stuck one warrants SIGKILL.
-        let deadline = Date().addingTimeInterval(2.0)
+        guard process.isRunning else {
+            try? heartbeat.fileHandleForWriting.close()
+            return
+        }
+        // SIGTERM targets the `sh` watchdog; its TERM/EXIT trap escalates
+        // SIGTERM→SIGKILL down to hermes itself (~2s grace). We must NOT SIGKILL
+        // the watchdog here: hermes has reparented away from us, so the watchdog
+        // owns the only reliable handle to it — killing the shell mid-escalation
+        // would orphan a SIGTERM-ignoring hermes, the leak this design prevents.
+        process.terminate()
+        // Wait for the watchdog to finish escalating and exit. Bound it well past
+        // the watchdog's internal grace so we only fall through if the *shell
+        // itself* is wedged (not merely a stuck hermes).
+        let deadline = Date().addingTimeInterval(5.0)
         while process.isRunning && Date() < deadline {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
         if process.isRunning {
+            // Last resort: the watchdog shell itself is unresponsive. Nothing
+            // better is possible without hermes's PID; reap the shell so we
+            // don't leak it too.
             kill(process.processIdentifier, SIGKILL)
         }
+        // Release our heartbeat write end. (Belt-and-suspenders: also EOFs the
+        // watchdog, though the SIGTERM above already drove the kill.)
+        try? heartbeat.fileHandleForWriting.close()
         _ = await waitForExit()
     }
 

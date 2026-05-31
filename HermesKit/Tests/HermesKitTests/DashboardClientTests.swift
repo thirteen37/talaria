@@ -22,6 +22,45 @@ struct DashboardClientTests {
     }
 
     @Test
+    func getStatusDecodesGatewayFields() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/status", body: try loadFixtureData("status.json"))
+        ])
+        let client = DashboardClient(
+            baseURL: URL(string: "http://127.0.0.1:9119")!,
+            token: { nil },
+            http: http
+        )
+
+        let status = try await client.getStatus()
+
+        #expect(status.gatewayRunning == true)
+        #expect(status.gatewayPid == 86529)
+        #expect(status.gatewayState == "running")
+        #expect(status.gatewayHealthURL == nil)
+        #expect(status.gatewayExitReason == nil)
+        #expect(status.gatewayUpdatedAt == "2026-05-28T02:28:10.778139+00:00")
+        let telegram = try #require(status.gatewayPlatforms?["telegram"])
+        #expect(telegram.state == "connected")
+        #expect(telegram.errorCode == nil)
+        #expect(telegram.errorMessage == nil)
+        #expect(telegram.updatedAt == "2026-05-28T02:28:09.818991+00:00")
+        #expect(status.gatewayPlatforms?["homeassistant"]?.state == "connected")
+    }
+
+    @Test
+    func getStatusToleratesMissingGatewayFields() throws {
+        // A pre-gateway dashboard payload (only version/release_date) must still
+        // decode — every gateway field is optional.
+        let body = Data(#"{"version":"0.13.0","release_date":"2026.4.1"}"#.utf8)
+        let status = try JSONDecoder().decode(DashboardStatus.self, from: body)
+        #expect(status.version == "0.13.0")
+        #expect(status.gatewayRunning == nil)
+        #expect(status.gatewayState == nil)
+        #expect(status.gatewayPlatforms == nil)
+    }
+
+    @Test
     func getStatusOmitsTokenHeaderWhenNoTokenAvailable() async throws {
         let http = StubHTTP(responses: [
             .init(path: "/api/status", body: try loadFixtureData("status.json"))
@@ -218,6 +257,104 @@ struct DashboardClientTests {
         #expect(action.name == "hermes-update")
         #expect(action.running == false)
         #expect(action.lines.isEmpty)
+    }
+
+    @Test
+    func getModelOptionsDecodesProvidersAndCuratedModels() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/model/options", body: try loadFixtureData("model-options.json"))
+        ])
+        let client = DashboardClient(
+            baseURL: URL(string: "http://127.0.0.1:9119")!,
+            token: { "tok" },
+            http: http
+        )
+
+        let options = try await client.getModelOptions()
+
+        #expect(options.provider == "openrouter")
+        #expect(options.model == "anthropic/claude-opus-4.7")
+        #expect(options.providers.count == 2)
+        let openrouter = try #require(options.providers.first)
+        #expect(openrouter.slug == "openrouter")
+        #expect(openrouter.displayName == "OpenRouter")
+        #expect(openrouter.isCurrent == true)
+        #expect(openrouter.models.contains("google/gemini-2.5-flash"))
+        #expect(openrouter.totalModels == 3)
+    }
+
+    @Test
+    func getModelAssignmentsDecodesMainAndAuxiliarySlots() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/model/auxiliary", body: try loadFixtureData("model-auxiliary.json"))
+        ])
+        let client = DashboardClient(
+            baseURL: URL(string: "http://127.0.0.1:9119")!,
+            token: { "tok" },
+            http: http
+        )
+
+        let assignments = try await client.getModelAssignments()
+
+        #expect(assignments.main.provider == "openrouter")
+        #expect(assignments.main.model == "anthropic/claude-opus-4.7")
+        // Hermes returns all eleven canonical slots in declaration order.
+        #expect(assignments.tasks.count == 11)
+        let vision = try #require(assignments.tasks.first { $0.task == "vision" })
+        #expect(vision.isAuto == false)
+        #expect(vision.model == "google/gemini-2.5-flash")
+        let compression = try #require(assignments.tasks.first { $0.task == "compression" })
+        // provider:"auto" + empty model ⇒ inherits the main model.
+        #expect(compression.isAuto == true)
+    }
+
+    @Test
+    func setModelMainPostsScopedBody() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/model/set", body: Data(#"{"ok":true}"#.utf8))
+        ])
+        let client = DashboardClient(
+            baseURL: URL(string: "http://127.0.0.1:9119")!,
+            token: { "tok" },
+            http: http
+        )
+
+        try await client.setModel(scope: .main, provider: "openrouter", model: "anthropic/claude-opus-4.7")
+
+        let request = try #require(http.recordedRequests.first)
+        #expect(request.url?.path == "/api/model/set")
+        #expect(request.httpMethod == "POST")
+        let body = try #require(request.httpBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["scope"] as? String == "main")
+        // `task` is omitted entirely for main: the server's auxiliary branch
+        // treats an empty task as "every slot", so a stray `task:""` riding a
+        // main write must never reach it.
+        #expect(json["task"] == nil)
+        #expect(json["provider"] as? String == "openrouter")
+        #expect(json["model"] as? String == "anthropic/claude-opus-4.7")
+    }
+
+    @Test
+    func setModelAuxiliaryResetPostsResetSentinel() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/model/set", body: Data(#"{"ok":true}"#.utf8))
+        ])
+        let client = DashboardClient(
+            baseURL: URL(string: "http://127.0.0.1:9119")!,
+            token: { "tok" },
+            http: http
+        )
+
+        try await client.setModel(scope: .auxiliary, task: "__reset__", provider: "", model: "")
+
+        let request = try #require(http.recordedRequests.first)
+        let body = try #require(request.httpBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["scope"] as? String == "auxiliary")
+        #expect(json["task"] as? String == "__reset__")
+        #expect(json["provider"] as? String == "")
+        #expect(json["model"] as? String == "")
     }
 
     private func loadFixtureData(_ name: String) throws -> Data {

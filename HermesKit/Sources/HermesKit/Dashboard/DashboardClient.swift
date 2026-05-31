@@ -36,13 +36,51 @@ public enum DashboardClientError: Error, Equatable, Sendable, LocalizedError {
     }
 }
 
+/// One messaging platform's connection state inside `gateway_platforms`.
+/// `state` is a free-form string from Hermes (`connected`, `connecting`,
+/// `error`, …); `errorCode` / `errorMessage` are populated when a platform
+/// fails to connect.
+public struct GatewayPlatform: Codable, Equatable, Sendable {
+    public let state: String?
+    public let errorCode: String?
+    public let errorMessage: String?
+    public let updatedAt: String?
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case errorCode = "error_code"
+        case errorMessage = "error_message"
+        case updatedAt = "updated_at"
+    }
+}
+
 public struct DashboardStatus: Codable, Equatable, Sendable {
     public let version: String
     public let releaseDate: String?
+    /// Gateway fields are optional so this still decodes against a pre-gateway
+    /// dashboard payload, and callers that read only `version` keep working
+    /// unchanged. The dashboard's
+    /// `gateway_state` is one of `running` / `stopped` / `startup_failed` /
+    /// `draining` / null — it does **not** report install state (that's a
+    /// local service-file check the HTTP route doesn't surface).
+    public let gatewayRunning: Bool?
+    public let gatewayPid: Int?
+    public let gatewayState: String?
+    public let gatewayHealthURL: String?
+    public let gatewayPlatforms: [String: GatewayPlatform]?
+    public let gatewayExitReason: String?
+    public let gatewayUpdatedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case version
         case releaseDate = "release_date"
+        case gatewayRunning = "gateway_running"
+        case gatewayPid = "gateway_pid"
+        case gatewayState = "gateway_state"
+        case gatewayHealthURL = "gateway_health_url"
+        case gatewayPlatforms = "gateway_platforms"
+        case gatewayExitReason = "gateway_exit_reason"
+        case gatewayUpdatedAt = "gateway_updated_at"
     }
 }
 
@@ -224,6 +262,229 @@ public struct DashboardProfile: Codable, Equatable, Sendable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case name, model, provider
         case isDefault = "is_default"
+    }
+}
+
+/// One provider row from `GET /api/model/options`. Hermes returns **only
+/// authenticated** providers here (no `authenticated` flag), each carrying its
+/// curated model-id list. `models` is a flat list of model identifier strings
+/// (the dashboard's picker shows them verbatim). Unauthenticated providers are
+/// supplied separately by the UI from a static catalog, so this type models the
+/// authenticated case only.
+public struct DashboardModelProvider: Codable, Equatable, Sendable, Identifiable {
+    public let slug: String
+    public let name: String?
+    public let isCurrent: Bool?
+    public let isUserDefined: Bool?
+    public let models: [String]
+    public let totalModels: Int?
+    public let source: String?
+
+    public var id: String { slug }
+
+    /// Friendly label, falling back to the slug when the row omits a name.
+    public var displayName: String {
+        if let name, !name.isEmpty { return name }
+        return slug
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case slug, name, models, source
+        case isCurrent = "is_current"
+        case isUserDefined = "is_user_defined"
+        case totalModels = "total_models"
+    }
+
+    public init(
+        slug: String,
+        name: String?,
+        isCurrent: Bool? = nil,
+        isUserDefined: Bool? = nil,
+        models: [String],
+        totalModels: Int? = nil,
+        source: String? = nil
+    ) {
+        self.slug = slug
+        self.name = name
+        self.isCurrent = isCurrent
+        self.isUserDefined = isUserDefined
+        self.models = models
+        self.totalModels = totalModels
+        self.source = source
+    }
+}
+
+/// Response of `GET /api/model/options` — the authenticated provider universe
+/// plus the currently-selected main `provider`/`model` echoed alongside.
+public struct DashboardModelOptions: Codable, Equatable, Sendable {
+    public let providers: [DashboardModelProvider]
+    public let model: String?
+    public let provider: String?
+}
+
+/// One auxiliary slot from `GET /api/model/auxiliary`. A slot reads
+/// `provider == "auto"` (and an empty `model`) when it's unset and inherits the
+/// main model. `task` is the canonical slot key (e.g. `"vision"`).
+public struct DashboardAuxiliaryModel: Codable, Equatable, Sendable, Identifiable {
+    public let task: String
+    public let provider: String?
+    public let model: String?
+    public let baseURL: String?
+
+    public var id: String { task }
+
+    /// True when the slot falls back to the main model (`provider` empty or the
+    /// literal `"auto"`). The dashboard renders these as "auto (use main model)".
+    public var isAuto: Bool {
+        let normalized = (provider ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        return normalized.isEmpty || normalized == "auto"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case task, provider, model
+        case baseURL = "base_url"
+    }
+}
+
+/// The main-model assignment echoed by `GET /api/model/auxiliary`.
+public struct DashboardMainModel: Codable, Equatable, Sendable {
+    public let provider: String?
+    public let model: String?
+}
+
+/// Response of `GET /api/model/auxiliary` — the main model plus every auxiliary
+/// task slot in Hermes' canonical order.
+public struct DashboardModelAssignments: Codable, Equatable, Sendable {
+    public let tasks: [DashboardAuxiliaryModel]
+    public let main: DashboardMainModel
+}
+
+/// Target of a `POST /api/model/set`. `main` writes `model.provider`/
+/// `model.default`; `auxiliary` writes `auxiliary.<task>.{provider,model}`.
+public enum DashboardModelScope: String, Sendable {
+    case main
+    case auxiliary
+}
+
+/// One agent plugin from `GET /api/dashboard/plugins/hub`. Decodes only the
+/// fields the native Plugins surface renders; the hub also carries
+/// `dashboard_manifest` (web-only tab metadata) and `user_hidden`, which
+/// `JSONDecoder` ignores since they aren't modeled here.
+public struct DashboardPlugin: Codable, Equatable, Sendable, Identifiable {
+    public let name: String
+    public let version: String
+    public let description: String
+    /// `bundled` | `user` | `git` | `pip` | … — drives the source pill.
+    public let source: String
+    /// `enabled` | `disabled` | `inactive` — drives the status pill and which
+    /// of Enable/Disable the detail pane offers.
+    public let runtimeStatus: String
+    /// False for plugins that don't ship a dashboard tab ("No dashboard tab").
+    public let hasDashboardManifest: Bool
+    /// True only for user-installed plugins — gates the Remove button.
+    public let canRemove: Bool
+    /// True only for git-sourced plugins — gates the Update button.
+    public let canUpdateGit: Bool
+    public let authRequired: Bool
+    public let authCommand: String
+    public let path: String
+
+    public var id: String { name }
+
+    enum CodingKeys: String, CodingKey {
+        case name, version, description, source, path
+        case runtimeStatus = "runtime_status"
+        case hasDashboardManifest = "has_dashboard_manifest"
+        case canRemove = "can_remove"
+        case canUpdateGit = "can_update_git"
+        case authRequired = "auth_required"
+        case authCommand = "auth_command"
+    }
+}
+
+public struct DashboardPluginProviderOption: Codable, Equatable, Sendable, Identifiable {
+    public let name: String
+    public let description: String
+
+    public var id: String { name }
+}
+
+public struct DashboardPluginProviders: Codable, Equatable, Sendable {
+    /// Current memory provider; empty string means built-in / none.
+    public let memoryProvider: String
+    public let memoryOptions: [DashboardPluginProviderOption]
+    public let contextEngine: String
+    public let contextOptions: [DashboardPluginProviderOption]
+
+    enum CodingKeys: String, CodingKey {
+        case memoryProvider = "memory_provider"
+        case memoryOptions = "memory_options"
+        case contextEngine = "context_engine"
+        case contextOptions = "context_options"
+    }
+}
+
+public struct DashboardPluginsHub: Codable, Equatable, Sendable {
+    public let plugins: [DashboardPlugin]
+    public let providers: DashboardPluginProviders
+}
+
+/// Success payload from `POST /api/dashboard/agent-plugins/install`. The route
+/// returns `{ ok, plugin_name, warnings, missing_env, enabled }` on 200 and
+/// raises HTTP 400 (`{ detail }`) on failure — which the shared plumbing turns
+/// into a thrown `DashboardClientError.http` before this is ever parsed.
+/// Decoding defaults every field so a missing key or empty body can't make a
+/// genuine success read as a failure.
+public struct DashboardPluginInstallResult: Codable, Equatable, Sendable {
+    public let ok: Bool
+    /// Canonical name the server resolved the install to (e.g. `linear`).
+    public let pluginName: String?
+    /// Non-fatal advisories (e.g. insecure URL scheme).
+    public let warnings: [String]
+    /// Names of required env vars the plugin declares but that aren't set yet.
+    public let missingEnv: [String]
+    /// Whether the plugin was enabled as part of this install.
+    public let enabled: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case ok, warnings, enabled
+        case pluginName = "plugin_name"
+        case missingEnv = "missing_env"
+    }
+
+    public init(
+        ok: Bool = true,
+        pluginName: String? = nil,
+        warnings: [String] = [],
+        missingEnv: [String] = [],
+        enabled: Bool = false
+    ) {
+        self.ok = ok
+        self.pluginName = pluginName
+        self.warnings = warnings
+        self.missingEnv = missingEnv
+        self.enabled = enabled
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        ok = (try? c.decode(Bool.self, forKey: .ok)) ?? true
+        pluginName = try? c.decodeIfPresent(String.self, forKey: .pluginName)
+        warnings = (try? c.decode([String].self, forKey: .warnings)) ?? []
+        missingEnv = (try? c.decode([String].self, forKey: .missingEnv)) ?? []
+        enabled = (try? c.decode(Bool.self, forKey: .enabled)) ?? false
+    }
+
+    /// Parses a raw install body, defaulting to an empty success on an empty or
+    /// unparseable body (the route always sends the dict on 200, so this guard
+    /// only covers defensive edge cases).
+    init(data: Data) {
+        if !data.isEmpty,
+           let decoded = try? JSONDecoder().decode(DashboardPluginInstallResult.self, from: data) {
+            self = decoded
+        } else {
+            self = DashboardPluginInstallResult()
+        }
     }
 }
 
@@ -409,6 +670,53 @@ public struct DashboardClient: Sendable {
         let profiles: [DashboardProfile]
     }
 
+    // MARK: - Models
+
+    /// Authenticated providers + each provider's curated model list. Hermes
+    /// omits unauthenticated providers entirely, so the Models screen overlays
+    /// a static known-provider catalog to surface those disabled.
+    public func getModelOptions() async throws -> DashboardModelOptions {
+        try await get(path: "/api/model/options")
+    }
+
+    /// Current assignments: the main model plus the auxiliary task slots
+    /// (unset slots read as `provider:"auto"`).
+    public func getModelAssignments() async throws -> DashboardModelAssignments {
+        try await get(path: "/api/model/auxiliary")
+    }
+
+    /// Assigns a provider/model to a slot. For `scope == .auxiliary`: a slot
+    /// name overrides one task, `""` assigns every slot, and `"__reset__"`
+    /// resets all to auto (pass empty `provider`/`model`).
+    ///
+    /// For `scope == .main` the server ignores `task`, so we drop it from the
+    /// body entirely rather than send `task:""` — the auxiliary branch reads an
+    /// empty task as "every slot", and omitting the field removes any chance a
+    /// main write is misrouted there on a server whose dispatch differs.
+    public func setModel(
+        scope: DashboardModelScope,
+        task: String = "",
+        provider: String,
+        model: String
+    ) async throws {
+        let body = ModelSetBody(
+            scope: scope.rawValue,
+            task: scope == .main ? nil : task,
+            provider: provider,
+            model: model
+        )
+        try await sendNoContent(method: "POST", path: "/api/model/set", body: body)
+    }
+
+    private struct ModelSetBody: Encodable {
+        let scope: String
+        /// Optional so a `nil` is omitted from the JSON (synthesized
+        /// `encodeIfPresent`) — used to drop `task` for main writes.
+        let task: String?
+        let provider: String
+        let model: String
+    }
+
     // MARK: - Config
 
     /// Profile-agnostic field schema driving the structured editor. Public
@@ -473,6 +781,69 @@ public struct DashboardClient: Sendable {
         if let component { items.append(URLQueryItem(name: "component", value: component)) }
         if let search { items.append(URLQueryItem(name: "search", value: search)) }
         return try await get(path: "/api/logs", queryItems: items)
+    }
+
+    // MARK: - Plugins
+
+    /// Unified plugins payload — installed plugins plus the runtime provider
+    /// selections (memory provider / context engine) and their options.
+    public func getPluginsHub() async throws -> DashboardPluginsHub {
+        try await get(path: "/api/dashboard/plugins/hub")
+    }
+
+    /// Installs a plugin from `owner/repo` or a full Git URL. `enable` activates
+    /// it after install; `force` reinstalls over an existing copy. Returns the
+    /// server's (leniently parsed) install summary so callers can confirm what
+    /// landed; a non-2xx still throws via the shared plumbing.
+    @discardableResult
+    public func installPlugin(identifier: String, force: Bool, enable: Bool) async throws -> DashboardPluginInstallResult {
+        let body = PluginInstallBody(identifier: identifier, force: force, enable: enable)
+        let data = try await sendRawData(method: "POST", path: "/api/dashboard/agent-plugins/install", body: body)
+        return DashboardPluginInstallResult(data: data)
+    }
+
+    /// Enables or disables a plugin. The `{name:path}` route accepts slashes, so
+    /// names like `browser/browser_use` interpolate directly as path segments
+    /// (`URLComponents.path` preserves `/` and percent-encodes the rest).
+    public func setPluginEnabled(name: String, enabled: Bool) async throws {
+        try await sendNoContent(
+            method: "POST",
+            path: "/api/dashboard/agent-plugins/\(name)/\(enabled ? "enable" : "disable")"
+        )
+    }
+
+    /// `git pull` for a git-sourced plugin. Only valid when `canUpdateGit`.
+    public func updatePlugin(name: String) async throws {
+        try await sendNoContent(method: "POST", path: "/api/dashboard/agent-plugins/\(name)/update")
+    }
+
+    /// Removes a user-installed plugin. Only valid when `canRemove`.
+    public func removePlugin(name: String) async throws {
+        try await sendNoContent(method: "DELETE", path: "/api/dashboard/agent-plugins/\(name)")
+    }
+
+    /// Writes `memory.provider` / `context.engine` to `config.yaml` (takes
+    /// effect next session). Nil leaves a field untouched; an empty memory
+    /// provider string selects the built-in / none provider.
+    public func setPluginProviders(memoryProvider: String?, contextEngine: String?) async throws {
+        let body = PluginProvidersBody(memoryProvider: memoryProvider, contextEngine: contextEngine)
+        try await sendNoContent(method: "PUT", path: "/api/dashboard/plugin-providers", body: body)
+    }
+
+    private struct PluginInstallBody: Encodable {
+        let identifier: String
+        let force: Bool
+        let enable: Bool
+    }
+
+    private struct PluginProvidersBody: Encodable {
+        let memoryProvider: String?
+        let contextEngine: String?
+
+        enum CodingKeys: String, CodingKey {
+            case memoryProvider = "memory_provider"
+            case contextEngine = "context_engine"
+        }
     }
 
     // MARK: - Plumbing
