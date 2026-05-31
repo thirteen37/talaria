@@ -215,6 +215,7 @@ struct PluginsView: View {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 .disabled(harness.isLoading)
+                .help("Refresh the plugins list")
             }
         }
         .manageBanner(
