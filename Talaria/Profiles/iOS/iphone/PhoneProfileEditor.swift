@@ -7,9 +7,12 @@ import SwiftUI
 /// compact-width sheet. Password + Keychain auth via the shared form sections.
 struct PhoneProfileEditor: View {
     @Environment(ProfileDirectory.self) private var directory
+    @Environment(SidebarLayout.self) private var sidebarLayout
     @State private var state = ProfileEditorState()
     /// Drives the NavigationStack so `addNew()` can push the detail view.
     @State private var path: [UUID] = []
+    /// Presents the global Browse-sidebar customizer (reorder / hide pages).
+    @State private var showingCustomize = false
     var onDismiss: (() -> Void)? = nil
 
     var body: some View {
@@ -41,6 +44,10 @@ struct PhoneProfileEditor: View {
                     detailView(for: id)
                 }
         }
+        .sheet(isPresented: $showingCustomize) {
+            SidebarCustomizeView()
+                .environment(sidebarLayout)
+        }
         .task { await reload() }
     }
 
@@ -66,6 +73,16 @@ struct PhoneProfileEditor: View {
                         }
                     }
                 }
+            }
+            Section {
+                Button {
+                    showingCustomize = true
+                } label: {
+                    Label("Customize Sidebar", systemImage: "sidebar.left")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
         }
     }

@@ -81,6 +81,7 @@ struct PhoneServerWindow: View {
         .sheet(isPresented: $showingSettings) {
             ProfileEditorRoot(onDismiss: { showingSettings = false })
                 .environment(directory)
+                .environment(sidebarLayout)
         }
         .onDisappear {
             harness?.tearDown()

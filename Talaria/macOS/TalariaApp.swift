@@ -30,6 +30,7 @@ struct TalariaApp: App {
         Settings {
             SettingsScene()
                 .environment(directory)
+                .environment(sidebarLayout)
         }
     }
 }

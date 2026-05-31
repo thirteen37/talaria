@@ -29,7 +29,6 @@ struct PhoneBrowseSheet: View {
 
     @Environment(SidebarLayout.self) private var sidebarLayout
     @State private var path: [BrowseDestination] = []
-    @State private var showingCustomize = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -74,22 +73,10 @@ struct PhoneBrowseSheet: View {
                 )
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button {
-                        showingCustomize = true
-                    } label: {
-                        Label("Customize", systemImage: "slider.horizontal.3")
-                    }
-                    .help("Reorder or hide Browse pages")
-                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done", action: onDismiss)
                         .help("Close")
                 }
-            }
-            .sheet(isPresented: $showingCustomize) {
-                SidebarCustomizeView()
-                    .environment(sidebarLayout)
             }
         }
         .onAppear {
