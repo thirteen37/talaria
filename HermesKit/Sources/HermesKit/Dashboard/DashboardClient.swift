@@ -265,6 +265,107 @@ public struct DashboardProfile: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// One provider row from `GET /api/model/options`. Hermes returns **only
+/// authenticated** providers here (no `authenticated` flag), each carrying its
+/// curated model-id list. `models` is a flat list of model identifier strings
+/// (the dashboard's picker shows them verbatim). Unauthenticated providers are
+/// supplied separately by the UI from a static catalog, so this type models the
+/// authenticated case only.
+public struct DashboardModelProvider: Codable, Equatable, Sendable, Identifiable {
+    public let slug: String
+    public let name: String?
+    public let isCurrent: Bool?
+    public let isUserDefined: Bool?
+    public let models: [String]
+    public let totalModels: Int?
+    public let source: String?
+
+    public var id: String { slug }
+
+    /// Friendly label, falling back to the slug when the row omits a name.
+    public var displayName: String {
+        if let name, !name.isEmpty { return name }
+        return slug
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case slug, name, models, source
+        case isCurrent = "is_current"
+        case isUserDefined = "is_user_defined"
+        case totalModels = "total_models"
+    }
+
+    public init(
+        slug: String,
+        name: String?,
+        isCurrent: Bool? = nil,
+        isUserDefined: Bool? = nil,
+        models: [String],
+        totalModels: Int? = nil,
+        source: String? = nil
+    ) {
+        self.slug = slug
+        self.name = name
+        self.isCurrent = isCurrent
+        self.isUserDefined = isUserDefined
+        self.models = models
+        self.totalModels = totalModels
+        self.source = source
+    }
+}
+
+/// Response of `GET /api/model/options` — the authenticated provider universe
+/// plus the currently-selected main `provider`/`model` echoed alongside.
+public struct DashboardModelOptions: Codable, Equatable, Sendable {
+    public let providers: [DashboardModelProvider]
+    public let model: String?
+    public let provider: String?
+}
+
+/// One auxiliary slot from `GET /api/model/auxiliary`. A slot reads
+/// `provider == "auto"` (and an empty `model`) when it's unset and inherits the
+/// main model. `task` is the canonical slot key (e.g. `"vision"`).
+public struct DashboardAuxiliaryModel: Codable, Equatable, Sendable, Identifiable {
+    public let task: String
+    public let provider: String?
+    public let model: String?
+    public let baseURL: String?
+
+    public var id: String { task }
+
+    /// True when the slot falls back to the main model (`provider` empty or the
+    /// literal `"auto"`). The dashboard renders these as "auto (use main model)".
+    public var isAuto: Bool {
+        let normalized = (provider ?? "").trimmingCharacters(in: .whitespaces).lowercased()
+        return normalized.isEmpty || normalized == "auto"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case task, provider, model
+        case baseURL = "base_url"
+    }
+}
+
+/// The main-model assignment echoed by `GET /api/model/auxiliary`.
+public struct DashboardMainModel: Codable, Equatable, Sendable {
+    public let provider: String?
+    public let model: String?
+}
+
+/// Response of `GET /api/model/auxiliary` — the main model plus every auxiliary
+/// task slot in Hermes' canonical order.
+public struct DashboardModelAssignments: Codable, Equatable, Sendable {
+    public let tasks: [DashboardAuxiliaryModel]
+    public let main: DashboardMainModel
+}
+
+/// Target of a `POST /api/model/set`. `main` writes `model.provider`/
+/// `model.default`; `auxiliary` writes `auxiliary.<task>.{provider,model}`.
+public enum DashboardModelScope: String, Sendable {
+    case main
+    case auxiliary
+}
+
 /// One agent plugin from `GET /api/dashboard/plugins/hub`. Decodes only the
 /// fields the native Plugins surface renders; the hub also carries
 /// `dashboard_manifest` (web-only tab metadata) and `user_hidden`, which
@@ -567,6 +668,53 @@ public struct DashboardClient: Sendable {
 
     private struct ProfilesResponse: Decodable {
         let profiles: [DashboardProfile]
+    }
+
+    // MARK: - Models
+
+    /// Authenticated providers + each provider's curated model list. Hermes
+    /// omits unauthenticated providers entirely, so the Models screen overlays
+    /// a static known-provider catalog to surface those disabled.
+    public func getModelOptions() async throws -> DashboardModelOptions {
+        try await get(path: "/api/model/options")
+    }
+
+    /// Current assignments: the main model plus the auxiliary task slots
+    /// (unset slots read as `provider:"auto"`).
+    public func getModelAssignments() async throws -> DashboardModelAssignments {
+        try await get(path: "/api/model/auxiliary")
+    }
+
+    /// Assigns a provider/model to a slot. For `scope == .auxiliary`: a slot
+    /// name overrides one task, `""` assigns every slot, and `"__reset__"`
+    /// resets all to auto (pass empty `provider`/`model`).
+    ///
+    /// For `scope == .main` the server ignores `task`, so we drop it from the
+    /// body entirely rather than send `task:""` — the auxiliary branch reads an
+    /// empty task as "every slot", and omitting the field removes any chance a
+    /// main write is misrouted there on a server whose dispatch differs.
+    public func setModel(
+        scope: DashboardModelScope,
+        task: String = "",
+        provider: String,
+        model: String
+    ) async throws {
+        let body = ModelSetBody(
+            scope: scope.rawValue,
+            task: scope == .main ? nil : task,
+            provider: provider,
+            model: model
+        )
+        try await sendNoContent(method: "POST", path: "/api/model/set", body: body)
+    }
+
+    private struct ModelSetBody: Encodable {
+        let scope: String
+        /// Optional so a `nil` is omitted from the JSON (synthesized
+        /// `encodeIfPresent`) — used to drop `task` for main writes.
+        let task: String?
+        let provider: String
+        let model: String
     }
 
     // MARK: - Config

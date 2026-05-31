@@ -102,6 +102,7 @@
 		97970C27124D465C7AF3B42F /* ProfileFormSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBCC3AB20959D5AB1E75BEF7 /* ProfileFormSections.swift */; };
 		9C156DB4C32D6E646A38B6E1 /* ProfileDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = C92A4408751CCA22446EA7AE /* ProfileDirectory.swift */; };
 		9DF3210433514B652640EB27 /* TalariaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02D65605FA6B5B749DBBBA2F /* TalariaApp.swift */; };
+		9E5C26D2592A7D03F690F860 /* ModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02B3715B46F1604D50C32259 /* ModelsView.swift */; };
 		A12F46C1DB6B995D37F20EF4 /* ConfigFieldControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E05DB8DF8D9AFD4FE25E26E /* ConfigFieldControl.swift */; };
 		A27B8F3EDC961F5FC9E17E94 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B71A6200C3475A1788F447EE /* Assets.xcassets */; };
 		A8A565A53ACD757085295E54 /* ProfileProber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F42FDBFD4F21B7E12EB88CA /* ProfileProber.swift */; };
@@ -109,6 +110,7 @@
 		AD0F6EDE014E3AACD538990B /* YAMLHighlightTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A4915ACEFA306626EEECA63 /* YAMLHighlightTheme.swift */; };
 		AD33372BFF709C6DC20DB54E /* SoulEditorContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A347F5D89ECABEECE7BC2538 /* SoulEditorContainer.swift */; };
 		AE1E5F4DF2CC154A4C2BD329 /* ProfileProber.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD5A8C9E26CB5316AE819FD5 /* ProfileProber.swift */; };
+		B0B101AA0FC4CBA169096F38 /* ModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02B3715B46F1604D50C32259 /* ModelsView.swift */; };
 		B12C7ACB8C23C086A85E0842 /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC6EAC9742C997DB3F416F0 /* AppLog.swift */; };
 		B26F121BF99FC608925F341F /* UpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 299E76E8B6B759627A8B41DD /* UpdateController.swift */; };
 		B4CCE0645ED3484EDAF2E61F /* EditableComparisonView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BF654A05F720DAA02C0B069 /* EditableComparisonView.swift */; };
@@ -174,6 +176,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		02B3715B46F1604D50C32259 /* ModelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsView.swift; sourceTree = "<group>"; };
 		02D65605FA6B5B749DBBBA2F /* TalariaApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TalariaApp.swift; sourceTree = "<group>"; };
 		0726E977A155E433A5401996 /* Markdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Markdown.swift; sourceTree = "<group>"; };
 		073AE623C0CEF948BEA8260B /* ServerWindowHarness+iOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ServerWindowHarness+iOS.swift"; sourceTree = "<group>"; };
@@ -417,6 +420,7 @@
 				4C4C32B601B019767565103C /* GatewayView.swift */,
 				A12A6961B7D8E937263627BB /* LogsView.swift */,
 				F71BFC25850A646580866C0D /* ManageHarness.swift */,
+				02B3715B46F1604D50C32259 /* ModelsView.swift */,
 				1C4F883529CB17540706EF66 /* PluginsView.swift */,
 				1DD849FF61E9E7FE99C2441B /* ProfilesView.swift */,
 				6E5FD3271C03262E8A67B725 /* SkillsView.swift */,
@@ -801,6 +805,7 @@
 				FDA938862AD8209C8779D721 /* ManageHarness.swift in Sources */,
 				412453BCEDDA513AC77AECD1 /* Markdown.swift in Sources */,
 				408B27EA1C9A9D34994CAA95 /* MockACPTransport.swift in Sources */,
+				9E5C26D2592A7D03F690F860 /* ModelsView.swift in Sources */,
 				C859F63DE8CEC424B7C05398 /* PathAwareHermesAdminRunner.swift in Sources */,
 				1964C2ACA58980B5A5A68B49 /* PermissionPrompt.swift in Sources */,
 				54A82F7BD3081070B11BE221 /* PlatformSeam.swift in Sources */,
@@ -874,6 +879,7 @@
 				0EDF5DDCEB352867F6419404 /* ManageHarness.swift in Sources */,
 				E89DCDB0C9AD12397615716C /* Markdown.swift in Sources */,
 				5EC0E7BD239BC0CF5E419732 /* MockACPTransport.swift in Sources */,
+				B0B101AA0FC4CBA169096F38 /* ModelsView.swift in Sources */,
 				F0223600063B00912A0FB4F9 /* PermissionPrompt.swift in Sources */,
 				46DB99C0E7AAE0FB6CA7B107 /* PhoneBrowseSheet.swift in Sources */,
 				799C1A386BCE91C49D9426F8 /* PhoneProfileEditor.swift in Sources */,
