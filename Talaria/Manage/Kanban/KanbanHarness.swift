@@ -147,6 +147,10 @@ final class KanbanHarness {
             let detail = try await client.kanbanTask(id: id)
             guard selectedTaskID == id else { return }
             taskDetail = detail
+            // Recovering this card's load — clear the banner the prior failure
+            // set, so it doesn't linger over correct content. Scoped to a real
+            // recovery so an unrelated mutation error isn't wiped.
+            if detailLoadFailedID == id { lastError = nil }
             detailLoadFailedID = nil
         } catch {
             guard selectedTaskID == id else { return }
