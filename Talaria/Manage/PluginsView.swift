@@ -55,10 +55,20 @@ final class PluginsHarness {
         defer { isLoading = false }
         do {
             let hub = try await client.getPluginsHub()
+            // Preserve unsaved provider edits across refreshes: a plugin action
+            // (enable/disable/update/remove/install) refreshes the whole hub, and
+            // blindly reseeding here would silently discard an in-progress picker
+            // selection. Only reseed when the form has no pending changes — which
+            // includes first load (`providersDirty` is false while `providers` is
+            // nil) and the post-save refresh (drafts already equal the saved
+            // values, so they survive untouched).
+            let preserveDrafts = providersDirty
             plugins = hub.plugins
             providers = hub.providers
-            draftMemory = hub.providers.memoryProvider
-            draftContext = hub.providers.contextEngine
+            if !preserveDrafts {
+                draftMemory = hub.providers.memoryProvider
+                draftContext = hub.providers.contextEngine
+            }
             lastError = nil
         } catch {
             lastError = error.localizedDescription
