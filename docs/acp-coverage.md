@@ -63,9 +63,16 @@ Sprint 7 makes the Hermes dashboard HTTP API (`hermes dashboard`, FastAPI/Uvicor
 
 - Deleted `HermesDB.swift`, `RemoteSnapshot.swift`, `RemoteSnapshotTransfer.swift`, `HermesSkills.swift`, `HermesCron.swift`, `HermesLogs.swift`, `HermesUpdates.swift` (and their tests / fixtures).
 - Collapsed `cronCRUD` / `updateCheck` / `skillsToggle` and the five per-route `dashboard*API` flags into a single `requiresDashboard` capability pinned at Hermes 0.14.0.
-- Added `DashboardClient` (URLSession, retry-on-401), `DashboardSession` (token cache scraped from `GET /`), `DashboardSpawnSpec` (local + remote-via-ssh-`-L`), `DashboardSupervisor` (refcounted spawn + reachability poll + missing-`[web]` detection), `SystemDashboardProcessLauncher`, `DashboardPortAllocator`, and `DashboardUpdatesService`.
+- Added `DashboardClient` (URLSession, retry-on-401), `DashboardSession` (token cache scraped from `GET /`), `DashboardSpawnSpec` (local + remote-via-ssh-`-L`), `DashboardSupervisor` (refcounted spawn + reachability poll + missing-`[web]` detection), `SystemDashboardProcessLauncher`, and `DashboardPortAllocator`.
 - `DashboardCoordinator` in `Talaria/Windows/ServerWindow.swift` owns one supervisor per profile, shared across windows.
 - `DoctorView` shows two prereq probes — `Hermes ≥ 0.14.0` and "Dashboard reachable" — alongside the CLI-driven `hermes doctor` report.
+
+> **Reverted (Updates only):** the Updates surface was moved back to the
+> `hermes update --check` CLI path — the dashboard `GET /api/status` reports
+> only `version` + `release_date`, with no commits-behind / update-available
+> signal, so it can't report a source install being behind `origin/main`.
+> `HermesUpdates.swift` and the `updateCheck` capability (pinned at Hermes
+> 0.12.0) are restored; the short-lived `DashboardUpdatesService` is removed.
 
 Dashboard coverage today (Hermes 0.14.0 / release 2026.5.16):
 
