@@ -368,7 +368,7 @@ struct PluginsView: View {
             }
             .width(80)
             TableColumn("Status") { plugin in
-                PluginPill(text: statusLabel(plugin.runtimeStatus), color: statusColor(plugin.runtimeStatus))
+                PluginPill(text: plugin.statusLabel, color: plugin.statusColor)
             }
             .width(90)
         }
@@ -400,13 +400,19 @@ struct PluginsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
+}
 
-    private func statusLabel(_ status: String) -> String {
-        status.prefix(1).uppercased() + status.dropFirst()
+/// Single source of truth for how a plugin's `runtime_status` renders as a
+/// pill, shared by the installed-plugins table and the detail pane so the two
+/// can't drift. `Color` lives in SwiftUI, so this app-side extension (not
+/// `DashboardPlugin` in HermesKit) owns the mapping.
+extension DashboardPlugin {
+    var statusLabel: String {
+        runtimeStatus.prefix(1).uppercased() + runtimeStatus.dropFirst()
     }
 
-    private func statusColor(_ status: String) -> Color {
-        switch status {
+    var statusColor: Color {
+        switch runtimeStatus {
         case "enabled": return .green
         case "inactive": return .orange
         default: return .secondary
@@ -451,7 +457,7 @@ private struct PluginDetail: View {
             HStack(spacing: 6) {
                 PluginPill(text: plugin.source, color: .secondary)
                 PluginPill(text: plugin.version, color: .secondary)
-                PluginPill(text: statusLabel, color: statusColor)
+                PluginPill(text: plugin.statusLabel, color: plugin.statusColor)
                 if !plugin.hasDashboardManifest {
                     PluginPill(text: "No dashboard tab", color: .secondary)
                 }
@@ -519,18 +525,6 @@ private struct PluginDetail: View {
             Button("Remove", role: .destructive) { onRemove() }
         } message: {
             Text("This deletes the installed plugin from the Hermes host.")
-        }
-    }
-
-    private var statusLabel: String {
-        plugin.runtimeStatus.prefix(1).uppercased() + plugin.runtimeStatus.dropFirst()
-    }
-
-    private var statusColor: Color {
-        switch plugin.runtimeStatus {
-        case "enabled": return .green
-        case "inactive": return .orange
-        default: return .secondary
         }
     }
 }
