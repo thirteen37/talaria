@@ -220,8 +220,15 @@ struct KanbanTaskDetailPane: View {
                         await harness.updateTask(
                             id: card.id,
                             title: title,
-                            body: body_,
-                            assignee: assignee,
+                            // Send body/assignee only when changed from the
+                            // authoritative baseline. Otherwise an unrelated edit
+                            // (e.g. title-only) on a task whose body/assignee is
+                            // empty would PATCH `""`, persisting an empty string
+                            // where the server had null. A deliberate clear still
+                            // sends `""` (the change is real), so unassigning via
+                            // the "Unassigned" picker keeps working.
+                            body: body_ != (baseline.body ?? "") ? body_ : nil,
+                            assignee: assignee != (baseline.assignee ?? "") ? assignee : nil,
                             priority: priority,
                             // Only PATCH the status when it actually changed —
                             // re-sending the current status would re-trigger the
