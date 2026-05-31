@@ -22,6 +22,45 @@ struct DashboardClientTests {
     }
 
     @Test
+    func getStatusDecodesGatewayFields() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/status", body: try loadFixtureData("status.json"))
+        ])
+        let client = DashboardClient(
+            baseURL: URL(string: "http://127.0.0.1:9119")!,
+            token: { nil },
+            http: http
+        )
+
+        let status = try await client.getStatus()
+
+        #expect(status.gatewayRunning == true)
+        #expect(status.gatewayPid == 86529)
+        #expect(status.gatewayState == "running")
+        #expect(status.gatewayHealthURL == nil)
+        #expect(status.gatewayExitReason == nil)
+        #expect(status.gatewayUpdatedAt == "2026-05-28T02:28:10.778139+00:00")
+        let telegram = try #require(status.gatewayPlatforms?["telegram"])
+        #expect(telegram.state == "connected")
+        #expect(telegram.errorCode == nil)
+        #expect(telegram.errorMessage == nil)
+        #expect(telegram.updatedAt == "2026-05-28T02:28:09.818991+00:00")
+        #expect(status.gatewayPlatforms?["homeassistant"]?.state == "connected")
+    }
+
+    @Test
+    func getStatusToleratesMissingGatewayFields() throws {
+        // A pre-gateway dashboard payload (only version/release_date) must still
+        // decode — every gateway field is optional.
+        let body = Data(#"{"version":"0.13.0","release_date":"2026.4.1"}"#.utf8)
+        let status = try JSONDecoder().decode(DashboardStatus.self, from: body)
+        #expect(status.version == "0.13.0")
+        #expect(status.gatewayRunning == nil)
+        #expect(status.gatewayState == nil)
+        #expect(status.gatewayPlatforms == nil)
+    }
+
+    @Test
     func getStatusOmitsTokenHeaderWhenNoTokenAvailable() async throws {
         let http = StubHTTP(responses: [
             .init(path: "/api/status", body: try loadFixtureData("status.json"))
