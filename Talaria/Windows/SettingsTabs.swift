@@ -19,8 +19,7 @@ struct SettingsTabs: View {
         TabView {
             profilesTab
                 .tabItem { Label("Server Profiles", systemImage: "server.rack") }
-            SidebarCustomizeView(onDismiss: onDismiss)
-                .settingsTabFrame()
+            sidebarOrderTab
                 .tabItem { Label("Sidebar Order", systemImage: "sidebar.left") }
         }
     }
@@ -33,8 +32,22 @@ struct SettingsTabs: View {
         ProfileEditorRoot(onDismiss: onDismiss)
         #else
         // macOS hosts the two-pane editor directly in the framed Settings window.
+        // The window title is fixed to "Settings" (rather than mirroring the tab
+        // label) via each tab's content navigationTitle.
         DesktopProfileEditor(onDismiss: onDismiss)
             .settingsTabFrame()
+            .navigationTitle("Settings")
+        #endif
+    }
+
+    @ViewBuilder
+    private var sidebarOrderTab: some View {
+        #if os(iOS)
+        SidebarCustomizeView(onDismiss: onDismiss)
+        #else
+        SidebarCustomizeView(onDismiss: onDismiss)
+            .settingsTabFrame()
+            .navigationTitle("Settings")
         #endif
     }
 }

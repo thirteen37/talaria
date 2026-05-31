@@ -13,57 +13,65 @@ struct SidebarCustomizeView: View {
     var onDismiss: (() -> Void)? = nil
 
     var body: some View {
+        #if os(iOS)
+        // iOS shows this as a tab in the Settings sheet: it owns a
+        // `NavigationStack` for its title bar, the Edit toggle, and the Done
+        // button. (An always-on `.active` editMode would route taps to reorder
+        // and leave the per-row Toggle / Reset button non-interactive, so Edit
+        // is gated behind `EditButton`.)
         NavigationStack {
-            List {
-                Section {
-                    ForEach(layout.orderedManageDestinations, id: \.self) { destination in
-                        row(destination)
+            list
+                .navigationBarTitleDisplayMode(.inline)
+                .navigationTitle("Sidebar Order")
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        EditButton()
+                            .help("Reorder pages")
                     }
-                    .onMove(perform: layout.move)
-                } header: {
-                    // Right-aligned so the caption sits above the trailing
-                    // toggle column it describes, not the page names.
-                    HStack {
-                        Spacer()
-                        Text("Show in Sidebar")
+                    if let onDismiss {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done", action: onDismiss)
+                                .help("Close")
+                        }
                     }
-                } footer: {
-                    #if os(iOS)
-                    Text("Switch a page off to hide it from the sidebar — it stays here so you can show it again. Tap Edit, then drag the handles to reorder.")
-                    #else
-                    Text("Switch a page off to hide it from the sidebar — it stays here so you can show it again. Drag the handles to reorder.")
-                    #endif
                 }
+        }
+        #else
+        // macOS hosts this directly in a Settings tab — no inner
+        // `NavigationStack` (the window provides the chrome), so the tab's
+        // window title is set by `SettingsTabs`. Lists reorder by drag here, so
+        // no Edit toggle is needed.
+        list
+        #endif
+    }
 
-                Section {
-                    Button("Reset to Default", role: .destructive) {
-                        layout.resetToDefault()
-                    }
-                    .help("Restore the default order and show all pages")
+    private var list: some View {
+        List {
+            Section {
+                ForEach(layout.orderedManageDestinations, id: \.self) { destination in
+                    row(destination)
                 }
-            }
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .navigationTitle("Sidebar Order")
-            .toolbar {
-                // iOS gates drag-reorder behind an explicit Edit mode (an
-                // always-on `.active` editMode would route taps to reorder and
-                // leave the per-row Toggle / Reset button non-interactive on
-                // device). macOS lists reorder by drag in normal mode, so they
-                // need no Edit toggle — and `EditButton` is iOS-only anyway.
+                .onMove(perform: layout.move)
+            } header: {
+                // Right-aligned so the caption sits above the trailing toggle
+                // column it describes, not the page names.
+                HStack {
+                    Spacer()
+                    Text("Show in Sidebar")
+                }
+            } footer: {
                 #if os(iOS)
-                ToolbarItem(placement: .topBarLeading) {
-                    EditButton()
-                        .help("Reorder pages")
-                }
+                Text("Switch a page off to hide it from the sidebar — it stays here so you can show it again. Tap Edit, then drag the handles to reorder.")
+                #else
+                Text("Switch a page off to hide it from the sidebar — it stays here so you can show it again. Drag the handles to reorder.")
                 #endif
-                if let onDismiss {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done", action: onDismiss)
-                            .help("Close")
-                    }
+            }
+
+            Section {
+                Button("Reset to Default", role: .destructive) {
+                    layout.resetToDefault()
                 }
+                .help("Restore the default order and show all pages")
             }
         }
     }
