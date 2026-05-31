@@ -488,6 +488,58 @@ public struct DashboardPluginInstallResult: Codable, Equatable, Sendable {
     }
 }
 
+/// One known Hermes environment variable from `GET /api/env`. The dashboard
+/// enumerates only Hermes' `OPTIONAL_ENV_VARS` (~139 entries), keyed by the var
+/// name, so `name` is injected from the dict key during decode rather than
+/// carried in the value object. Values are redacted server-side
+/// (`redactedValue`); the real value is fetched on demand via
+/// ``DashboardClient/revealEnvVar(key:)``.
+public struct DashboardEnvVar: Codable, Equatable, Sendable, Identifiable {
+    /// The env var name, e.g. `ANTHROPIC_API_KEY`. Injected from the response
+    /// dict key — not a field on the value object itself.
+    public let name: String
+    public let isSet: Bool
+    /// Masked value (e.g. `sk-…abcd`) shown until the user reveals it. Nil when
+    /// the var isn't set.
+    public let redactedValue: String?
+    public let description: String
+    public let url: String?
+    /// `provider` | `messaging` | `tool` | `setting` | `skill`. Drives the
+    /// list's section grouping.
+    public let category: String
+    /// True for secrets (API keys/tokens) — the UI masks these and offers a
+    /// per-row Reveal action.
+    public let isPassword: Bool
+    /// Tool/skill names that consume this var, surfaced in the detail pane.
+    public let tools: [String]
+    /// Advanced/rarely-needed var, hidden behind the "Show advanced" toggle.
+    public let advanced: Bool
+
+    public var id: String { name }
+
+    public init(
+        name: String,
+        isSet: Bool,
+        redactedValue: String?,
+        description: String,
+        url: String?,
+        category: String,
+        isPassword: Bool,
+        tools: [String],
+        advanced: Bool
+    ) {
+        self.name = name
+        self.isSet = isSet
+        self.redactedValue = redactedValue
+        self.description = description
+        self.url = url
+        self.category = category
+        self.isPassword = isPassword
+        self.tools = tools
+        self.advanced = advanced
+    }
+}
+
 public struct DashboardClient: Sendable {
     public let baseURL: URL
     private let token: @Sendable () -> String?
@@ -844,6 +896,116 @@ public struct DashboardClient: Sendable {
             case memoryProvider = "memory_provider"
             case contextEngine = "context_engine"
         }
+    }
+
+    // MARK: - Environment
+
+    /// Hermes' known `.env` variables (`OPTIONAL_ENV_VARS`), each carrying its
+    /// set state, redacted value, and metadata. `GET /api/env` returns a dict
+    /// keyed by var name; `JSONDecoder` into a Swift `Dictionary` doesn't
+    /// preserve insertion order, so the result is sorted by `(category-rank,
+    /// name)` for a deterministic UI (alphabetical within each category —
+    /// full definition-order would need order-preserving parsing, which is
+    /// overkill here).
+    public func listEnvVars() async throws -> [DashboardEnvVar] {
+        let dict: [String: EnvVarInfoDTO] = try await get(path: "/api/env")
+        return dict
+            .map { name, info in
+                DashboardEnvVar(
+                    name: name,
+                    isSet: info.isSet,
+                    redactedValue: info.redactedValue,
+                    description: info.description ?? "",
+                    url: info.url,
+                    category: info.category ?? "",
+                    isPassword: info.isPassword ?? false,
+                    tools: info.tools ?? [],
+                    advanced: info.advanced ?? false
+                )
+            }
+            .sorted { lhs, rhs in
+                let l = Self.categoryRank(lhs.category)
+                let r = Self.categoryRank(rhs.category)
+                return l == r ? lhs.name < rhs.name : l < r
+            }
+    }
+
+    /// Sets or updates a known env var via `PUT /api/env`. Returns server-side
+    /// `is_managed()` rejections (and any other failure) as a thrown
+    /// `DashboardClientError.http`.
+    public func setEnvVar(key: String, value: String) async throws {
+        try await sendNoContent(method: "PUT", path: "/api/env", body: EnvVarUpdateBody(key: key, value: value))
+    }
+
+    /// Removes a var from `.env` via `DELETE /api/env` (JSON body). A key not
+    /// present surfaces as `DashboardClientError.http(statusCode: 404, …)`.
+    public func deleteEnvVar(key: String) async throws {
+        try await sendNoContent(method: "DELETE", path: "/api/env", body: EnvVarDeleteBody(key: key))
+    }
+
+    /// Fetches the unredacted value of one var via `POST /api/env/reveal`. The
+    /// route is rate-limited (5 per 30s) — excess reveals surface as
+    /// `DashboardClientError.http(statusCode: 429, …)`; an unset key as 404.
+    public func revealEnvVar(key: String) async throws -> String {
+        let response: EnvVarRevealResponse = try await sendDecoding(
+            method: "POST", path: "/api/env/reveal", body: EnvVarRevealBody(key: key)
+        )
+        return response.value
+    }
+
+    /// UI grouping order for the env categories Hermes returns. Kept in step
+    /// with `EnvCategory.allCases` in `EnvironmentView` (provider, messaging,
+    /// tool, skill, setting) so the client's cross-category sort and the view's
+    /// section order can't silently diverge. Unknown categories sort last
+    /// (into the UI's "Other" section).
+    private static func categoryRank(_ category: String) -> Int {
+        switch category {
+        case "provider": return 0
+        case "messaging": return 1
+        case "tool": return 2
+        case "skill": return 3
+        case "setting": return 4
+        default: return 5
+        }
+    }
+
+    /// Value object of one `GET /api/env` entry (the var name is the dict key,
+    /// injected separately). Every metadata field is optional so a leaner
+    /// upstream payload still decodes.
+    private struct EnvVarInfoDTO: Decodable {
+        let isSet: Bool
+        let redactedValue: String?
+        let description: String?
+        let url: String?
+        let category: String?
+        let isPassword: Bool?
+        let tools: [String]?
+        let advanced: Bool?
+
+        enum CodingKeys: String, CodingKey {
+            case isSet = "is_set"
+            case redactedValue = "redacted_value"
+            case description, url, category, tools, advanced
+            case isPassword = "is_password"
+        }
+    }
+
+    private struct EnvVarUpdateBody: Encodable {
+        let key: String
+        let value: String
+    }
+
+    private struct EnvVarDeleteBody: Encodable {
+        let key: String
+    }
+
+    private struct EnvVarRevealBody: Encodable {
+        let key: String
+    }
+
+    private struct EnvVarRevealResponse: Decodable {
+        let key: String
+        let value: String
     }
 
     // MARK: - Plumbing
