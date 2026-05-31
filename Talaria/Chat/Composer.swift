@@ -31,64 +31,63 @@ struct Composer: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            TextField(isBlocked ? "Waiting for permission" : "Message Hermes", text: $prompt, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...6)
-                .disabled(isBlocked)
-                .overlay(alignment: .topLeading) {
-                    if !visibleCommands.isEmpty, !isBlocked {
-                        SlashMenu(commands: visibleCommands) { command in
-                            accept(command)
+        VStack(alignment: .leading, spacing: 8) {
+            if !visibleCommands.isEmpty, !isBlocked {
+                SlashMenu(commands: visibleCommands) { command in
+                    accept(command)
+                }
+            }
+
+            HStack(spacing: 8) {
+                TextField(isBlocked ? "Waiting for permission" : "Message Hermes", text: $prompt, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...6)
+                    .disabled(isBlocked)
+                    .onChange(of: prompt) { _, newValue in
+                        if !newValue.hasPrefix("/") {
+                            isSlashMenuDismissed = false
                         }
-                        .offset(x: 0, y: -8)
-                        .alignmentGuide(.top) { dimensions in dimensions[.bottom] }
                     }
-                }
-                .onChange(of: prompt) { _, newValue in
-                    if !newValue.hasPrefix("/") {
-                        isSlashMenuDismissed = false
+                    .onKeyPress(.return, phases: .down) { press in
+                        if press.modifiers.contains(.shift) {
+                            return .ignored
+                        }
+                        if let command = visibleCommands.first {
+                            accept(command)
+                            return .handled
+                        }
+                        send()
+                        return .handled
                     }
-                }
-                .onKeyPress(.return, phases: .down) { press in
-                    if press.modifiers.contains(.shift) {
-                        return .ignored
-                    }
-                    if let command = visibleCommands.first {
+                    .onKeyPress(.tab, phases: .down) { _ in
+                        guard let command = visibleCommands.first else {
+                            return .ignored
+                        }
                         accept(command)
                         return .handled
                     }
-                    send()
-                    return .handled
-                }
-                .onKeyPress(.tab, phases: .down) { _ in
-                    guard let command = visibleCommands.first else {
-                        return .ignored
+                    .onKeyPress(.escape, phases: .down) { _ in
+                        guard !visibleCommands.isEmpty else {
+                            return .ignored
+                        }
+                        isSlashMenuDismissed = true
+                        return .handled
                     }
-                    accept(command)
-                    return .handled
-                }
-                .onKeyPress(.escape, phases: .down) { _ in
-                    guard !visibleCommands.isEmpty else {
-                        return .ignored
-                    }
-                    isSlashMenuDismissed = true
-                    return .handled
-                }
 
-            if isSending {
-                Button(action: cancel) {
-                    Image(systemName: "stop.fill")
+                if isSending {
+                    Button(action: cancel) {
+                        Image(systemName: "stop.fill")
+                    }
+                    .help("Cancel")
+                    .accessibilityLabel("Cancel")
+                } else {
+                    Button(action: send) {
+                        Image(systemName: "paperplane.fill")
+                    }
+                    .help("Send")
+                    .accessibilityLabel("Send")
+                    .disabled(trimmedPrompt.isEmpty || isBlocked)
                 }
-                .help("Cancel")
-                .accessibilityLabel("Cancel")
-            } else {
-                Button(action: send) {
-                    Image(systemName: "paperplane.fill")
-                }
-                .help("Send")
-                .accessibilityLabel("Send")
-                .disabled(trimmedPrompt.isEmpty || isBlocked)
             }
         }
         .padding(12)

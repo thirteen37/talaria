@@ -52,7 +52,7 @@ final class SoulEditingState: Identifiable {
 
         if let client = defaultClientProvider() {
             do {
-                let content = try await client.getSoul()
+                let content = try await client.getSoul(profile: profileName)
                 if Task.isCancelled { return }
                 text = content
                 original = content
@@ -100,7 +100,7 @@ final class SoulEditingState: Identifiable {
             return
         }
         do {
-            try await client.updateSoul(text)
+            try await client.updateSoul(profile: profileName, content: text)
             load()
         } catch {
             lastError = error.localizedDescription

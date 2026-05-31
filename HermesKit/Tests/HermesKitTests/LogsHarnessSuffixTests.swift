@@ -1,6 +1,5 @@
-// Tests the shared `TailDiff.newSuffix(of:after:)` used by both the Logs tail
-// poll (`LogsHarness`) and the update-action log poll
-// (`DashboardUpdatesService`).
+// Tests the shared `TailDiff.newSuffix(of:after:)` used by the Logs tail
+// poll (`LogsHarness`).
 import Foundation
 import Testing
 @testable import HermesKit

@@ -242,6 +242,10 @@ final class SessionsStore {
             messages: messages,
             source: source
         )
+        // Seed the header for read-only sessions: they never receive a live
+        // `session_info_update`, so this dashboard title is their only chance to
+        // show a name instead of "Chat". Treat empty as nil so the fallback wins.
+        viewModel.title = summary.title.isEmpty ? nil : summary.title
         viewModels[summary.id] = viewModel
         statuses[summary.id] = .idle
         insert(OpenSession(id: summary.id, cwd: workingDir, title: summary.title))
@@ -257,6 +261,12 @@ final class SessionsStore {
             return
         }
         let vm = LocalChatViewModel(manager: manager, sessionId: id, cwd: cwd, store: self)
+        // Seed the header from any title the open session already carries (e.g.
+        // a dashboard title captured by `openExisting`), so reopening a titled
+        // session shows it immediately, before any new notification arrives.
+        // `OpenSession.title` is "" (not nil) for an untitled session, so map
+        // empty to nil — otherwise `navigationTitle` renders blank, not "Chat".
+        vm.title = openSessions.first(where: { $0.id == id })?.title.flatMap { $0.isEmpty ? nil : $0 }
         viewModels[id] = vm
         await vm.start()
     }
@@ -290,6 +300,10 @@ final class SessionsStore {
             if let index = openSessions.firstIndex(where: { $0.id == id }) {
                 openSessions[index].title = title
             }
+            // Mirror into the cached view model too, so an open chat's header
+            // reflects the rename immediately instead of waiting on a live
+            // `session_info_update` (which may never come for this session).
+            viewModels[id]?.title = title
             browserRefreshToken &+= 1
         } catch {
             lastError = error.localizedDescription
@@ -373,11 +387,22 @@ final class SessionsStore {
     }
 
     private func handleStateMutation(sessionId: SessionId, update: SessionUpdate) {
-        // Side effects of state mutations used to drive snapshot invalidation;
-        // with the dashboard-backed Sessions browser the sidebar re-queries
-        // on its own refresh token, and mutation tracking now exists only to
-        // keep the per-session `toolKinds` cache pruned.
+        // Routes always-on session updates: it keeps the per-session `toolKinds`
+        // cache pruned, and captures Hermes' auto-generated session title (the
+        // agent → client `session_info_update`) into `OpenSession.title` — the
+        // sidebar's source of truth — plus the cached view model so the chat
+        // header updates live, whether or not the chat view is currently visible.
         switch update {
+        case let .sessionInfoUpdate(info):
+            let title = info.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            // Never let an empty/whitespace title blank out an existing name.
+            guard !title.isEmpty else {
+                return
+            }
+            if let index = openSessions.firstIndex(where: { $0.id == sessionId }) {
+                openSessions[index].title = title
+            }
+            viewModels[sessionId]?.title = title
         case let .toolCall(toolCall):
             _ = recordAndDecide(
                 sessionId: sessionId,
