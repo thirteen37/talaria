@@ -20,6 +20,13 @@ struct SidebarCustomizeView: View {
                 } footer: {
                     Text("Drag to reorder. Hidden pages stay here so you can show them again.")
                 }
+
+                Section {
+                    Button("Reset to Default", role: .destructive) {
+                        layout.resetToDefault()
+                    }
+                    .help("Restore the default order and show all pages")
+                }
             }
             // iOS needs always-on edit mode for the drag handles; macOS lists
             // are reorderable by drag without it (and `editMode` is unavailable
@@ -30,12 +37,6 @@ struct SidebarCustomizeView: View {
             #endif
             .navigationTitle("Customize Sidebar")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Reset", role: .destructive) {
-                        layout.resetToDefault()
-                    }
-                    .help("Restore the default order and show all pages")
-                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                         .help("Close the customizer")

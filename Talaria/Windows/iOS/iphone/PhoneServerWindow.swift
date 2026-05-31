@@ -9,6 +9,7 @@ struct PhoneServerWindow: View {
 
     @Environment(ProfileDirectory.self) private var directory
     @Environment(RecentServers.self) private var recents
+    @Environment(SidebarLayout.self) private var sidebarLayout
     @State private var harness: ServerWindowHarness?
     @State private var showingSettings = false
     @State private var showingAllSessions = false
@@ -324,6 +325,7 @@ struct PhoneServerWindow: View {
                 },
                 onDismiss: { showingBrowse = false }
             )
+            .environment(sidebarLayout)
         }
         .sheet(isPresented: $showingLogs) {
             LogConsoleView(onDismiss: { showingLogs = false })
