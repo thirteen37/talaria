@@ -4,7 +4,7 @@ import Foundation
 /// column (and deep-linked from the notifications page). Shared with the iPhone
 /// Browse sheet, which reads the same title/icon metadata so both surfaces stay
 /// in sync.
-enum BrowseDestination: String, Hashable, CaseIterable, Codable {
+enum BrowseDestination: String, Hashable {
     case sessions
     case skills
     case plugins
