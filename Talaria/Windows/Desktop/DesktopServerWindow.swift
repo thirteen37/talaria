@@ -77,7 +77,7 @@ struct DesktopServerWindow: View {
         // Settings sheet (iPad only — macOS uses the Settings scene). Attached
         // at body level so the no-server empty state can present it too.
         .platformSettingsSheet(isPresented: $showingSettings) {
-            DesktopProfileEditor(onDismiss: { showingSettings = false })
+            SettingsTabs(onDismiss: { showingSettings = false })
                 .environment(directory)
                 .environment(sidebarLayout)
         }

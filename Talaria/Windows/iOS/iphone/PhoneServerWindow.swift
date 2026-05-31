@@ -79,7 +79,7 @@ struct PhoneServerWindow: View {
         // Attached at body level so the no-server empty state (which has no
         // harness/sidebar in scope) can still present the Settings sheet.
         .sheet(isPresented: $showingSettings) {
-            ProfileEditorRoot(onDismiss: { showingSettings = false })
+            SettingsTabs(onDismiss: { showingSettings = false })
                 .environment(directory)
                 .environment(sidebarLayout)
         }

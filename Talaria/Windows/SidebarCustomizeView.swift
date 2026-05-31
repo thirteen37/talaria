@@ -7,7 +7,10 @@ import SwiftUI
 /// tree (no `macOS/`/`iOS/` seam folder), so it compiles for both targets.
 struct SidebarCustomizeView: View {
     @Environment(SidebarLayout.self) private var layout
-    @Environment(\.dismiss) private var dismiss
+    /// Provided only when presented as a dismissable sheet (the iPad / iPhone
+    /// Settings sheets). The macOS Settings tab leaves it nil — the window's
+    /// own close handles dismissal, so no in-content Done button is shown.
+    var onDismiss: (() -> Void)? = nil
 
     var body: some View {
         NavigationStack {
@@ -35,7 +38,7 @@ struct SidebarCustomizeView: View {
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .navigationTitle("Customize Sidebar")
+            .navigationTitle("Sidebar Order")
             .toolbar {
                 // iOS gates drag-reorder behind an explicit Edit mode (an
                 // always-on `.active` editMode would route taps to reorder and
@@ -48,9 +51,11 @@ struct SidebarCustomizeView: View {
                         .help("Reorder pages")
                 }
                 #endif
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Close") { dismiss() }
-                        .help("Close the customizer")
+                if let onDismiss {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done", action: onDismiss)
+                            .help("Close")
+                    }
                 }
             }
         }

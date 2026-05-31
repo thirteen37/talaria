@@ -137,6 +137,7 @@
 		C859F63DE8CEC424B7C05398 /* PathAwareHermesAdminRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F30054244D9FE8D35AE76B2B /* PathAwareHermesAdminRunner.swift */; };
 		C8A306E119586CE2E6731380 /* BrowseDetail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A4D5F91E421312E2E370A23 /* BrowseDetail.swift */; };
 		CA120C35B4A781A89CCB95F4 /* SessionHistoryMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E0675F4B94F55DDF642B901 /* SessionHistoryMapper.swift */; };
+		CB449E642EAAF16CA11A632B /* SettingsTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7B13A607D0E86C874DD9020 /* SettingsTabs.swift */; };
 		CFB7BA97155787ACD6D2AA60 /* SoulEditingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AE152C7AFC71DFE3A5F5100 /* SoulEditingState.swift */; };
 		D022CEB819BEC577762C2CF6 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CA01C5F2F7904E83DB29961 /* ChatView.swift */; };
 		D3CD6F4B48D1E62071D8BD95 /* LogConsoleToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0840E0D096AF226C4E7ACAD5 /* LogConsoleToolbar.swift */; };
@@ -169,6 +170,7 @@
 		FF499D0E6BB2A566C0D2285C /* SettingsScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 709907472C40B185B05E1F20 /* SettingsScene.swift */; };
 		FF4B12C0890FE3A218309E50 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CA01C5F2F7904E83DB29961 /* ChatView.swift */; };
 		FF7410E0865C3DB2A36D6F76 /* SkillsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E5FD3271C03262E8A67B725 /* SkillsView.swift */; };
+		FF974ABAA720E22D432C737C /* SettingsTabs.swift in Sources */ = {isa = PBXBuildFile; fileRef = A7B13A607D0E86C874DD9020 /* SettingsTabs.swift */; };
 		FF9C3268B7A7B1A879C319EE /* ProfileFormSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBCC3AB20959D5AB1E75BEF7 /* ProfileFormSections.swift */; };
 		FFE3053BE0518A6B35809EAB /* DoctorHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F78017EA1F409DD12D2729D /* DoctorHarnessTests.swift */; };
 /* End PBXBuildFile section */
@@ -256,6 +258,7 @@
 		A12A6961B7D8E937263627BB /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
 		A30DFD8DFB5E048EC77638CD /* DoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoctorView.swift; sourceTree = "<group>"; };
 		A347F5D89ECABEECE7BC2538 /* SoulEditorContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoulEditorContainer.swift; sourceTree = "<group>"; };
+		A7B13A607D0E86C874DD9020 /* SettingsTabs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTabs.swift; sourceTree = "<group>"; };
 		AB09200C1C83F6EF34A8A307 /* DashboardCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCoordinator.swift; sourceTree = "<group>"; };
 		AD77CC385AAC4DB3C947D6DB /* StructuredConfigEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructuredConfigEditor.swift; sourceTree = "<group>"; };
 		AEB660801AA7110B5EAC2AF8 /* ConfigEditingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigEditingState.swift; sourceTree = "<group>"; };
@@ -589,6 +592,7 @@
 				4D9036C1EE4E2376B7311222 /* HostKeyConfirmationCoordinator.swift */,
 				4F61968C9D6A00AA0704AE7B /* RecentServers.swift */,
 				B9E1E73EC2580CB9D11A92ED /* ServerWindowHarness.swift */,
+				A7B13A607D0E86C874DD9020 /* SettingsTabs.swift */,
 				B765666C4D207165407ACC2D /* SidebarCustomizeView.swift */,
 				CF34088F90FBE0DED74D3129 /* SidebarLayout.swift */,
 				C53A32F3ADA4A96AD1BC1E61 /* WindowNotifications.swift */,
@@ -867,6 +871,7 @@
 				7ED741CA98028019107E791C /* SessionsSidebar.swift in Sources */,
 				91B54214562649BDF9432644 /* SessionsStore.swift in Sources */,
 				FF499D0E6BB2A566C0D2285C /* SettingsScene.swift in Sources */,
+				FF974ABAA720E22D432C737C /* SettingsTabs.swift in Sources */,
 				7F298E85036F0786DACB8821 /* SidebarCustomizeView.swift in Sources */,
 				7A8D74F2B0FB58B5FDD162CF /* SidebarLayout.swift in Sources */,
 				05373FFD890DF132B906065E /* SkillsView.swift in Sources */,
@@ -949,6 +954,7 @@
 				5EA432274794842C57B5C6BE /* SessionsCwdStore.swift in Sources */,
 				5A812F020B8745837A147EFC /* SessionsSidebar.swift in Sources */,
 				1239EE5AE0C1D5C2148182B7 /* SessionsStore.swift in Sources */,
+				CB449E642EAAF16CA11A632B /* SettingsTabs.swift in Sources */,
 				449127F9B64EEF6F39A9D541 /* SidebarCustomizeView.swift in Sources */,
 				534B4CDFF2F4A236B0D5B37D /* SidebarLayout.swift in Sources */,
 				FF7410E0865C3DB2A36D6F76 /* SkillsView.swift in Sources */,

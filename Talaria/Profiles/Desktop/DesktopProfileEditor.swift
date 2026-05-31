@@ -8,10 +8,7 @@ import SwiftUI
 /// — no `#if`, no `Idiom`.
 struct DesktopProfileEditor: View {
     @Environment(ProfileDirectory.self) private var directory
-    @Environment(SidebarLayout.self) private var sidebarLayout
     @State private var state = ProfileEditorState()
-    /// Presents the global Browse-sidebar customizer (reorder / hide pages).
-    @State private var showingCustomize = false
     /// Drives the trust-on-first-use prompt when a probe meets an unknown host
     /// key (iPad NIO path). Unused on macOS, where the system-ssh probe defers
     /// to `~/.ssh/known_hosts`.
@@ -29,10 +26,6 @@ struct DesktopProfileEditor: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .task { await reload() }
-        .sheet(isPresented: $showingCustomize) {
-            SidebarCustomizeView()
-                .environment(sidebarLayout)
-        }
         .alert(
             "Trust this server?",
             isPresented: Binding(
@@ -114,12 +107,6 @@ struct DesktopProfileEditor: View {
                 .accessibilityLabel("Delete server")
                 .help("Delete the selected server")
                 Spacer()
-                Button {
-                    showingCustomize = true
-                } label: {
-                    Label("Customize Sidebar…", systemImage: "sidebar.left")
-                }
-                .help("Reorder or hide the Browse sidebar pages")
             }
             .buttonStyle(.borderless)
             .padding(8)
