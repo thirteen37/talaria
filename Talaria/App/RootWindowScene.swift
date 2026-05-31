@@ -10,12 +10,14 @@ struct RootWindowScene<Content: View>: View {
     let profileId: UUID
     let directory: ProfileDirectory
     let recents: RecentServers
+    let sidebarLayout: SidebarLayout
     @ViewBuilder var content: () -> Content
 
     var body: some View {
         content()
             .environment(directory)
             .environment(recents)
+            .environment(sidebarLayout)
             .task {
                 await directory.reload()
                 recents.record(profileId)

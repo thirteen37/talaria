@@ -11,9 +11,11 @@ struct DesktopServerWindow: View {
 
     @Environment(ProfileDirectory.self) private var directory
     @Environment(RecentServers.self) private var recents
+    @Environment(SidebarLayout.self) private var sidebarLayout
     @State private var harness: ServerWindowHarness?
     @State private var browse: BrowseDestination? = .sessions
     @State private var showingSettings = false
+    @State private var showingCustomize = false
     /// Sidebar visibility, driven by our custom toggle. We manage it ourselves
     /// (rather than letting the system own the sidebar button) so the toggle can
     /// carry a notification badge that stays visible when the sidebar collapses.
@@ -78,6 +80,10 @@ struct DesktopServerWindow: View {
         .platformSettingsSheet(isPresented: $showingSettings) {
             DesktopProfileEditor(onDismiss: { showingSettings = false })
                 .environment(directory)
+        }
+        .sheet(isPresented: $showingCustomize) {
+            SidebarCustomizeView()
+                .environment(sidebarLayout)
         }
         .onDisappear {
             // Cancel the window-scoped log tailer + release the dashboard
@@ -281,9 +287,18 @@ struct DesktopServerWindow: View {
 
             Section("Browse") {
                 browseRow(.sessions, store: harness.store)
-                ForEach(BrowseDestination.manageOrder, id: \.self) { destination in
+                ForEach(sidebarLayout.visibleManageDestinations(), id: \.self) { destination in
                     browseRow(destination, store: harness.store)
                 }
+                Button {
+                    showingCustomize = true
+                } label: {
+                    Label("Customize Sidebar…", systemImage: "slider.horizontal.3")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Reorder or hide Browse pages")
             }
         }
         // iPad surfaces a gear to open the editor (no Settings scene there);
