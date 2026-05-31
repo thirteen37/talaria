@@ -71,9 +71,11 @@
 		6FA3206E810F079E7E4F7F27 /* ConfigEditorHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34288494D0F5ABEB4260FA23 /* ConfigEditorHarness.swift */; };
 		705C24E629FF24D1B2D27069 /* ToolCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09D9869DC5BF08FEDB227ACF /* ToolCard.swift */; };
 		728C074511EF21DEF1EE05C3 /* ProfileDirectory.swift in Sources */ = {isa = PBXBuildFile; fileRef = C92A4408751CCA22446EA7AE /* ProfileDirectory.swift */; };
+		732DD11D3E33BF34986A9D30 /* SoulEditingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AE152C7AFC71DFE3A5F5100 /* SoulEditingState.swift */; };
 		73B600A6620523E277E9A28D /* ServerWindowHarness.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9E1E73EC2580CB9D11A92ED /* ServerWindowHarness.swift */; };
 		7621DC3ED55B2069E6CE1F9F /* BrowseDestination.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D9089ABA90F410BC7A0349A /* BrowseDestination.swift */; };
 		762AEA4C3482528E246E3A92 /* Composer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82CA47B4FE65F06FAC7B45D9 /* Composer.swift */; };
+		78DA99FC12D647B78E6BCD91 /* SoulEditorContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A347F5D89ECABEECE7BC2538 /* SoulEditorContainer.swift */; };
 		792EDEE5157520320862CDB4 /* ConfigEditorContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24D364E6EE421151FA4C1564 /* ConfigEditorContainer.swift */; };
 		799C1A386BCE91C49D9426F8 /* PhoneProfileEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = E164EDD7A34D35C13D632433 /* PhoneProfileEditor.swift */; };
 		7A3A7E6C18593FD320A54836 /* StructuredConfigEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD77CC385AAC4DB3C947D6DB /* StructuredConfigEditor.swift */; };
@@ -98,6 +100,7 @@
 		A27B8F3EDC961F5FC9E17E94 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B71A6200C3475A1788F447EE /* Assets.xcassets */; };
 		A8A565A53ACD757085295E54 /* ProfileProber.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F42FDBFD4F21B7E12EB88CA /* ProfileProber.swift */; };
 		AB02605BD95213C83617A813 /* SessionsBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C21784B6CC62C9E498749A73 /* SessionsBrowser.swift */; };
+		AD33372BFF709C6DC20DB54E /* SoulEditorContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A347F5D89ECABEECE7BC2538 /* SoulEditorContainer.swift */; };
 		AE1E5F4DF2CC154A4C2BD329 /* ProfileProber.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD5A8C9E26CB5316AE819FD5 /* ProfileProber.swift */; };
 		B12C7ACB8C23C086A85E0842 /* AppLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEC6EAC9742C997DB3F416F0 /* AppLog.swift */; };
 		B26F121BF99FC608925F341F /* UpdateController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 299E76E8B6B759627A8B41DD /* UpdateController.swift */; };
@@ -112,10 +115,9 @@
 		C7B761A3B90CA969B135A078 /* LoginShellPATHResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53F2F5B600BE5ABF59512666 /* LoginShellPATHResolver.swift */; };
 		C859F63DE8CEC424B7C05398 /* PathAwareHermesAdminRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = F30054244D9FE8D35AE76B2B /* PathAwareHermesAdminRunner.swift */; };
 		C8A306E119586CE2E6731380 /* BrowseDetail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A4D5F91E421312E2E370A23 /* BrowseDetail.swift */; };
-		CA4E7E1736B64733A12F812D /* SoulEditingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 907F6E737E1F48D28F5F6B38 /* SoulEditingState.swift */; };
 		CA120C35B4A781A89CCB95F4 /* SessionHistoryMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E0675F4B94F55DDF642B901 /* SessionHistoryMapper.swift */; };
+		CFB7BA97155787ACD6D2AA60 /* SoulEditingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0AE152C7AFC71DFE3A5F5100 /* SoulEditingState.swift */; };
 		D022CEB819BEC577762C2CF6 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CA01C5F2F7904E83DB29961 /* ChatView.swift */; };
-		D3571C3A279640A7BFF5F2C0 /* SoulEditorContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F98CD56F6DB48FCAB732F1F /* SoulEditorContainer.swift */; };
 		D3CD6F4B48D1E62071D8BD95 /* LogConsoleToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0840E0D096AF226C4E7ACAD5 /* LogConsoleToolbar.swift */; };
 		D86E0462A2BD43506BF88303 /* DesktopServerWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F6D42240D0DFA40A9B1E0FC /* DesktopServerWindow.swift */; };
 		D8A1F37FD8DF30100ECFEFF9 /* DesktopProfileEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23313EAA36A931AB0092B232 /* DesktopProfileEditor.swift */; };
@@ -124,12 +126,10 @@
 		DD58828D88BFA7B322CC374C /* LogConsoleToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41704E697D7EBEDF701A6395 /* LogConsoleToolbar.swift */; };
 		DEFC27063EB9EC591D93D07F /* HostKeyConfirmationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D9036C1EE4E2376B7311222 /* HostKeyConfirmationCoordinator.swift */; };
 		E1C3E4A6DD75220E15C54369 /* PlatformSeam.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42A302BACE4FD36A943BAEC2 /* PlatformSeam.swift */; };
-		E2626CE0F9E6487392F7C6E0 /* SoulEditingState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 907F6E737E1F48D28F5F6B38 /* SoulEditingState.swift */; };
 		E372097A60B968931068D2B6 /* Composer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82CA47B4FE65F06FAC7B45D9 /* Composer.swift */; };
 		E5F93B26DDB04EC7A8669255 /* TalariaApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22C1A2F3286887BEC9A982E /* TalariaApp.swift */; };
 		E89DCDB0C9AD12397615716C /* Markdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0726E977A155E433A5401996 /* Markdown.swift */; };
 		E96EB01A117C0954E4F23C37 /* LogConsole.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71FE69AC7DA73A5FB9244123 /* LogConsole.swift */; };
-		4A3444EC9B9845B9A24CC964 /* SoulEditorContainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F98CD56F6DB48FCAB732F1F /* SoulEditorContainer.swift */; };
 		F0223600063B00912A0FB4F9 /* PermissionPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 748E28FC6797F351A6EBB220 /* PermissionPrompt.swift */; };
 		F033CFB1F155DD7F285C0F1E /* ProfileEditorRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AA23ADC5BC8B713EA424CDD /* ProfileEditorRoot.swift */; };
 		F2A079666F57E632357E163E /* RootWindowScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 711D18166117D38A95717B0D /* RootWindowScene.swift */; };
@@ -169,6 +169,7 @@
 		073AE623C0CEF948BEA8260B /* ServerWindowHarness+iOS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ServerWindowHarness+iOS.swift"; sourceTree = "<group>"; };
 		0840E0D096AF226C4E7ACAD5 /* LogConsoleToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogConsoleToolbar.swift; sourceTree = "<group>"; };
 		09D9869DC5BF08FEDB227ACF /* ToolCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolCard.swift; sourceTree = "<group>"; };
+		0AE152C7AFC71DFE3A5F5100 /* SoulEditingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoulEditingState.swift; sourceTree = "<group>"; };
 		0BF654A05F720DAA02C0B069 /* EditableComparisonView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditableComparisonView.swift; sourceTree = "<group>"; };
 		0E48D07DCDB76B859B235E8D /* ServerCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerCommands.swift; sourceTree = "<group>"; };
 		13E7B5FE8F2B768093DA0CC8 /* SessionsSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionsSidebar.swift; sourceTree = "<group>"; };
@@ -191,7 +192,6 @@
 		4354F39DA326E5F1B00315AC /* ProfileEditorState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditorState.swift; sourceTree = "<group>"; };
 		451D8EBE2DA75CD69C94FFD8 /* CronView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CronView.swift; sourceTree = "<group>"; };
 		4D9036C1EE4E2376B7311222 /* HostKeyConfirmationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostKeyConfirmationCoordinator.swift; sourceTree = "<group>"; };
-		4F98CD56F6DB48FCAB732F1F /* SoulEditorContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoulEditorContainer.swift; sourceTree = "<group>"; };
 		4F42FDBFD4F21B7E12EB88CA /* ProfileProber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileProber.swift; sourceTree = "<group>"; };
 		4F61968C9D6A00AA0704AE7B /* RecentServers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentServers.swift; sourceTree = "<group>"; };
 		53F2F5B600BE5ABF59512666 /* LoginShellPATHResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginShellPATHResolver.swift; sourceTree = "<group>"; };
@@ -212,7 +212,6 @@
 		82AB33DE89BBD4F3D4D28D34 /* PhoneBrowseSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneBrowseSheet.swift; sourceTree = "<group>"; };
 		82CA47B4FE65F06FAC7B45D9 /* Composer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Composer.swift; sourceTree = "<group>"; };
 		8AA23ADC5BC8B713EA424CDD /* ProfileEditorRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditorRoot.swift; sourceTree = "<group>"; };
-		907F6E737E1F48D28F5F6B38 /* SoulEditingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoulEditingState.swift; sourceTree = "<group>"; };
 		94299301A67348B115A820E1 /* PlatformSeam.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformSeam.swift; sourceTree = "<group>"; };
 		98125E594379F762DEEEBF1A /* Info-iOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Info-iOS.plist"; sourceTree = "<group>"; };
 		9CA01C5F2F7904E83DB29961 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
@@ -220,6 +219,7 @@
 		9F78017EA1F409DD12D2729D /* DoctorHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoctorHarnessTests.swift; sourceTree = "<group>"; };
 		A12A6961B7D8E937263627BB /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
 		A30DFD8DFB5E048EC77638CD /* DoctorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoctorView.swift; sourceTree = "<group>"; };
+		A347F5D89ECABEECE7BC2538 /* SoulEditorContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoulEditorContainer.swift; sourceTree = "<group>"; };
 		AB09200C1C83F6EF34A8A307 /* DashboardCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardCoordinator.swift; sourceTree = "<group>"; };
 		AD77CC385AAC4DB3C947D6DB /* StructuredConfigEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StructuredConfigEditor.swift; sourceTree = "<group>"; };
 		AEB660801AA7110B5EAC2AF8 /* ConfigEditingState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigEditingState.swift; sourceTree = "<group>"; };
@@ -451,9 +451,9 @@
 				690152DEACAA0648E113BDAC /* ProfileFieldBindings.swift */,
 				FBCC3AB20959D5AB1E75BEF7 /* ProfileFormSections.swift */,
 				BECB3045F26C731D2FCDD414 /* ConfigEditor */,
-				C12F5B55D8C94571B7787933 /* SoulEditor */,
 				C54BBDB39C5DEF942C110389 /* Desktop */,
 				9D19D7BE781F1ED6A97619F3 /* iOS */,
+				CB0B0888BEFC152A3AC2FD10 /* SoulEditor */,
 			);
 			path = Profiles;
 			sourceTree = "<group>";
@@ -493,21 +493,21 @@
 			path = ConfigEditor;
 			sourceTree = "<group>";
 		};
-		C12F5B55D8C94571B7787933 /* SoulEditor */ = {
-			isa = PBXGroup;
-			children = (
-				907F6E737E1F48D28F5F6B38 /* SoulEditingState.swift */,
-				4F98CD56F6DB48FCAB732F1F /* SoulEditorContainer.swift */,
-			);
-			path = SoulEditor;
-			sourceTree = "<group>";
-		};
 		C54BBDB39C5DEF942C110389 /* Desktop */ = {
 			isa = PBXGroup;
 			children = (
 				23313EAA36A931AB0092B232 /* DesktopProfileEditor.swift */,
 			);
 			path = Desktop;
+			sourceTree = "<group>";
+		};
+		CB0B0888BEFC152A3AC2FD10 /* SoulEditor */ = {
+			isa = PBXGroup;
+			children = (
+				0AE152C7AFC71DFE3A5F5100 /* SoulEditingState.swift */,
+				A347F5D89ECABEECE7BC2538 /* SoulEditorContainer.swift */,
+			);
+			path = SoulEditor;
 			sourceTree = "<group>";
 		};
 		CCD78760DBE6F6BDAC08F889 /* iOS */ = {
@@ -803,8 +803,8 @@
 				FF499D0E6BB2A566C0D2285C /* SettingsScene.swift in Sources */,
 				05373FFD890DF132B906065E /* SkillsView.swift in Sources */,
 				4AE1CCD2FAA490BDF400EAC4 /* SlashMenu.swift in Sources */,
-				4A3444EC9B9845B9A24CC964 /* SoulEditorContainer.swift in Sources */,
-				CA4E7E1736B64733A12F812D /* SoulEditingState.swift in Sources */,
+				732DD11D3E33BF34986A9D30 /* SoulEditingState.swift in Sources */,
+				78DA99FC12D647B78E6BCD91 /* SoulEditorContainer.swift in Sources */,
 				57771E6BC6CB365C66D21370 /* StatusBar.swift in Sources */,
 				7A3A7E6C18593FD320A54836 /* StructuredConfigEditor.swift in Sources */,
 				E5F93B26DDB04EC7A8669255 /* TalariaApp.swift in Sources */,
@@ -873,8 +873,8 @@
 				1239EE5AE0C1D5C2148182B7 /* SessionsStore.swift in Sources */,
 				FF7410E0865C3DB2A36D6F76 /* SkillsView.swift in Sources */,
 				F90016DFF2E9340E9B1800D5 /* SlashMenu.swift in Sources */,
-				D3571C3A279640A7BFF5F2C0 /* SoulEditorContainer.swift in Sources */,
-				E2626CE0F9E6487392F7C6E0 /* SoulEditingState.swift in Sources */,
+				CFB7BA97155787ACD6D2AA60 /* SoulEditingState.swift in Sources */,
+				AD33372BFF709C6DC20DB54E /* SoulEditorContainer.swift in Sources */,
 				96C8A02BDDC866588DDBB59E /* StatusBar.swift in Sources */,
 				21F9EC5B5421DBCE95486D7E /* StructuredConfigEditor.swift in Sources */,
 				9DF3210433514B652640EB27 /* TalariaApp.swift in Sources */,
