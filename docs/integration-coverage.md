@@ -24,7 +24,9 @@ Talaria does not read or write Hermes SQLite files directly.
 | `diffs` | `0.3.0` | `v2026.3.17` | Tool-call diff payload rendering |
 | `updateCheck` | `0.12.0` | `v2026.4.30` | `hermes update --check` CLI fallback |
 | `toolsEnablePerPlatform` | `0.4.0` | `v2026.3.23` | `hermes tools enable/disable/list` CLI fallback |
-| `requiresDashboard` | `0.14.0` | `v2026.5.16` | Dashboard-backed sessions, management, config, logs, and plugins |
+| `requiresDashboard` | `0.14.0` | `v2026.5.16` | Dashboard-backed sessions, management, config, logs, plugins, and kanban |
+| `requiresModelAPI` | `0.14.0` | `v2026.5.16` | `/api/model/*` (main + auxiliary model assignment) |
+| `requiresEnvAPI` | `0.14.0` | `v2026.5.16` | `/api/env*` (Environment screen `.env` CRUD) |
 
 Dashboard-backed screens render a warning banner when `requiresDashboard` is
 not met. Profiles still load and ACP chat can still run; non-chat dashboard
@@ -66,10 +68,13 @@ window consumers, and tears the child down when the last consumer releases it.
 | Skills | `GET /api/skills`, `PUT /api/skills/toggle` |
 | Plugins | `GET /api/dashboard/plugins/hub`, `POST /api/dashboard/agent-plugins/install`, `POST /api/dashboard/agent-plugins/{name}/enable`, `POST /api/dashboard/agent-plugins/{name}/disable`, `POST /api/dashboard/agent-plugins/{name}/update`, `DELETE /api/dashboard/agent-plugins/{name}`, `PUT /api/dashboard/plugin-providers` |
 | Cron | `GET` / `POST` on `/api/cron/jobs`, `PUT` / `DELETE` on `/api/cron/jobs/{id}`, plus `/pause`, `/resume`, and `/trigger` |
+| Kanban | `/api/plugins/kanban/*` — boards, tasks (full CRUD + bulk), links, comments, run logs, diagnostics, stats, assignees |
+| Models | `GET /api/model/options`, `GET /api/model/auxiliary`, `POST /api/model/set` (main + auxiliary slots) |
 | Logs | `GET /api/logs` with `file`, `lines`, `level`, `component`, and `search` query parameters |
 | Profiles | `GET` / `POST` on `/api/profiles`, `PATCH` / `DELETE` on `/api/profiles/{name}` |
 | Config editor | `GET /api/config/schema`, `GET /api/config`, `PUT /api/config` |
-| Soul editor | `GET /api/soul`, `PUT /api/soul` |
+| Soul editor | `GET /api/profiles/{profile}/soul`, `PUT /api/profiles/{profile}/soul` (profile-scoped; no top-level `/api/soul`) |
+| Personalities editor | `agent.personalities` via the config editor (`GET`/`PUT /api/config`) |
 | Environment (.env) | `GET /api/env`, `PUT /api/env`, `DELETE /api/env`, `POST /api/env/reveal` |
 
 The default server window shares one dashboard per `ServerProfile`. Profile
