@@ -6,35 +6,51 @@ import SwiftUI
 /// dropdown scrolls the stacked sections so the ~100-field form stays navigable.
 struct StructuredConfigEditor: View {
     let state: ConfigEditingState
+    /// Purely presentational key/description search — filters which rows render
+    /// (like the comparison editor's "differences only"), never touching
+    /// `working`/dirty/save. Ephemeral view state: resetting on a profile switch
+    /// is acceptable.
+    @State private var searchText = ""
 
     var body: some View {
         if let form = state.form {
+            let visible = form.categories(matchingSearch: searchText)
             ScrollViewReader { proxy in
                 VStack(spacing: 0) {
-                    if form.categories.count > 1 {
-                        jumpBar(form, proxy: proxy)
-                        Divider()
-                    }
-                    // A `List` (not `Form`) so rows virtualize on macOS — the full
-                    // Hermes schema is ~100 fields and a non-lazy `Form` lays them
-                    // all out at once, which makes scrolling lag. Section ids let
-                    // the jump dropdown scroll-anchor to a chosen segment (anchor
-                    // precision is a known-acceptable rough edge with `List`).
-                    List {
-                        ForEach(form.categories) { category in
-                            Section(category.name.capitalized) {
-                                ForEach(category.fields) { field in
-                                    row(for: field)
+                    ConfigEditorNavBar(
+                        searchText: $searchText,
+                        sections: visible.map { .init(id: $0.name, label: $0.name.capitalized) },
+                        proxy: proxy
+                    )
+                    Divider()
+                    if visible.isEmpty {
+                        ContentUnavailableView(
+                            "No matching keys",
+                            systemImage: "magnifyingglass",
+                            description: Text("No config key or label matches “\(searchText)”.")
+                        )
+                    } else {
+                        // A `List` (not `Form`) so rows virtualize on macOS — the full
+                        // Hermes schema is ~100 fields and a non-lazy `Form` lays them
+                        // all out at once, which makes scrolling lag. Section ids let
+                        // the jump dropdown scroll-anchor to a chosen segment (the
+                        // nav bar's two-pass scroll keeps the anchor accurate).
+                        List {
+                            ForEach(visible) { category in
+                                Section(category.name.capitalized) {
+                                    ForEach(category.fields) { field in
+                                        row(for: field)
+                                    }
                                 }
+                                .id(category.name)
                             }
-                            .id(category.name)
                         }
+                        #if os(macOS)
+                        .listStyle(.inset)
+                        #else
+                        .listStyle(.insetGrouped)
+                        #endif
                     }
-                    #if os(macOS)
-                    .listStyle(.inset)
-                    #else
-                    .listStyle(.insetGrouped)
-                    #endif
                 }
             }
         } else {
@@ -44,26 +60,6 @@ struct StructuredConfigEditor: View {
                 description: Text("The dashboard didn't return a config schema.")
             )
         }
-    }
-
-    @ViewBuilder
-    private func jumpBar(_ form: ProfileConfigForm, proxy: ScrollViewProxy) -> some View {
-        HStack {
-            Menu {
-                ForEach(form.categories) { category in
-                    Button(category.name.capitalized) {
-                        withAnimation { proxy.scrollTo(category.name, anchor: .top) }
-                    }
-                }
-            } label: {
-                Label("Jump to section", systemImage: "list.bullet.indent")
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
     }
 
     @ViewBuilder
