@@ -173,6 +173,35 @@ struct EnvFileTests {
             _ = try await reader.read()
         }
     }
+
+    @Test(arguments: [
+        // `cat` (NIO) and modern OpenSSH `sftp` both phrase it this way…
+        "Couldn't stat remote file: No such file or directory",
+        // …while some SFTP servers emit an alternate "not found" wording.
+        "File \"/home/u/.hermes/.env\" not found.",
+    ])
+    func readerRemoteTreatsMissingFileAsEmpty(message: String) async throws {
+        let runner = StubEnvPathRunner(envPath: "/home/u/.hermes/.env")
+        let transfer = StubThrowingTransfer(error: .transferFailed(message))
+        let reader = HermesEnvFileReader(runner: runner, snapshotTransfer: transfer, isLocal: false)
+
+        // Mirrors the local missing-file path: a fresh-install host with no
+        // `.env` yet reads as "no custom vars", not a persistent error banner.
+        let entries = try await reader.read()
+        #expect(entries.isEmpty)
+    }
+
+    @Test
+    func readerRemoteSurfacesNonMissingTransferError() async {
+        let runner = StubEnvPathRunner(envPath: "/home/u/.hermes/.env")
+        let transfer = StubThrowingTransfer(error: .transferFailed("Permission denied"))
+        let reader = HermesEnvFileReader(runner: runner, snapshotTransfer: transfer, isLocal: false)
+
+        // A real transfer failure (not a missing file) must still surface.
+        await #expect(throws: EnvFileError.self) {
+            _ = try await reader.read()
+        }
+    }
 }
 
 // MARK: - Stubs
@@ -213,4 +242,11 @@ private final class StubSnapshotTransfer: RemoteSnapshotTransfer, @unchecked Sen
         lock.withLock { _requestedPaths.append(remotePath) }
         try contents.write(to: to, atomically: true, encoding: .utf8)
     }
+}
+
+/// `RemoteSnapshotTransfer` that always fails the fetch with a fixed error —
+/// exercises ``HermesEnvFileReader``'s missing-file vs. real-error handling.
+private struct StubThrowingTransfer: RemoteSnapshotTransfer {
+    let error: SSHTransportError
+    func fetch(remotePath: String, to: URL) async throws { throw error }
 }

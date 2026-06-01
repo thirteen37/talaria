@@ -63,13 +63,40 @@ final class EnvironmentHarness {
             if let fileReader {
                 do {
                     let entries = try await fileReader.read()
+                    let fileValues = Dictionary(
+                        entries.map { ($0.key, $0.value) },
+                        uniquingKeysWith: { _, last in last }
+                    )
+                    // Un-mask non-secret known vars from the `.env` truth: the
+                    // dashboard redacts even non-secret values when they're short
+                    // (e.g. `***`), but a user's own non-secret value should just
+                    // be visible. Secrets stay masked (reveal-on-demand) so
+                    // plaintext never lingers in the list.
+                    merged = merged.map { envVar in
+                        guard !envVar.isPassword, let value = fileValues[envVar.name] else { return envVar }
+                        return DashboardEnvVar(
+                            name: envVar.name,
+                            isSet: envVar.isSet,
+                            redactedValue: value,
+                            description: envVar.description,
+                            url: envVar.url,
+                            category: envVar.category,
+                            isPassword: envVar.isPassword,
+                            tools: envVar.tools,
+                            advanced: envVar.advanced
+                        )
+                    }
                     var seen = Set(merged.map(\.name))
                     for entry in entries where !seen.contains(entry.key) {
                         seen.insert(entry.key)
                         merged.append(DashboardEnvVar(
                             name: entry.key,
                             isSet: true,
-                            redactedValue: redactEnvValue(entry.value),
+                            // Custom vars are non-secret (`isPassword: false`), so
+                            // store the real value: the placeholder shows it greyed
+                            // and the user can see their own value (no eye toggle
+                            // exists for non-secrets).
+                            redactedValue: entry.value,
                             description: "",
                             url: nil,
                             category: "custom",
@@ -149,8 +176,9 @@ struct EnvironmentView: View {
     /// (`hermes config env-path`). Nil leaves custom-var enumeration off.
     let runner: HermesAdminRunning?
     /// SSH transfer for reading a remote profile's `.env`; nil for local
-    /// profiles (and the system-ssh macOS path, where there's no transfer to
-    /// read a remote `.env` with — see ``canEnumerateCustomVars``).
+    /// profiles and for the system-ssh macOS path (which falls back to the
+    /// `sftp` subprocess inside ``HermesEnvFileReader`` — see
+    /// ``canEnumerateCustomVars``).
     let snapshotTransfer: RemoteSnapshotTransfer?
     /// The window's profile — its `kind` selects the local-fs vs SSH read path.
     let profile: ServerProfile?
@@ -174,14 +202,20 @@ struct EnvironmentView: View {
     }
 
     /// Whether the `.env` read path is actually available. Needs a runner to
-    /// resolve the path (`hermes config env-path`), plus either a local profile
-    /// (filesystem read) or an SSH transfer (remote `cat`). On the macOS
-    /// system-ssh remote path `snapshotTransfer` is nil, so custom-var
-    /// enumeration — and the Add button — stay off there rather than failing
-    /// every refresh with a "no SSH transfer" banner and offering an Add that
-    /// writes vars which never re-appear.
+    /// resolve the path (`hermes config env-path`), plus a way to read the file:
+    /// a local profile (filesystem), an injected SSH transfer (NIO), or — on
+    /// macOS — the `sftp` subprocess fallback for a system-ssh remote (the same
+    /// fallback ``HermesConfigReader`` uses). Gating Add on this is correct: with
+    /// the remote read now available, a custom var written via Add re-appears on
+    /// refresh.
     private var canEnumerateCustomVars: Bool {
-        runner != nil && (profile?.kind == .local || snapshotTransfer != nil)
+        guard runner != nil else { return false }
+        if profile?.kind == .local || snapshotTransfer != nil { return true }
+        #if os(macOS)
+        return profile?.kind == .ssh
+        #else
+        return false
+        #endif
     }
 
     var body: some View {
@@ -212,7 +246,8 @@ struct EnvironmentView: View {
                 ? HermesEnvFileReader(
                     runner: runner,
                     snapshotTransfer: snapshotTransfer,
-                    isLocal: profile?.kind == .local
+                    isLocal: profile?.kind == .local,
+                    profile: profile
                 )
                 : nil
             let h = EnvironmentHarness(client: client, fileReader: reader)
@@ -451,6 +486,14 @@ private struct EnvVarRow: View {
     /// ("focusing any record expands it").
     let onFocus: () -> Void
 
+    /// Lock slot width (12) + HStack spacing (8): the leading inset that aligns
+    /// the expanded details under the key name rather than the lock icon.
+    private static let keyInset: CGFloat = 20
+    /// Fixed width of the trailing value column (field + eye + clear). The field
+    /// flexes inside it, so toggling the icons shrinks the field instead of
+    /// displacing it.
+    private static let valueColumnWidth: CGFloat = 240
+
     /// Typed replacement value. Empty means "keep the current value" — Save is
     /// disabled and the placeholder shows the existing (redacted) value.
     @State private var draft: String = ""
@@ -477,18 +520,26 @@ private struct EnvVarRow: View {
 
                 Spacer(minLength: 8)
 
-                valueField
-                    .frame(maxWidth: 240)
-
-                if envVar.isPassword, isExpanded {
-                    revealEye
+                // Fixed-width value column: the field flexes, icons take intrinsic
+                // width, so toggling the eye/clear shrinks the field rather than
+                // shoving it left.
+                HStack(spacing: 4) {
+                    valueField
+                    if envVar.isPassword, isExpanded { revealEye }
+                    if isExpanded, envVar.isSet { clearButton }
                 }
+                .frame(width: Self.valueColumnWidth, alignment: .leading)
             }
 
             if isExpanded {
                 expandedContent
+                    .padding(.leading, Self.keyInset)
             }
         }
+        // Breathing room so row content (esp. the link/tools on the last row)
+        // isn't flush against the list edges.
+        .padding(.vertical, 6)
+        .padding(.trailing, 4)
         // Drop any revealed plaintext and typed draft the moment the row
         // collapses: a secret must never linger past the row that asked for it.
         // The per-row analogue of `selectionID.didSet` clearing `harness.revealed`.
@@ -561,7 +612,7 @@ private struct EnvVarRow: View {
         if let redacted = envVar.redactedValue, !redacted.isEmpty {
             return redacted
         }
-        return envVar.isPassword ? "New value" : "Value"
+        return "Value"
     }
 
     /// Icon-only reveal toggle modelled on `CustomEndpointForm.apiKeyField`.
@@ -598,48 +649,50 @@ private struct EnvVarRow: View {
 
     @ViewBuilder
     private var expandedContent: some View {
-        if !envVar.description.isEmpty {
-            Text(envVar.description)
-                .font(.callout)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
+        HStack(alignment: .bottom, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                if !envVar.description.isEmpty {
+                    Text(envVar.description)
+                        .font(.callout)
+                        .textSelection(.enabled)
+                }
 
-        if let url = envVar.url, let link = URL(string: url) {
-            Link(destination: link) {
-                Label(url, systemImage: "link")
-                    .font(.caption)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if let url = envVar.url, let link = URL(string: url) {
+                    Link(destination: link) {
+                        Label(url, systemImage: "link")
+                            .font(.caption)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+
+                if !envVar.tools.isEmpty {
+                    Text("Used by: \(envVar.tools.joined(separator: ", "))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-        }
-
-        if !envVar.tools.isEmpty {
-            Text("Used by: \(envVar.tools.joined(separator: ", "))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-
-        HStack(spacing: 8) {
-            Button {
-                onSave(draft)
-            } label: {
-                Label("Save", systemImage: "checkmark.circle")
-            }
-            .keyboardShortcut(.return, modifiers: [.command])
-            .disabled(busy || draft.isEmpty)
-
-            if envVar.isSet {
-                deleteButton
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if busy { ProgressView().controlSize(.small) }
+            saveButton
         }
     }
 
+    private var saveButton: some View {
+        Button {
+            onSave(draft)
+        } label: {
+            Label("Save", systemImage: "checkmark.circle")
+        }
+        .keyboardShortcut(.return, modifiers: [.command])
+        .disabled(busy || draft.isEmpty)
+    }
+
     /// Clear-style destructive control, styled like the Configuration editor's
-    /// clear button but with delete semantics (confirmation + `onDelete`).
-    private var deleteButton: some View {
+    /// clear button but with delete semantics (confirmation + `onDelete`). Sits
+    /// beside the value field (expanded, set vars only), not in `expandedContent`.
+    private var clearButton: some View {
         Button {
             confirmingDelete = true
         } label: {
