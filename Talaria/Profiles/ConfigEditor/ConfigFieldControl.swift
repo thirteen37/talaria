@@ -21,6 +21,7 @@ struct ConfigFieldControl: View {
                 TextField("", text: state.stringBinding(for: field))
                     .multilineTextAlignment(.trailing)
                     .textFieldStyle(.roundedBorder)
+                    .clearButton(state.stringBinding(for: field))
             }
         case .select:
             Picker(title, selection: state.stringBinding(for: field)) {
@@ -38,6 +39,12 @@ struct ConfigFieldControl: View {
         case .number:
             LabeledContent(title) {
                 HStack(spacing: 6) {
+                    // No clear button: a number key has no meaningful empty
+                    // state in the structured editor. Setting "" would store
+                    // .string(""), which ProfileConfigForm.edits drops for a
+                    // number-typed key (see editsDropsInvalidNumberInput), so the
+                    // old value silently returns on save. Removal is the YAML
+                    // pane's job — the structured path is additive by design.
                     TextField("", text: state.numberTextBinding(for: field))
                         .multilineTextAlignment(.trailing)
                         .textFieldStyle(.roundedBorder)
@@ -104,6 +111,25 @@ struct ListFieldEditor: View {
             }
             .buttonStyle(.borderless)
             .controlSize(.small)
+        }
+    }
+}
+
+private extension View {
+    /// Appends a trailing clear button shown only when `text` is non-empty,
+    /// mirroring the macOS search-field affordance. Resets the bound string to "".
+    func clearButton(_ text: Binding<String>) -> some View {
+        HStack(spacing: 4) {
+            self
+            if !text.wrappedValue.isEmpty {
+                Button { text.wrappedValue = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Clear")
+                .help("Clear the value")
+            }
         }
     }
 }
