@@ -242,19 +242,20 @@ private final class ProcessOutputReader: @unchecked Sendable {
     }
 }
 
-/// Line-buffered reader over a `FileHandle`. The `readabilityHandler` drains
-/// `availableData` on Foundation's source queue; we then hop onto a dedicated
-/// serial queue so newline splitting and continuation yields are serialised
-/// per stream. `finish()` is called synchronously from the process's
-/// termination handler — it tears down the source, reads any trailing buffered
-/// bytes, and flushes the partial line, guaranteeing all output is emitted
-/// before `.exit`.
+/// Line-buffered reader over a `FileHandle`. A single blocking read loop on a
+/// dedicated queue owns *all* reads: `availableData` returns queued bytes until
+/// the process closes the pipe's write end, then yields an empty `Data` (EOF).
+/// Because reading is never split between this loop and a separate "drain on
+/// termination" path, there is no race for the final chunk — the trailing
+/// partial line is flushed exactly once, on EOF. `finish()` simply blocks until
+/// the loop has drained to EOF and flushed, so the termination handler can
+/// guarantee all output is delivered before `.exit`.
 final class AdminLineReader: @unchecked Sendable {
     private let handle: FileHandle
     private let onLine: (String) -> Void
     private let queue: DispatchQueue
+    private let drained = DispatchGroup()
     private var buffer = Data()
-    private var finished = false
 
     init(handle: FileHandle, label: String, onLine: @escaping (String) -> Void) {
         self.handle = handle
@@ -263,35 +264,23 @@ final class AdminLineReader: @unchecked Sendable {
     }
 
     func start() {
-        handle.readabilityHandler = { [weak self] h in
-            let data = h.availableData
-            guard let self else { return }
-            if data.isEmpty {
-                self.queue.async {
-                    self.handle.readabilityHandler = nil
-                }
-                return
-            }
-            self.queue.async {
-                self.append(data)
-            }
-        }
-    }
-
-    func finish() {
-        queue.sync {
-            guard !finished else { return }
-            handle.readabilityHandler = nil
-            let trailing = handle.readDataToEndOfFile()
-            if !trailing.isEmpty {
-                append(trailing)
+        drained.enter()
+        queue.async { [self] in
+            while true {
+                let data = handle.availableData
+                if data.isEmpty { break }   // EOF: pipe's write end closed
+                append(data)
             }
             if !buffer.isEmpty {
                 onLine(String(decoding: buffer, as: UTF8.self))
                 buffer.removeAll()
             }
-            finished = true
+            drained.leave()
         }
+    }
+
+    func finish() {
+        drained.wait()
     }
 
     private func append(_ data: Data) {
