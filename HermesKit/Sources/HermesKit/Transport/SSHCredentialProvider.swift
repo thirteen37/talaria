@@ -90,6 +90,38 @@ public struct FileIdentityProvider: SSHCredentialProvider {
     }
 }
 
+// MARK: - Explicit-password provider (probe time)
+
+/// Offers a just-typed password to the SSH auth delegate, delegating key
+/// resolution to a wrapped `base` (`FileIdentityProvider` by default).
+///
+/// The profile editor's **Probe** action needs to authenticate with a password
+/// the user typed but hasn't saved yet — at that point the profile has no
+/// `passwordKeychainReference`, so the plain `FileIdentityProvider` would resolve
+/// no password and the connection would fail "no password configured." Wrapping
+/// the base provider lets the probe inject the in-progress password while still
+/// falling back to the stored Keychain value when the field is left empty (the
+/// re-probe-a-saved-profile path).
+public struct ExplicitPasswordProvider: SSHCredentialProvider {
+    private let password: String
+    private let base: SSHCredentialProvider
+
+    public init(password: String, base: SSHCredentialProvider = FileIdentityProvider()) {
+        self.password = password
+        self.base = base
+    }
+
+    public func privateKey(for profile: ServerProfile, passphrase: String?) throws -> NIOSSHPrivateKey? {
+        try base.privateKey(for: profile, passphrase: passphrase)
+    }
+
+    public func password(for profile: ServerProfile) throws -> String? {
+        guard profile.authMethod == .password else { return nil }
+        // Empty typed field → fall back to the stored Keychain password.
+        return password.isEmpty ? try base.password(for: profile) : password
+    }
+}
+
 // MARK: - Keychain provider (cross-platform; stubbed for v1)
 
 /// Cross-platform provider that reads the PEM/OpenSSH blob from the

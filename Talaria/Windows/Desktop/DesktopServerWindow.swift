@@ -274,9 +274,15 @@ struct DesktopServerWindow: View {
                     HStack(alignment: .top, spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.red)
-                        Text(dashboardError)
-                            .font(.caption)
-                            .foregroundStyle(.primary)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(dashboardError)
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                            Button("Retry") { harness.retryDashboard() }
+                                .buttonStyle(.borderless)
+                                .controlSize(.mini)
+                                .help("Reconnect the dashboard")
+                        }
                     }
                 }
             }
