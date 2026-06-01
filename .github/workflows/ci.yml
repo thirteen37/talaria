@@ -19,6 +19,14 @@ jobs:
       - name: Test
         run: swift test --package-path HermesKit
 
+      # Talaria.xcodeproj is generated from project.yml (not committed), so it
+      # must be produced before the xcodebuild steps below.
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
       - name: macOS App Build
         run: |
           xcodebuild build \
