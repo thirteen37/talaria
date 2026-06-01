@@ -96,6 +96,20 @@ final class SessionsStore {
     var dashboardClient: DashboardClient?
     let defaultCwd: String
 
+    /// This window's profile id, stamped onto every notification so a tapped
+    /// banner can be routed back to the right window. Nil for the mock harness /
+    /// tests, which never notify.
+    let profileId: UUID?
+    /// App-wide notification bridge. Nil where notifications aren't wired (mock
+    /// harness, unit tests) — every notify call is a no-op then.
+    let notifier: ChatNotifier?
+    /// Whether this window is the one the user is actively looking at (its window
+    /// is frontmost). Reported by the window root's `trackWindowForeground`
+    /// modifier. Combined with `selection` to suppress notifications for a chat
+    /// the user is already watching. Defaults to `true` so a notification never
+    /// fires for a freshly-built store before the first foreground report lands.
+    var isWindowForeground = true
+
     /// Builds the launch spec for a `.tui` tab, or nil where embedded terminals
     /// aren't supported (iOS, the mock harness). Wired by the macOS harness seam.
     let tuiSpecFactory: TUISpecFactory?
@@ -140,7 +154,9 @@ final class SessionsStore {
         isAwaitingUserInput: @escaping @MainActor @Sendable () -> Bool = { false },
         tuiSpecFactory: TUISpecFactory? = nil,
         onCloseTUI: (@MainActor @Sendable (SessionId) -> Void)? = nil,
-        tuiPollInterval: Duration = .seconds(5)
+        tuiPollInterval: Duration = .seconds(5),
+        profileId: UUID? = nil,
+        notifier: ChatNotifier? = nil
     ) {
         self.manager = manager
         self.adminRunner = adminRunner
@@ -151,6 +167,8 @@ final class SessionsStore {
         self.tuiSpecFactory = tuiSpecFactory
         self.onCloseTUI = onCloseTUI
         self.tuiPollInterval = tuiPollInterval
+        self.profileId = profileId
+        self.notifier = notifier
     }
 
     /// True when this store can open `.tui` tabs (the macOS harness injected a
@@ -534,12 +552,65 @@ final class SessionsStore {
         }
     }
 
+    // MARK: - Notifications
+
+    /// Called by the chat VM when a user-started turn completes (the prompt
+    /// success branch). Posts an "agent finished" banner unless the user is
+    /// already watching this chat. `title` is the chat's current display name.
+    func handleTurnCompleted(id: SessionId, title: String?) {
+        guard let profileId, let notifier else { return }
+        guard NotificationPolicy.shouldNotifyAgentFinished(
+            settings: notifier.settings,
+            isForeground: isWindowForeground,
+            isSelected: selection == id
+        ) else { return }
+        notifier.postAgentFinished(profileId: profileId, sessionId: id, title: title ?? chatTitle(for: id))
+    }
+
+    /// Posts a "tool approval needed" banner for `id` unless the user is already
+    /// watching this chat. Called from the `.permissionRequest` observer.
+    private func notifyToolApproval(id: SessionId, toolName: String?) {
+        guard let profileId, let notifier else { return }
+        guard NotificationPolicy.shouldNotifyToolApproval(
+            settings: notifier.settings,
+            isForeground: isWindowForeground,
+            isSelected: selection == id
+        ) else { return }
+        notifier.postToolApproval(
+            profileId: profileId,
+            sessionId: id,
+            title: chatTitle(for: id),
+            toolName: toolName
+        )
+    }
+
+    /// The chat's display title from the open-session row or its cached view
+    /// model, or nil if neither has a (non-empty) name yet.
+    private func chatTitle(for id: SessionId) -> String? {
+        normalizedTitle(openSessions.first(where: { $0.id == id })?.title)
+            ?? normalizedTitle(viewModels[id]?.title)
+    }
+
+    /// Focuses the session a tapped notification points at: selects the tab if
+    /// it's already open, otherwise opens it via the dashboard summary so the
+    /// chat that prompted the notification comes to the front.
+    func focusSession(route: NotificationRoute) {
+        if openSessions.contains(where: { $0.id == route.sessionId }) {
+            selection = route.sessionId
+            return
+        }
+        Task {
+            await openExisting(HermesSessionSummary(id: route.sessionId, title: route.title ?? ""))
+        }
+    }
+
     private func observe(id: SessionId, notification: HermesNotification) {
         switch notification {
-        case .permissionRequest:
+        case let .permissionRequest(event):
             // Permission requests pause the turn waiting on the user; still
             // active in spirit, so keep showing working.
             statuses[id] = .working
+            notifyToolApproval(id: id, toolName: event.request.toolCall.title)
         case let .clientRequestError(_, _, message):
             statuses[id] = .error(message)
         case let .sessionUpdate(notification):

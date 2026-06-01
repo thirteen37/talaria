@@ -73,6 +73,15 @@ extension View {
         }
     }
 
+    /// Reports whether this window is the one the user is actively looking at,
+    /// so the store can suppress notifications for a chat already on screen. iOS
+    /// reads `scenePhase`: `.active` ⇒ foreground, `.inactive`/`.background` ⇒
+    /// not. (A backgrounded iOS app suspends its connection, so these mostly
+    /// fire while active-but-inactive — see the plan's iOS caveat.)
+    func trackWindowForeground(_ report: @escaping (Bool) -> Void) -> some View {
+        background(WindowForegroundReader(report: report))
+    }
+
     /// Gear toolbar item that opens the profile editor (there's no `Settings`
     /// scene on iOS, so the desktop window surfaces editing itself on iPad).
     func platformSettingsToolbarItem(action: @escaping () -> Void) -> some View {
@@ -140,5 +149,22 @@ struct PlatformSplit<Primary: View, Secondary: View>: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Reports the window's foreground state from `scenePhase`. Fires on appear and
+/// on every transition. Implemented as a background `View` (not a
+/// `ViewModifier`) to mirror the macOS half, which avoids a `Content` typealias
+/// collision with an AppKit symbol.
+private struct WindowForegroundReader: View {
+    @Environment(\.scenePhase) private var scenePhase
+    let report: (Bool) -> Void
+
+    private var isForeground: Bool { scenePhase == .active }
+
+    var body: some View {
+        Color.clear
+            .onAppear { report(isForeground) }
+            .onChange(of: scenePhase) { _, _ in report(isForeground) }
     }
 }

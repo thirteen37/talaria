@@ -68,7 +68,9 @@ extension ServerWindowHarness {
             adminRunner: admin,
             // Pause the open timeout while the trust prompt is up so a slow
             // fingerprint comparison doesn't tear down the pending connection.
-            isAwaitingUserInput: { hostKeyCoordinator.pending != nil }
+            isAwaitingUserInput: { hostKeyCoordinator.pending != nil },
+            profileId: profile.id,
+            notifier: ChatNotifier.shared
         )
         return ServerWindowHarness(
             store: store,

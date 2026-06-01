@@ -76,6 +76,17 @@ extension View {
         self
     }
 
+    /// Reports whether this window is the one the user is actively looking at,
+    /// so the store can suppress notifications for a chat already on screen.
+    /// macOS reads `controlActiveState`: only `.key` (this is *the* focused
+    /// window) counts as foreground. `.active` is the non-key case — a main
+    /// window of the active app that doesn't have keyboard focus, e.g. a second
+    /// profile window sitting behind the key one — so treating it as foreground
+    /// would wrongly suppress that window's notifications.
+    func trackWindowForeground(_ report: @escaping (Bool) -> Void) -> some View {
+        background(WindowForegroundReader(report: report))
+    }
+
     /// Profile-editor sheet for the desktop window. No-op on macOS — the
     /// `Settings` scene presents the editor instead.
     func platformSettingsSheet<Editor: View>(
@@ -125,5 +136,23 @@ struct PlatformSplit<Primary: View, Secondary: View>: View {
             if showsSecondary { secondary() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Reports the window's foreground state from `controlActiveState`. Fires on
+/// appear (so a store built for an already-frontmost window starts correct) and
+/// on every transition. Implemented as a background `View` (not a
+/// `ViewModifier`) so it doesn't depend on the `ViewModifier.Content` typealias,
+/// which collides with an AppKit symbol of the same name in this file.
+private struct WindowForegroundReader: View {
+    @Environment(\.controlActiveState) private var controlActiveState
+    let report: (Bool) -> Void
+
+    private var isForeground: Bool { controlActiveState == .key }
+
+    var body: some View {
+        Color.clear
+            .onAppear { report(isForeground) }
+            .onChange(of: controlActiveState) { _, _ in report(isForeground) }
     }
 }
