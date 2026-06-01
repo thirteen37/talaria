@@ -14,8 +14,12 @@ struct EditableComparisonView: View {
     /// Visual-only row filter: when on, rows whose loaded values match on both
     /// sides are hidden (see `isDifferent` for why the loaded baseline, not the
     /// live edit, drives the filter). Never touches `working`/dirty/save — purely
-    /// which rows render (see `visibleCategories`).
+    /// which rows render (see `differingCategories`).
     let showDifferencesOnly: Bool
+    /// Purely presentational key/description search — composes with
+    /// `showDifferencesOnly`; only changes which rows render, never
+    /// `working`/dirty/save. Ephemeral view state (resets on a compare switch).
+    @State private var searchText = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -68,20 +72,38 @@ struct EditableComparisonView: View {
     @ViewBuilder
     private var content: some View {
         if let sourceForm = source.form, let destForm = dest.form {
-            let categories = visibleCategories(source: sourceForm, dest: destForm)
-            if categories.isEmpty, showDifferencesOnly {
-                ContentUnavailableView(
-                    "No differences",
-                    systemImage: "equal.circle",
-                    description: Text("The two profiles' configs match on every field.")
-                )
-            } else {
-                ScrollViewReader { proxy in
-                    VStack(spacing: 0) {
-                        if categories.count > 1 {
-                            jumpBar(categories, proxy: proxy)
-                            Divider()
-                        }
+            // `searched` = search filter only (no differences filter); `categories`
+            // = the fully-filtered set actually rendered. Keeping both lets the
+            // empty state tell a no-search-match apart from a no-difference result.
+            let searched = filteredComparison(alignedComparison(source: sourceForm, dest: destForm), matchingSearch: searchText)
+            let categories = showDifferencesOnly ? differingCategories(searched) : searched
+            let isSearching = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ScrollViewReader { proxy in
+                VStack(spacing: 0) {
+                    ConfigEditorNavBar(
+                        searchText: $searchText,
+                        sections: categories.map { .init(id: $0.name, label: $0.name.capitalized) },
+                        proxy: proxy
+                    )
+                    Divider()
+                    if categories.isEmpty, isSearching, searched.isEmpty {
+                        ContentUnavailableView(
+                            "No matching keys",
+                            systemImage: "magnifyingglass",
+                            description: Text("No config key or label matches “\(searchText)”.")
+                        )
+                    } else if categories.isEmpty, showDifferencesOnly {
+                        // With a search active, only the *matching* subset was equal —
+                        // keys outside the query may still differ, so scope the copy to
+                        // the query rather than claiming the whole config matches.
+                        ContentUnavailableView(
+                            "No differences",
+                            systemImage: "equal.circle",
+                            description: Text(isSearching
+                                ? "The keys matching “\(searchText)” are identical in both profiles."
+                                : "The two profiles' configs match on every field.")
+                        )
+                    } else {
                         List {
                             ForEach(categories) { category in
                                 Section(category.name.capitalized) {
@@ -111,37 +133,11 @@ struct EditableComparisonView: View {
         }
     }
 
-    /// Section dropdown that scroll-anchors the comparison list to a chosen
-    /// category — mirrors the single structured editor's jump bar so the
-    /// many-category union stays navigable.
-    @ViewBuilder
-    private func jumpBar(_ categories: [ComparisonCategory], proxy: ScrollViewProxy) -> some View {
-        HStack {
-            Menu {
-                ForEach(categories) { category in
-                    Button(category.name.capitalized) {
-                        withAnimation { proxy.scrollTo(category.name, anchor: .top) }
-                    }
-                }
-            } label: {
-                Label("Jump to section", systemImage: "list.bullet.indent")
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-    }
-
-    /// The aligned categories to render, filtered to differing rows when
-    /// `showDifferencesOnly` is on. Empty categories drop out so the list never
-    /// shows a header with no rows. This is purely presentational — the full
-    /// union still backs each side's editing state.
-    private func visibleCategories(source sourceForm: ProfileConfigForm, dest destForm: ProfileConfigForm) -> [ComparisonCategory] {
-        let categories = alignedComparison(source: sourceForm, dest: destForm)
-        guard showDifferencesOnly else { return categories }
-        return categories.compactMap { category in
+    /// Keeps only differing rows (per `isDifferent`), dropping empty categories so
+    /// the list never shows a header with no rows. Purely presentational — the
+    /// full union still backs each side's editing state.
+    private func differingCategories(_ categories: [ComparisonCategory]) -> [ComparisonCategory] {
+        categories.compactMap { category in
             let rows = category.rows.filter(isDifferent)
             return rows.isEmpty ? nil : ComparisonCategory(name: category.name, rows: rows)
         }

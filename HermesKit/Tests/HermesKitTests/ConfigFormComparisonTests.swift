@@ -117,4 +117,107 @@ struct ConfigFormComparisonTests {
         let r = try row(result, category: "agent", key: "agent.retries")
         #expect(r.id == "agent.retries")
     }
+
+    // MARK: - filteredComparison(_:matchingSearch:)
+
+    /// A field carrying a schema description, for exercising description search.
+    private func describedField(_ key: String, category: String, description: String) -> ConfigFormField {
+        ConfigFormField(
+            key: key,
+            schema: ConfigFieldSchema(key: key, type: .string, description: description, category: category),
+            value: .string("v"),
+            category: category
+        )
+    }
+
+    @Test
+    func filterMatchesByUnionedKey() throws {
+        let categories = [
+            ComparisonCategory(name: "model", rows: [
+                ComparisonRow(key: "model.default", sourceField: field("model.default", category: "model"), destField: field("model.default", category: "model")),
+                ComparisonRow(key: "agent.timeout", sourceField: field("agent.timeout", category: "model"), destField: field("agent.timeout", category: "model")),
+            ]),
+        ]
+
+        let result = filteredComparison(categories, matchingSearch: "default")
+
+        #expect(result.map(\.name) == ["model"])
+        #expect(result.first?.rows.map(\.key) == ["model.default"])
+    }
+
+    @Test
+    func filterMatchesBySourceOnlyFieldDescription() throws {
+        let categories = [
+            ComparisonCategory(name: "agent", rows: [
+                ComparisonRow(
+                    key: "agent.timeout",
+                    sourceField: describedField("agent.timeout", category: "agent", description: "Seconds before retries"),
+                    destField: field("agent.timeout", category: "agent")
+                ),
+            ]),
+        ]
+
+        // "retries" only appears in the source field's description.
+        let result = filteredComparison(categories, matchingSearch: "retries")
+
+        #expect(result.first?.rows.map(\.key) == ["agent.timeout"])
+    }
+
+    @Test
+    func filterMatchesByDestOnlyFieldDescription() throws {
+        let categories = [
+            ComparisonCategory(name: "agent", rows: [
+                ComparisonRow(
+                    key: "agent.timeout",
+                    sourceField: field("agent.timeout", category: "agent"),
+                    destField: describedField("agent.timeout", category: "agent", description: "Seconds before retries")
+                ),
+            ]),
+        ]
+
+        let result = filteredComparison(categories, matchingSearch: "retries")
+
+        #expect(result.first?.rows.map(\.key) == ["agent.timeout"])
+    }
+
+    @Test
+    func filterOneSidedRowStillMatchesOnKey() throws {
+        let categories = [
+            ComparisonCategory(name: "agent", rows: [
+                ComparisonRow(key: "agent.retries", sourceField: field("agent.retries", category: "agent"), destField: nil),
+            ]),
+        ]
+
+        let result = filteredComparison(categories, matchingSearch: "retries")
+
+        #expect(result.first?.rows.map(\.key) == ["agent.retries"])
+    }
+
+    @Test
+    func filterBlankQueryReturnsCategoriesUnchanged() throws {
+        let categories = [
+            ComparisonCategory(name: "model", rows: [
+                ComparisonRow(key: "model.default", sourceField: field("model.default", category: "model"), destField: nil),
+            ]),
+        ]
+
+        #expect(filteredComparison(categories, matchingSearch: "") == categories)
+        #expect(filteredComparison(categories, matchingSearch: "   ") == categories)
+    }
+
+    @Test
+    func filterDropsEmptyCategories() throws {
+        let categories = [
+            ComparisonCategory(name: "model", rows: [
+                ComparisonRow(key: "model.default", sourceField: field("model.default", category: "model"), destField: nil),
+            ]),
+            ComparisonCategory(name: "agent", rows: [
+                ComparisonRow(key: "agent.timeout", sourceField: field("agent.timeout", category: "agent"), destField: nil),
+            ]),
+        ]
+
+        let result = filteredComparison(categories, matchingSearch: "model")
+
+        #expect(result.map(\.name) == ["model"])
+    }
 }

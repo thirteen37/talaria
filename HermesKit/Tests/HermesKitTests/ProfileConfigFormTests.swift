@@ -315,6 +315,66 @@ struct ProfileConfigFormTests {
         #expect(edits.isEmpty)
     }
 
+    // MARK: - categories(matchingSearch:)
+
+    @Test
+    func searchMatchesByKeySubstring() throws {
+        let form = searchForm()
+
+        let categories = form.categories(matchingSearch: "context")
+
+        #expect(categories.map(\.name) == ["general"])
+        #expect(categories.first?.fields.map(\.key) == ["model_context_length"])
+    }
+
+    @Test
+    func searchMatchesByDescriptionSubstring() throws {
+        let form = searchForm()
+
+        // "retries" appears only in agent.timeout's description, not its key.
+        let categories = form.categories(matchingSearch: "retries")
+
+        #expect(categories.map(\.name) == ["agent"])
+        #expect(categories.first?.fields.map(\.key) == ["agent.timeout"])
+    }
+
+    @Test
+    func searchIsCaseInsensitive() throws {
+        let form = searchForm()
+
+        let categories = form.categories(matchingSearch: "MODEL")
+
+        #expect(categories.map(\.name) == ["general"])
+        #expect(categories.first?.fields.map(\.key) == ["model", "model_context_length"])
+    }
+
+    @Test
+    func blankOrWhitespaceQueryReturnsAllCategories() throws {
+        let form = searchForm()
+
+        #expect(form.categories(matchingSearch: "") == form.categories)
+        #expect(form.categories(matchingSearch: "   \n ") == form.categories)
+    }
+
+    @Test
+    func nonMatchingQueryReturnsEmpty() throws {
+        let form = searchForm()
+
+        #expect(form.categories(matchingSearch: "nonsense-xyz").isEmpty)
+    }
+
+    @Test
+    func partialMatchKeepsOnlyMatchingFieldsAndDropsEmptyCategories() throws {
+        let form = searchForm()
+
+        // "model" matches two general fields and nothing in agent/terminal, so
+        // those categories drop out entirely.
+        let categories = form.categories(matchingSearch: "model")
+
+        #expect(categories.map(\.name) == ["general"])
+        #expect(categories.first?.fields.map(\.key) == ["model", "model_context_length"])
+    }
+
     // MARK: - Helpers
 
     private func field(
@@ -324,5 +384,29 @@ struct ProfileConfigFormTests {
         options: [String]? = nil
     ) -> ConfigFieldSchema {
         ConfigFieldSchema(key: key, type: type, description: nil, category: category, options: options)
+    }
+
+    /// A multi-category form with descriptions, for exercising search.
+    private func searchForm() -> ProfileConfigForm {
+        func formField(_ key: String, category: String, description: String?) -> ConfigFormField {
+            ConfigFormField(
+                key: key,
+                schema: ConfigFieldSchema(key: key, type: .string, description: description, category: category),
+                value: .string("v"),
+                category: category
+            )
+        }
+        return ProfileConfigForm(categories: [
+            ConfigFormCategory(name: "general", fields: [
+                formField("model", category: "general", description: "The default model"),
+                formField("model_context_length", category: "general", description: "Token window"),
+            ]),
+            ConfigFormCategory(name: "agent", fields: [
+                formField("agent.timeout", category: "agent", description: "Seconds before retries"),
+            ]),
+            ConfigFormCategory(name: "terminal", fields: [
+                formField("terminal.backend", category: "terminal", description: "Where commands run"),
+            ]),
+        ])
     }
 }

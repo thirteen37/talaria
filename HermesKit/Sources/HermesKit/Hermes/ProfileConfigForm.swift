@@ -34,6 +34,17 @@ public struct ConfigFormField: Equatable, Sendable, Identifiable {
     }
 }
 
+extension ConfigFormField {
+    /// True when the query is a substring of the key or the schema description.
+    /// Caller passes an already-trimmed, non-empty query; matching is
+    /// case-insensitive.
+    func matchesSearch(_ query: String) -> Bool {
+        if key.localizedCaseInsensitiveContains(query) { return true }
+        if let description = schema?.description, description.localizedCaseInsensitiveContains(query) { return true }
+        return false
+    }
+}
+
 /// A titled group of fields, mirroring the dashboard's category tabs.
 public struct ConfigFormCategory: Equatable, Sendable, Identifiable {
     public let name: String
@@ -60,6 +71,19 @@ public struct ProfileConfigForm: Equatable, Sendable {
 
     /// Synthetic bucket holding config keys absent from the schema.
     public static let otherCategoryName = "other"
+
+    /// Categories whose fields match `query` (case-insensitive substring of the
+    /// dotpath key OR the schema description), with empty categories dropped. A
+    /// blank/whitespace query returns all categories unchanged. Purely
+    /// presentational — never touches values/dirty/save.
+    public func categories(matchingSearch query: String) -> [ConfigFormCategory] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return categories }
+        return categories.compactMap { category in
+            let fields = category.fields.filter { $0.matchesSearch(q) }
+            return fields.isEmpty ? nil : ConfigFormCategory(name: category.name, fields: fields)
+        }
+    }
 
     public func field(for key: String) -> ConfigFormField? {
         for category in categories {

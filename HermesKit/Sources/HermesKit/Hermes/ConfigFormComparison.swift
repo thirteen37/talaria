@@ -82,3 +82,20 @@ public func alignedComparison(
         return ComparisonCategory(name: name, rows: rows)
     }
 }
+
+/// Filters aligned comparison categories to rows matching `query` (the unioned
+/// key, or either side's field description), dropping empty categories. A
+/// blank/whitespace query returns the categories unchanged. Purely
+/// presentational — mirrors ``ProfileConfigForm/categories(matchingSearch:)``.
+public func filteredComparison(_ categories: [ComparisonCategory], matchingSearch query: String) -> [ComparisonCategory] {
+    let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !q.isEmpty else { return categories }
+    return categories.compactMap { category in
+        let rows = category.rows.filter { row in
+            row.key.localizedCaseInsensitiveContains(q)
+                || (row.sourceField?.matchesSearch(q) ?? false)
+                || (row.destField?.matchesSearch(q) ?? false)
+        }
+        return rows.isEmpty ? nil : ComparisonCategory(name: category.name, rows: rows)
+    }
+}
