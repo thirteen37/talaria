@@ -8,9 +8,14 @@ struct ProfileEditorRoot: View {
 
     var body: some View {
         if Idiom.isPhone {
+            // `PhoneProfileEditor` brings its own `NavigationStack`.
             PhoneProfileEditor(onDismiss: onDismiss)
         } else {
-            DesktopProfileEditor(onDismiss: onDismiss)
+            // The iPad two-pane editor needs a `NavigationStack` for its Done /
+            // Save toolbar to render (macOS gets this from the Settings window).
+            NavigationStack {
+                DesktopProfileEditor(onDismiss: onDismiss)
+            }
         }
     }
 }

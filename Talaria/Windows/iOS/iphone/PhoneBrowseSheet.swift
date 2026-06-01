@@ -27,13 +27,14 @@ struct PhoneBrowseSheet: View {
     var onOpenSettings: () -> Void
     var onDismiss: () -> Void
 
+    @Environment(SidebarLayout.self) private var sidebarLayout
     @State private var path: [BrowseDestination] = []
 
     var body: some View {
         NavigationStack(path: $path) {
             List {
                 Section {
-                    ForEach(BrowseDestination.manageOrder, id: \.self) { destination in
+                    ForEach(sidebarLayout.visibleManageDestinations(), id: \.self) { destination in
                         NavigationLink(value: destination) {
                             Label(destination.title, systemImage: destination.systemImage)
                         }

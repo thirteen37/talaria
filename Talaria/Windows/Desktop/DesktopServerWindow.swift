@@ -11,6 +11,7 @@ struct DesktopServerWindow: View {
 
     @Environment(ProfileDirectory.self) private var directory
     @Environment(RecentServers.self) private var recents
+    @Environment(SidebarLayout.self) private var sidebarLayout
     @State private var harness: ServerWindowHarness?
     @State private var browse: BrowseDestination? = .sessions
     @State private var showingSettings = false
@@ -76,8 +77,9 @@ struct DesktopServerWindow: View {
         // Settings sheet (iPad only — macOS uses the Settings scene). Attached
         // at body level so the no-server empty state can present it too.
         .platformSettingsSheet(isPresented: $showingSettings) {
-            DesktopProfileEditor(onDismiss: { showingSettings = false })
+            SettingsTabs(onDismiss: { showingSettings = false })
                 .environment(directory)
+                .environment(sidebarLayout)
         }
         .onDisappear {
             // Cancel the window-scoped log tailer + release the dashboard
@@ -281,7 +283,7 @@ struct DesktopServerWindow: View {
 
             Section("Browse") {
                 browseRow(.sessions, store: harness.store)
-                ForEach(BrowseDestination.manageOrder, id: \.self) { destination in
+                ForEach(sidebarLayout.visibleManageDestinations(), id: \.self) { destination in
                     browseRow(destination, store: harness.store)
                 }
             }

@@ -182,12 +182,34 @@ final class ModelsHarness {
             return false
         }
 
+        // A new endpoint (empty slug) lands in the `providers:` dict under a slug
+        // de-duped against the *fresh* config. An edit keeps its slug and source,
+        // so the write targets wherever the entry actually lives.
         let draft: CustomEndpoint
         if endpoint.slug.isEmpty {
-            let slug = CustomEndpoint.slug(
-                forName: endpoint.name,
-                existing: CustomEndpoint.list(in: fresh).map(\.slug)
-            )
+            // Reject an exact (name, base_url, model) duplicate up front. The new
+            // entry would be written to `providers.<slug>` but `list(in:)`'s
+            // list-wins dedup would hide it behind the matching `custom_providers`
+            // entry on the next refresh — so the save would look successful yet
+            // nothing new would appear. A clear error beats that silent no-op.
+            if CustomEndpoint.list(in: fresh).contains(where: {
+                $0.name == endpoint.name
+                    && $0.baseURL == endpoint.baseURL
+                    && $0.defaultModel == endpoint.defaultModel
+            }) {
+                lastError = "An endpoint named “\(endpoint.name)” with that base URL already exists."
+                return false
+            }
+            // De-dup the slug against the displayed slugs *and* the raw `providers`
+            // keys. The raw keys matter because `list(in:)` hides a
+            // `providers.<slug>` entry that duplicates a `custom_providers` list
+            // entry — without them a new endpoint could slugify onto that hidden
+            // key and `upsert` would overwrite it, losing its api_key/settings.
+            var taken = CustomEndpoint.list(in: fresh).map(\.slug)
+            if case let .object(root) = fresh, case let .object(providers) = root["providers"] {
+                taken.append(contentsOf: providers.keys)
+            }
+            let slug = CustomEndpoint.slug(forName: endpoint.name, existing: taken)
             draft = CustomEndpoint(
                 slug: slug,
                 name: endpoint.name,
@@ -195,69 +217,175 @@ final class ModelsHarness {
                 models: endpoint.models,
                 defaultModel: endpoint.defaultModel,
                 discoverModels: endpoint.discoverModels,
-                hasAPIKey: endpoint.hasAPIKey
+                hasAPIKey: endpoint.hasAPIKey,
+                source: .providersDict(slug: slug)
             )
         } else {
             draft = endpoint
         }
 
+        // For a list edit, confirm the target still exists in the fresh config
+        // *before* mutating anything. If it was removed elsewhere since the last
+        // refresh, `upsertListEntry` would re-resolve to nothing and no-op — but
+        // the sheet would still report success while a just-written key var was
+        // left orphaned. Failing up front keeps the sheet open with a real error
+        // and writes nothing. `oldKeyEnv` captures the entry's current key var so
+        // a rename (which moves the derived var name) can clean up the stale one.
+        var oldKeyEnv: String?
+        if case let .customProvidersList(anchor) = draft.source {
+            guard let entry = CustomEndpoint.listEntry(for: anchor, in: fresh) else {
+                lastError = "This endpoint no longer exists — it may have been removed in another window. Reopen the list and try again."
+                return false
+            }
+            oldKeyEnv = Self.listEntryKeyEnv(entry)
+        }
+
         let action: CustomEndpoint.APIKeyWrite =
             (newKey?.isEmpty == false) ? .set : (draft.hasAPIKey ? .keep : .remove)
+        let newVarName = CustomEndpoint.apiKeyEnvVarName(forSlug: draft.slug)
 
         return await runEndpoint(slug: draft.slug) {
             if let newKey, !newKey.isEmpty {
-                try await $0.setEnvVar(
-                    key: CustomEndpoint.apiKeyEnvVarName(forSlug: draft.slug),
-                    value: newKey
-                )
+                try await $0.setEnvVar(key: newVarName, value: newKey)
             }
-            try await $0.updateConfig(CustomEndpoint.upsert(draft, apiKey: action, in: fresh))
+            let updated: JSONValue
+            switch draft.source {
+            case .providersDict:
+                updated = CustomEndpoint.upsert(draft, apiKey: action, in: fresh)
+            case let .customProvidersList(anchor):
+                updated = CustomEndpoint.upsertListEntry(draft, apiKey: action, anchor: anchor, in: fresh)
+            }
+            try await $0.updateConfig(updated)
+            // Renaming a list entry moves its derived var name; delete the stale
+            // app-managed one so a rekey-on-rename doesn't orphan a secret (the
+            // dict path never orphans, its slug being stable). Best-effort, and
+            // never a user's own/shared var.
+            if action == .set,
+               let oldVar = oldKeyEnv,
+               oldVar != newVarName,
+               Self.isAppManagedAPIKeyVar(oldVar) {
+                try? await $0.deleteEnvVar(key: oldVar)
+            }
         }
     }
 
-    /// Removes an endpoint: drops `providers.<slug>` from config, then deletes
-    /// its derived `.env` var. The env deletion is best-effort cleanup of a key
-    /// the config no longer references, so any failure there (not just the 404
-    /// the client already tolerates) is swallowed — the config removal is the
-    /// meaningful action and must drive the success/refresh path rather than
-    /// stranding the removed endpoint in the list. A leftover `.env` line is
+    /// Removes an endpoint from wherever it lives — `providers.<slug>` (dict) or
+    /// its `custom_providers` element (list, re-resolved by content) — then
+    /// cleans up its `.env` key var: the slug-derived name for a dict entry, or
+    /// the var the list entry actually references (only when app-managed). The
+    /// env deletion is best-effort cleanup of a key the config no longer
+    /// references, so any failure there (not just the 404 the client already
+    /// tolerates) is swallowed — the config removal is the meaningful action and
+    /// must drive the success/refresh path rather than stranding the removed
+    /// endpoint in the list. A leftover `.env` line is
     /// harmless; the user can retry remove to re-attempt cleanup.
-    func removeEndpoint(slug: String) async {
-        await runEndpoint(slug: slug) {
+    func removeEndpoint(_ endpoint: CustomEndpoint) async {
+        await runEndpoint(slug: endpoint.slug) {
             let fresh = try await $0.getConfig()
-            try await $0.updateConfig(CustomEndpoint.remove(slug: slug, from: fresh))
-            try? await $0.deleteEnvVar(key: CustomEndpoint.apiKeyEnvVarName(forSlug: slug))
+            let updated: JSONValue
+            // The `.env` var to clean up. For a dict entry it's the slug-derived
+            // name (the slug is the stable on-disk key). For a list entry the
+            // slug is synthesized from the mutable name and drifts on rename, so
+            // read the var the entry actually references — but only delete it
+            // when it's an app-managed `HERMES_CUSTOM_*_API_KEY`, never a user's
+            // own/shared var that a `key_env`/`api_key_env` might point at.
+            let envVarToDelete: String?
+            switch endpoint.source {
+            case let .providersDict(slug):
+                updated = CustomEndpoint.remove(slug: slug, from: fresh)
+                envVarToDelete = CustomEndpoint.apiKeyEnvVarName(forSlug: slug)
+            case let .customProvidersList(anchor):
+                updated = CustomEndpoint.removeListEntry(anchor: anchor, from: fresh)
+                let referenced = CustomEndpoint.listEntry(for: anchor, in: fresh)
+                    .flatMap(Self.listEntryKeyEnv)
+                envVarToDelete = referenced.flatMap { Self.isAppManagedAPIKeyVar($0) ? $0 : nil }
+            }
+            try await $0.updateConfig(updated)
+            if let envVarToDelete {
+                try? await $0.deleteEnvVar(key: envVarToDelete)
+            }
         }
     }
 
-    /// Reveals an endpoint's stored key on demand. Primary path is the env
-    /// reveal route. Only a 404 (key stored under a non-derived name, e.g.
-    /// hand-edited config) falls back to the expanded `api_key` from a fresh
-    /// config — returning nil when that's just an unresolved `${VAR}` literal.
-    /// Any other failure (network, 5xx, unauthorized, rate-limit) is rethrown
-    /// so the caller shows a real error rather than an empty field that looks
-    /// like a cleared key.
-    func revealEndpointKey(slug: String) async throws -> String? {
-        let varName = CustomEndpoint.apiKeyEnvVarName(forSlug: slug)
-        do {
-            return try await client.revealEnvVar(key: varName)
-        } catch let DashboardClientError.http(statusCode, _) where statusCode == 404 {
-            return try await expandedConfigKey(slug: slug)
+    /// Reveals an endpoint's stored key on demand.
+    ///
+    /// For a **dict** endpoint the var name is the slug-derived one (the slug is
+    /// the stable on-disk key); a 404 (key stored under a non-derived name, e.g.
+    /// hand-edited config) falls back to the literal `api_key`.
+    ///
+    /// For a **list** endpoint the slug is synthesized from the mutable name and
+    /// drifts on rename, so the slug-derived name would miss after a rename. Read
+    /// the var the entry actually references (`key_env`/`api_key_env`) and reveal
+    /// *that*; a 404 (var unset) falls back to the literal `api_key` (which
+    /// `hermes model` stores), as does an entry with no var reference at all.
+    ///
+    /// nil means "no key to reveal" (missing, or only an unresolved `${VAR}`).
+    /// Any other failure (network, 5xx, unauthorized, rate-limit) is rethrown so
+    /// the caller shows a real error rather than an empty field that looks like a
+    /// cleared key.
+    func revealEndpointKey(for endpoint: CustomEndpoint) async throws -> String? {
+        switch endpoint.source {
+        case let .providersDict(slug):
+            do {
+                return try await client.revealEnvVar(key: CustomEndpoint.apiKeyEnvVarName(forSlug: slug))
+            } catch let DashboardClientError.http(statusCode, _) where statusCode == 404 {
+                return try await expandedConfigKey(for: endpoint)
+            }
+        case let .customProvidersList(anchor):
+            let config = try await client.getConfig()
+            guard let entry = CustomEndpoint.listEntry(for: anchor, in: config) else { return nil }
+            guard let varName = Self.listEntryKeyEnv(entry) else {
+                return Self.literalConfigKey(entry)
+            }
+            do {
+                return try await client.revealEnvVar(key: varName)
+            } catch let DashboardClientError.http(statusCode, _) where statusCode == 404 {
+                return Self.literalConfigKey(entry)
+            }
         }
     }
 
-    /// The endpoint's `api_key` from a fresh config, expanded — nil when it's
-    /// missing or only an unresolved `${VAR}` template (referenced var unset).
-    private func expandedConfigKey(slug: String) async throws -> String? {
-        guard case let .object(root) = try await client.getConfig(),
-              case let .object(providers) = root["providers"],
-              case let .object(entry) = providers[slug],
-              case let .string(apiKey) = entry["api_key"],
+    /// The endpoint's literal `api_key` from a fresh config — read from wherever
+    /// the entry lives (`providers.<slug>` or its `custom_providers` element).
+    /// Nil when it's missing or only an unresolved `${VAR}` template.
+    private func expandedConfigKey(for endpoint: CustomEndpoint) async throws -> String? {
+        let config = try await client.getConfig()
+        guard case let .object(root) = config else { return nil }
+        switch endpoint.source {
+        case let .providersDict(slug):
+            guard case let .object(providers) = root["providers"],
+                  case let .object(entry) = providers[slug] else { return nil }
+            return Self.literalConfigKey(entry)
+        case let .customProvidersList(anchor):
+            guard let entry = CustomEndpoint.listEntry(for: anchor, in: config) else { return nil }
+            return Self.literalConfigKey(entry)
+        }
+    }
+
+    /// The env var a `custom_providers` entry references for its key, if any —
+    /// the app-managed `key_env` or a user's `api_key_env` alias.
+    private static func listEntryKeyEnv(_ entry: [String: JSONValue]) -> String? {
+        if case let .string(value) = entry["key_env"], !value.isEmpty { return value }
+        if case let .string(value) = entry["api_key_env"], !value.isEmpty { return value }
+        return nil
+    }
+
+    /// A config entry's literal `api_key`, or nil when absent or an unresolved
+    /// `${VAR}` template (the referenced var is unset, so there's nothing to show).
+    private static func literalConfigKey(_ entry: [String: JSONValue]) -> String? {
+        guard case let .string(apiKey) = entry["api_key"],
               !apiKey.isEmpty,
               !(apiKey.hasPrefix("${") && apiKey.hasSuffix("}")) else {
             return nil
         }
         return apiKey
+    }
+
+    /// Whether `name` is one of Talaria's derived `HERMES_CUSTOM_<…>_API_KEY`
+    /// vars — so removal only cleans up keys the app created, never a user's
+    /// own/shared var a `key_env`/`api_key_env` might point at.
+    private static func isAppManagedAPIKeyVar(_ name: String) -> Bool {
+        name.hasPrefix("HERMES_CUSTOM_") && name.hasSuffix("_API_KEY")
     }
 
     /// Whether a save/remove is in flight for `slug`, so its row's controls
@@ -410,7 +538,7 @@ struct ModelsView: View {
         ) {
             Button("Remove", role: .destructive) {
                 if let endpoint = endpointToRemove {
-                    Task { await harness.removeEndpoint(slug: endpoint.slug) }
+                    Task { await harness.removeEndpoint(endpoint) }
                 }
                 endpointToRemove = nil
             }
