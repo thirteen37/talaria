@@ -1,0 +1,60 @@
+{
+  "task": {
+    "id": "task-001",
+    "title": "Investigate flaky login test",
+    "body": "The login integration test fails ~1 in 5 runs on CI.",
+    "status": "triage",
+    "assignee": "yuxi",
+    "priority": 2,
+    "created_by": "yuxi",
+    "created_at": 1748000000,
+    "started_at": null,
+    "completed_at": null,
+    "workspace_kind": "scratch",
+    "tenant": "default",
+    "skills": ["debugging"],
+    "session_id": "sess-abc",
+    "latest_summary": "Reproduced once locally."
+  },
+  "comments": [
+    {
+      "id": 11,
+      "task_id": "task-001",
+      "author": "yuxi",
+      "body": "Might be a race in the token refresh.",
+      "created_at": 1748000500
+    },
+    {
+      "id": 12,
+      "task_id": "task-001",
+      "author": "hermes",
+      "body": "Added retry logging.",
+      "created_at": 1748000900
+    }
+  ],
+  "events": [
+    { "id": 101, "kind": "created", "payload": {}, "created_at": 1748000000, "run_id": null },
+    { "id": 102, "kind": "comment_added", "payload": {}, "created_at": 1748000500, "run_id": null },
+    { "id": 103, "kind": "run_started", "payload": {}, "created_at": 1748001000, "run_id": 5 }
+  ],
+  "links": {
+    "parents": ["task-000"],
+    "children": ["task-009"]
+  },
+  "runs": [
+    {
+      "id": 5,
+      "task_id": "task-001",
+      "profile": "default",
+      "status": "completed",
+      "outcome": "failure",
+      "summary": "Test still flaky after retry.",
+      "metadata": {},
+      "started_at": 1748001000,
+      "ended_at": 1748001800,
+      "worker_pid": 4242,
+      "last_heartbeat_at": 1748001700,
+      "error": "AssertionError: token expired"
+    }
+  ]
+}
