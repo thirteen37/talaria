@@ -62,17 +62,8 @@ struct BrowseDetailView: View {
                 snapshotTransfer: harness.snapshotTransfer,
                 profile: harness.profile
             )
-        case .logs:
-            LogsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
-        case .doctor:
-            DoctorView(
-                doctor: harness.doctor,
-                profile: harness.profile,
-                client: harness.dashboardClient,
-                hermesVersion: harness.profile.version
-            )
-        case .updates:
-            UpdatesView(updates: harness.updates, hermesVersion: harness.profile.version)
+        case .system:
+            SystemTabsView(harness: harness)
         }
     }
 }
