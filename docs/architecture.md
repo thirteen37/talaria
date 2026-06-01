@@ -23,16 +23,25 @@ Dashboard-backed surfaces today:
 
 - Sessions browse/search/read/delete: `/api/sessions`, `/api/sessions/search`, `/api/sessions/{id}`.
 - Skills: `/api/skills`, `/api/skills/toggle`.
+- Plugins: `/api/dashboard/plugins/hub` plus install/enable/disable/update/remove.
 - Cron: `/api/cron/jobs` plus pause/resume/trigger subroutes.
+- Kanban: `/api/plugins/kanban/*` — boards, tasks, links, comments, run logs.
+- Models: `/api/model/options`, `/api/model/auxiliary`, `/api/model/set`.
+- Environment: `/api/env*` (`.env` CRUD + reveal).
 - Logs: polled `/api/logs`.
 - Updates: `/api/status`, `/api/hermes/update`, `/api/actions/hermes-update/status`.
-- Profiles config editor: schema + current config via `/api/config/schema` and `/api/config`, non-destructive writes via `PUT /api/config`, and the profile list via `/api/profiles`. Editing the default profile reuses the window's shared dashboard; editing a *named* profile launches an isolated profile-scoped dashboard (`hermes -p <name> dashboard`). An editable YAML mirror and the read-only two-profile comparison share the same surface.
+- Profiles config editor: schema + current config via `/api/config/schema` and `/api/config`, non-destructive writes via `PUT /api/config`, and the profile list via `/api/profiles`. Soul and Personalities editors ride this surface (`/api/profiles/{profile}/soul` and `agent.personalities` in the config). Editing the default profile reuses the window's shared dashboard; editing a *named* profile launches an isolated profile-scoped dashboard (`hermes -p <name> dashboard`). An editable YAML mirror and the read-only two-profile comparison share the same surface.
 
-Three operations remain on CLI fallbacks because Hermes does not expose dashboard routes for them yet:
+The full per-route table lives in `docs/dashboard-api.md`; `docs/integration-coverage.md` tracks the integration boundary and capability gates.
+
+A few operations remain on CLI fallbacks because Hermes does not expose dashboard routes for them yet:
 
 - Sessions rename: `hermes sessions rename`.
 - Tools enable/disable/list: `hermes tools ...`.
 - Doctor report: `hermes doctor`.
+- Gateway lifecycle writes: `hermes gateway start/stop/restart/install/uninstall`.
+
+One more, update check/apply (`hermes update --check`, `hermes update`), uses the CLI *by choice* even though the dashboard routes above exist: only the CLI reports the commits-behind verdict for source installs, which `/api/status` does not.
 
 Remote dashboard access on macOS is provided by spawning system `ssh` with a loopback `-L <local>:127.0.0.1:<remote>` forward and running `hermes dashboard` on the remote host. iOS reaches the dashboard over the pure-Swift NIO-SSH transport instead: one connection both execs `hermes dashboard` on the remote host and tunnels its HTTP over a `direct-tcpip` channel (no local forward), reusing the window's host-key trust so it doesn't re-prompt for a key the chat transport already trusted.
 

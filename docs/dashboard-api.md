@@ -11,7 +11,7 @@ version `0.14.0` / release `2026.5.16`.
 
 Talaria spawns `hermes dashboard --host 127.0.0.1 --port <port>` (locally, or over SSH for remote
 profiles) and talks to `http://127.0.0.1:<port>/api/*`. It **never** reads or writes Hermes SQLite
-files directly — the dashboard API (plus three CLI fallbacks) is the entire non-chat data path. See
+files directly — the dashboard API (plus a few CLI fallbacks) is the entire non-chat data path. See
 `docs/architecture.md` for the process/supervisor model.
 
 ## Authentication
@@ -163,6 +163,36 @@ bodies are JSON; the "Body" column lists the wrapping the dashboard's Pydantic m
 | DELETE | `/api/dashboard/agent-plugins/{name}`           | —                                     | Remove a user-installed plugin. |
 | PUT    | `/api/dashboard/plugin-providers`               | `{memory_provider?, context_engine?}` | Writes `memory.provider` / `context.engine` to `config.yaml` (next-session). |
 
+### Kanban (Hermes kanban plugin)
+
+Every route is mounted under `/api/plugins/kanban` — the prefix the dashboard
+applies to the bundled kanban plugin's router (`app.include_router(router,
+prefix=…)`). It rides the same `requiresDashboard` gate as the rest of the
+dashboard; there is no separate capability for it. The surface is large enough
+that its `DashboardClient` methods live in `DashboardClient+Kanban.swift`.
+
+| Method | Path                                            | Body | Returns / notes |
+| ------ | ----------------------------------------------- | ---- | --------------- |
+| GET    | `/api/plugins/kanban/board`                     | —    | `KanbanBoard` (column layout). Query: `board` (omit = current), `include_archived`, `tenant`. |
+| GET    | `/api/plugins/kanban/tasks/{id}`                | —    | `KanbanTaskDetail`. |
+| POST   | `/api/plugins/kanban/tasks`                     | `{title, body?, assignee?, tenant?, priority, workspace_kind, parents[], triage, skills?}` | Create a task. |
+| PATCH  | `/api/plugins/kanban/tasks/{id}`                | partial task fields | Update a task (move column, reassign, edit). |
+| DELETE | `/api/plugins/kanban/tasks/{id}`                | —    | Delete a task. |
+| POST   | `/api/plugins/kanban/tasks/bulk`                | bulk op payload | Bulk move/update across tasks. |
+| POST   | `/api/plugins/kanban/tasks/{id}/comments`       | `{body, author?}` | Add a comment. |
+| GET    | `/api/plugins/kanban/tasks/{id}/log`            | —    | Run/agent log for a task. Query: `tail`. |
+| POST   | `/api/plugins/kanban/links`                     | `{parent_id, child_id}` | Link a parent/child task. |
+| DELETE | `/api/plugins/kanban/links`                     | —    | Unlink. Query: `parent_id`, `child_id`. |
+| GET    | `/api/plugins/kanban/boards`                    | —    | `KanbanBoardsResponse`. Query: `include_archived`. |
+| POST   | `/api/plugins/kanban/boards`                    | board create payload | Create a board. |
+| PATCH  | `/api/plugins/kanban/boards/{slug}`             | board patch | Rename/edit a board. |
+| DELETE | `/api/plugins/kanban/boards/{slug}`             | —    | Delete a board. |
+| POST   | `/api/plugins/kanban/boards/{slug}/switch`      | —    | Make `{slug}` the current board. |
+| GET    | `/api/plugins/kanban/diagnostics`               | —    | `[KanbanDiagnostic]`. Query: `severity`. |
+| GET    | `/api/plugins/kanban/runs/{id}`                 | —    | Raw run record (`JSONValue`). |
+| GET    | `/api/plugins/kanban/stats`                     | —    | Board stats (`JSONValue`). |
+| GET    | `/api/plugins/kanban/assignees`                 | —    | `[String]` of known assignees. |
+
 ### Environment (gated on `requiresEnvAPI` ≥ `0.14.0`)
 
 | Method | Path                | Body              | Returns / notes |
@@ -174,12 +204,17 @@ bodies are JSON; the "Body" column lists the wrapping the dashboard's Pydantic m
 
 ## CLI fallbacks (no dashboard route)
 
-Three operations still shell out to `hermes` because the dashboard exposes no route:
+Several operations still shell out to `hermes` because the dashboard exposes no route for them:
 
 - **Sessions rename** — `hermes sessions rename`.
 - **Tools enable/disable/list** — `hermes tools ...`. (The dashboard has `GET /api/tools/toolsets`
   for listing but no toggle route, so the whole flow stays on the CLI.)
 - **Doctor report** — `hermes doctor`.
+- **Gateway lifecycle** — `hermes gateway start/stop/restart/install/uninstall`.
+
+One more, **update check/apply** (`hermes update --check` / `hermes update`), uses the CLI *by
+choice* even though `POST /api/hermes/update` exists: only the CLI reports the commits-behind verdict
+for source installs. See `docs/integration-coverage.md` for the full enumerated fallback list.
 
 ## Maintaining this doc
 

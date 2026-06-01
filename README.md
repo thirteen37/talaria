@@ -1,6 +1,30 @@
 # Talaria
 
-Talaria is a native macOS front-end for Hermes Agent. The app is built with SwiftUI, with shared protocol and transport code in the `HermesKit` Swift package so the core can stay portable for a future iOS companion.
+Talaria is a native SwiftUI front-end for Hermes Agent — macOS today, with an in-progress iOS target sharing the same source tree behind platform seam folders. Shared protocol and transport code lives in the `HermesKit` Swift package.
+
+See [`docs/comparison.md`](docs/comparison.md) for how Talaria stacks up against Hermes Desktop, the built-in `hermes dashboard`, Scarf, and the web UIs.
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/macos.png" alt="Talaria on macOS — Sessions browser connected to a remote Hermes server over SSH" height="380">
+  <img src="docs/screenshots/ipados.png" alt="Talaria on iPadOS — Sessions browser" height="380">
+</p>
+
+<p align="center"><em>macOS (left) and iPadOS (right) — the Sessions browser, connected to a remote Hermes server over SSH. The iPad build reaches Hermes over the pure-Swift NIO-SSH tunnel.</em></p>
+
+More macOS surfaces — live chat, model assignment, skills, and scheduled jobs:
+
+<p align="center">
+  <img src="docs/screenshots/chat.png" alt="Read-only chat transcript with user, thinking, and assistant turns" width="49%">
+  <img src="docs/screenshots/models.png" alt="Models screen — main and auxiliary model assignment" width="49%">
+</p>
+<p align="center">
+  <img src="docs/screenshots/skills.png" alt="Skills screen — per-skill enable toggles grouped by category" width="49%">
+  <img src="docs/screenshots/cron.png" alt="Cron screen — scheduled jobs with schedule and prompt" width="49%">
+</p>
+
+<p align="center"><em>Chat, Models, Skills, and Cron. Session titles and a few internal hostnames in these shots are anonymized for the README.</em></p>
 
 ## Install
 
@@ -10,11 +34,11 @@ Talaria drives [Hermes Agent](https://github.com/NousResearch/hermes-agent). Ins
 
 ## Current Status
 
-This repository contains the Sprint 7 dashboard-mode build:
+This repository contains the dashboard-mode build:
 
-- `Talaria`: macOS SwiftUI app — ACP chat, dashboard-backed sessions, profiles, Manage surfaces (Skills / Tools / Cron / Logs / Doctor / Updates), Sparkle auto-update.
+- `Talaria`: SwiftUI app (macOS, with a shared iOS target) — ACP chat plus dashboard-backed Browse surfaces: Sessions, Skills, Plugins, Tools, Cron, Kanban, Gateway, Hermes profiles, Configuration, Soul, Personalities, Models, Environment, Logs, Doctor, and Updates. The Browse sidebar is reorderable and pages can be hidden. Sparkle auto-update.
 - `HermesKit`: Swift package for ACP/JSON-RPC, transports, dashboard HTTP client/supervisor, CLI fallbacks, profile models, and capability gates.
-- `docs`: architecture, security, release, integration coverage, roadmap, and manual test-plan notes.
+- `docs`: architecture, security, release, integration coverage, dashboard API, competitor comparison, roadmap, and manual test-plan notes.
 
 ## References
 
@@ -34,7 +58,7 @@ Hermes Agent is the runtime Talaria targets. Talaria should treat Hermes as the 
 
 - Repository: https://github.com/awizemann/scarf
 
-Scarf is a reference for product shape and information architecture, not an implementation model. Talaria borrows useful workflow ideas from Scarf while keeping a stricter implementation boundary:
+Scarf is now itself a native SwiftUI macOS/iOS app for Hermes — Talaria's closest peer rather than just an IA reference. The two differ most on the data boundary (Scarf reads Hermes' SQLite/files directly; Talaria stays on the dashboard API). See [`docs/comparison.md`](docs/comparison.md) for the full breakdown. Talaria borrows useful workflow ideas from Scarf while keeping a stricter implementation boundary:
 
 - Native SwiftUI rendering over Hermes ACP instead of TUI embedding as the primary surface.
 - Non-chat surfaces use `hermes dashboard` on loopback; Talaria does not read or write Hermes SQLite files directly.

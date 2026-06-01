@@ -4,7 +4,24 @@ This document preserves the larger product surface from the Scarf parity researc
 
 ## MVP Boundary
 
-Talaria v1 is a native macOS front-end for Hermes using ACP for live chat and `hermes dashboard` for sessions, logs, skills, cron jobs, and updates. A small set of operations remain on CLI fallbacks until Hermes exposes dashboard routes for them: session rename, tools enable/disable, and doctor reports. Local subprocess and SSH-backed servers are both in scope. Anything below marked "Deferred" is intentionally out of v1 unless it becomes necessary to make the MVP coherent.
+Talaria v1 is a native macOS front-end for Hermes using ACP for live chat and `hermes dashboard` for sessions, logs, skills, cron jobs, and updates. A small set of operations remain on CLI fallbacks until Hermes exposes dashboard routes for them: session rename, tools enable/disable, doctor reports, and gateway lifecycle. Local subprocess and SSH-backed servers are both in scope. Anything below marked "Deferred" is intentionally out of v1 unless it becomes necessary to make the MVP coherent.
+
+## Shipped Since The MVP Boundary
+
+These started as deferred or out-of-scope and have since landed. They are listed
+here so the "Deferred" sections below stay an accurate to-do list rather than a
+historical one:
+
+- Dedicated **Models** screen: main + auxiliary model assignment, plus custom
+  OpenAI-compatible endpoints surfaced from `hermes model` (`custom_providers`).
+- **Plugins** install / enable / disable / update via the dashboard.
+- **Gateway** process control (start / stop / restart / install / uninstall via CLI).
+- **Hermes profile** management (clone / rename / delete).
+- **Soul** (`SOUL.md`) and **Personalities** (`agent.personalities`) editors.
+- **Environment** screen with `.env` CRUD.
+- **Kanban** board (boards + tasks) with full CRUD, backed by the Hermes kanban plugin.
+- **Customizable Browse sidebar** — reorder and hide manage pages, shared with the iPhone Browse sheet.
+- iOS app target (shared source tree, in progress) with a NIO-SSH dashboard tunnel.
 
 ## Deferred Chat And Interaction
 
@@ -19,10 +36,9 @@ Talaria v1 is a native macOS front-end for Hermes using ACP for live chat and `h
 
 ## Deferred Configuration
 
-- Native platform and gateway configuration for all messaging platforms.
+- Native setup forms for all messaging platforms (gateway *process* control already shipped; per-platform credential/config forms have not).
 - MCP server registry with browse, add, edit, and curated preset flows.
-- Memory, user profile, and personality editors for `MEMORY.md`, `USER.md`, and `SOUL.md`.
-- Plugin install/update workflows.
+- Memory and user-profile editors for `MEMORY.md` and `USER.md` (the `SOUL.md` and personality editors already shipped).
 - Webhook management.
 - Credential pools and token rotation flows.
 - Export/import profile bundles.
@@ -38,8 +54,8 @@ Talaria v1 is a native macOS front-end for Hermes using ACP for live chat and `h
 - Component drill-down inspectors for `hermes doctor`.
 - Dashboard routes for session rename, tools enable/disable, and doctor reports.
 - Inline release notes and update channel selection.
-- Hermes Proxy and gateway process control.
-- Project dashboards.
+- Hermes Proxy (the OpenAI-compatible local proxy; gateway process control already shipped).
+- Project dashboards beyond the Kanban board (custom widgets, charts, embedded webviews).
 
 ## Deferred Packaging And Distribution
 
