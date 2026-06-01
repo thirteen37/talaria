@@ -404,9 +404,9 @@ private struct PersonalityDetail: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                Text(item.name)
+                TextField("Name", text: $draftName)
                     .font(.headline)
-                    .textSelection(.enabled)
+                    .textFieldStyle(.plain)
                 if isActive {
                     Text("Active")
                         .font(.caption)
@@ -416,17 +416,10 @@ private struct PersonalityDetail: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Name")
+            if nameCollision {
+                Text("A personality named “\(trimmedName)” already exists.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
-                TextField("Name", text: $draftName)
-                    .textFieldStyle(.roundedBorder)
-                if nameCollision {
-                    Text("A personality named “\(trimmedName)” already exists.")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
+                    .foregroundStyle(.red)
             }
 
             VStack(alignment: .leading, spacing: 6) {
