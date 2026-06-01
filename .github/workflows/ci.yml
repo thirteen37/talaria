@@ -6,38 +6,114 @@ on:
     branches:
       - main
 
+# Cancel an in-flight run when a newer commit lands on the same ref. PR pushes
+# come in bursts; without this each push holds three macOS runners hostage and
+# starves the queue. The push-to-main runs use the SHA as the group so they
+# never cancel each other.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 jobs:
+  # The three jobs below are independent — they share only the HermesKit source
+  # tree — so they run in parallel. Previously they were sequential steps in one
+  # job and the total was their sum (~5 min); now CI wall-clock is the slowest
+  # single job. NOTE: if branch protection lists required status checks, update
+  # it to require "HermesKit", "macOS Build", and "iOS Build" instead of the old
+  # single "HermesKit" check, or the build jobs won't gate merges.
+
   hermeskit:
     name: HermesKit
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
+      # Cache the compiled SwiftPM dependencies (swift-nio, swift-nio-ssh,
+      # Yams). Keyed on Package.swift because Package.resolved is gitignored;
+      # the version constraints there only move when the manifest changes, and a
+      # near-miss restore still builds incrementally. SwiftPM detects toolchain
+      # mismatches and rebuilds, so a stale Xcode-version cache is self-healing.
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: HermesKit/.build
+          key: spm-${{ runner.os }}-${{ hashFiles('HermesKit/Package.swift') }}
+          restore-keys: |
+            spm-${{ runner.os }}-
+
+      # --build-tests compiles the test target here so the Test step is pure
+      # run (--skip-build), keeping the build-vs-test failure signal separate
+      # without compiling the tree twice.
       - name: Build
-        run: swift build --package-path HermesKit
+        run: swift build --package-path HermesKit --build-tests
 
       - name: Test
-        run: swift test --package-path HermesKit
+        run: swift test --package-path HermesKit --skip-build
+
+  macos-build:
+    name: macOS Build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
 
       # Talaria.xcodeproj is generated from project.yml (not committed), so it
-      # must be produced before the xcodebuild steps below.
+      # must be produced before the xcodebuild step below.
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      # Cache only the resolved SwiftPM package checkouts — never DerivedData's
+      # build products. -clonedSourcePackagesDirPath relocates the checkouts to
+      # a fixed path so we can cache them without sweeping up Xcode's
+      # incremental build state, which would go stale across source edits (the
+      # key doesn't move on a source-only change) and fail the build spuriously
+      # against renamed/deleted modules. This caches pure git checkouts of
+      # version-pinned deps — toolchain-independent, so no Xcode-version key.
+      - name: Cache SwiftPM checkouts
+        uses: actions/cache@v4
+        with:
+          path: .spm-cache
+          key: xcode-spm-macos-${{ hashFiles('HermesKit/Package.swift') }}
+          restore-keys: |
+            xcode-spm-macos-
+
+      - name: Build
+        run: |
+          xcodebuild build \
+            -project Talaria.xcodeproj \
+            -scheme Talaria \
+            -destination 'platform=macOS' \
+            -clonedSourcePackagesDirPath "$GITHUB_WORKSPACE/.spm-cache" \
+            CODE_SIGNING_ALLOWED=NO
+
+  ios-build:
+    name: iOS Build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
       - name: Generate Xcode project
         run: xcodegen generate
 
-      - name: macOS App Build
-        run: |
-          xcodebuild build \
-            -project Talaria.xcodeproj \
-            -scheme Talaria \
-            -destination 'platform=macOS' \
-            CODE_SIGNING_ALLOWED=NO
+      # See the macOS job: cache the relocated SwiftPM checkouts only, not
+      # DerivedData build products.
+      - name: Cache SwiftPM checkouts
+        uses: actions/cache@v4
+        with:
+          path: .spm-cache
+          key: xcode-spm-ios-${{ hashFiles('HermesKit/Package.swift') }}
+          restore-keys: |
+            xcode-spm-ios-
 
-      - name: iOS Simulator Build
+      - name: Build
         run: |
           xcodebuild build \
             -scheme HermesKit \
             -destination 'generic/platform=iOS Simulator' \
+            -clonedSourcePackagesDirPath "$GITHUB_WORKSPACE/.spm-cache" \
             -workspace Talaria.xcworkspace
