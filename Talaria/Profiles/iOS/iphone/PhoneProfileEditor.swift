@@ -78,9 +78,10 @@ struct PhoneProfileEditor: View {
             if let draft = state.draft, draft.id == id {
                 PhoneProfileDetail(
                     draft: draftBinding(for: id),
+                    passwordInput: $state.passwordInput,
                     isPending: state.pendingDraft?.id == id,
-                    canSave: state.baseCanSave(draft, in: directory),
-                    onSave: { password, changed in save(password: password, passwordChanged: changed) },
+                    canSave: canSaveCurrentDraft,
+                    onSave: { save() },
                     onDiscard: { discardPending() }
                 )
             } else {
@@ -166,19 +167,25 @@ struct PhoneProfileEditor: View {
         path.removeAll()
     }
 
-    private func save(password: String = "", passwordChanged: Bool = false) {
-        guard var draft = state.draft,
-              ProfileEditorState.isSaveable(
-                draft,
-                hasPasswordInput: !password.isEmpty,
-                passwordChanged: passwordChanged,
-                baseCanSave: state.baseCanSave(draft, in: directory)
-              ) else { return }
+    /// The full saveability check against the lifted password state — mirrors
+    /// the desktop editor's helper.
+    private var canSaveCurrentDraft: Bool {
+        guard let draft = state.draft else { return false }
+        return ProfileEditorState.isSaveable(
+            draft,
+            hasPasswordInput: !state.passwordInput.isEmpty,
+            passwordChanged: state.passwordChanged,
+            baseCanSave: state.baseCanSave(draft, in: directory)
+        )
+    }
+
+    private func save() {
+        guard var draft = state.draft, canSaveCurrentDraft else { return }
         if draft.authMethod == .password {
-            if passwordChanged, !password.isEmpty {
+            if state.passwordChanged, !state.passwordInput.isEmpty {
                 let reference = draft.passwordKeychainReference ?? UUID().uuidString
                 do {
-                    try PasswordKeychain.set(reference: reference, password: password)
+                    try PasswordKeychain.set(reference: reference, password: state.passwordInput)
                     draft.passwordKeychainReference = reference
                 } catch {
                     directory.lastError = "Couldn't save password to Keychain: \(error.localizedDescription)"
@@ -205,32 +212,15 @@ struct PhoneProfileEditor: View {
 
 private struct PhoneProfileDetail: View {
     @Binding var draft: ServerProfile
+    /// Typed password, lifted into `ProfileEditorState` (pre-filled from the
+    /// Keychain on selection). Bound here so it never leaks into the profile.
+    @Binding var passwordInput: String
     let isPending: Bool
+    /// The full saveability check, computed by the parent against the lifted
+    /// password state.
     let canSave: Bool
-    let onSave: (_ password: String, _ passwordChanged: Bool) -> Void
+    let onSave: () -> Void
     let onDiscard: () -> Void
-
-    @State private var passwordInput: String = ""
-    @State private var loadedPassword: String = ""
-
-    private var passwordChanged: Bool { passwordInput != loadedPassword }
-
-    private var canSaveNow: Bool {
-        ProfileEditorState.isSaveable(
-            draft,
-            hasPasswordInput: !passwordInput.isEmpty,
-            passwordChanged: passwordChanged,
-            baseCanSave: canSave
-        )
-    }
-
-    private func loadStoredPassword() {
-        guard draft.authMethod == .password, passwordInput.isEmpty,
-              let reference = draft.passwordKeychainReference,
-              let stored = PasswordKeychain.get(reference: reference) else { return }
-        passwordInput = stored
-        loadedPassword = stored
-    }
 
     var body: some View {
         // Form is the scroll container — wrapping it in a ScrollView+VStack
@@ -250,11 +240,10 @@ private struct PhoneProfileDetail: View {
                 }
             }
         }
-        .onAppear(perform: loadStoredPassword)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Save") { onSave(passwordInput, passwordChanged) }
-                    .disabled(!canSaveNow)
+                Button("Save", action: onSave)
+                    .disabled(!canSave)
                     .fontWeight(.semibold)
                     .help("Save the server profile")
             }

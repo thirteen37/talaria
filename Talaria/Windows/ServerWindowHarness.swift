@@ -129,6 +129,20 @@ final class ServerWindowHarness {
     /// release and delete system-ssh one release after that.
     static let useNIOSSHTransportDefaultsKey = "HermesKit.useNIOSSHTransport"
 
+    /// Re-attempts a failed dashboard acquisition in place. The first attempt is
+    /// one-shot (`startDashboard`); a brand-new host that wasn't trusted when the
+    /// harness booted (macOS `~/.ssh/known_hosts`, iPad TOFU) fails it and, before
+    /// this, stayed broken until app relaunch. The supervisor resets to a clean
+    /// state after a failed acquire, so re-running `acquireDashboard()` spawns
+    /// fresh. Manual (not auto-retry): against a still-untrusted host on macOS an
+    /// auto-loop would spin forever, so the user taps Retry after trusting it.
+    func retryDashboard() {
+        guard dashboardClient == nil, !dashboardReleased else { return }
+        dashboardTask?.cancel()
+        dashboardError = nil
+        dashboardTask = Task { [weak self] in await self?.acquireDashboard() }
+    }
+
     /// Process-wide singleton. `PinnedHostKeyStore`'s read-modify-write
     /// atomicity is enforced by an `NSLock` *on the instance* — handing
     /// each `ServerWindowHarness` its own instance would re-introduce

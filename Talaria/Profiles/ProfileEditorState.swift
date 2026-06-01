@@ -22,11 +22,28 @@ final class ProfileEditorState {
     /// Persisted profiles that already have a recorded `.version` are also
     /// considered "validated" via the `canSave` check.
     var validatedThisSession: Set<UUID> = []
+    /// The just-typed password for the selected `.password` profile, lifted out
+    /// of the detail views so "dirty" is computable where navigation happens.
+    /// Bound directly by the form's `SecureField`. Empty on macOS (no password
+    /// auth) and for non-password profiles.
+    var passwordInput = ""
+    /// The password loaded from the Keychain when the profile was selected, so
+    /// `passwordChanged` is a dirty check against the pre-filled value rather
+    /// than mere non-emptiness.
+    var loadedPassword = ""
+    /// Snapshot of a freshly-created pending draft, so an *untouched* new draft
+    /// (still equal to this) doesn't nag the navigation guard. Set by the
+    /// editor's `addNew()`.
+    var pendingBaseline: ServerProfile?
+
+    /// Whether the password field diverges from the loaded/stored value.
+    var passwordChanged: Bool { passwordInput != loadedPassword }
 
     func select(_ id: UUID?, in directory: ProfileDirectory) {
         selection = id
         guard let id else {
             draft = nil
+            loadPassword(for: nil)
             return
         }
         if id == pendingDraft?.id {
@@ -34,6 +51,36 @@ final class ProfileEditorState {
         } else {
             draft = directory.profile(id: id)
         }
+        loadPassword(for: draft)
+    }
+
+    /// Pre-fills `passwordInput`/`loadedPassword` from the Keychain for a
+    /// `.password` profile so the field renders masked rather than empty when a
+    /// password is in fact stored; resets both to `""` otherwise. No-op on macOS
+    /// (`PasswordKeychain.get` returns nil there). Moved here from the detail
+    /// view's `onAppear` so selection — the place navigation happens — owns it.
+    private func loadPassword(for profile: ServerProfile?) {
+        guard let profile, profile.authMethod == .password,
+              let reference = profile.passwordKeychainReference,
+              let stored = PasswordKeychain.get(reference: reference) else {
+            passwordInput = ""
+            loadedPassword = ""
+            return
+        }
+        passwordInput = stored
+        loadedPassword = stored
+    }
+
+    /// Whether the current draft diverges from its baseline — an unsaved new
+    /// draft from its creation snapshot, a persisted profile from disk — either
+    /// in content or in the password field. Drives the navigation guard.
+    func isDirty(in directory: ProfileDirectory) -> Bool {
+        guard let draft else { return false }
+        if pendingDraft?.id == draft.id {
+            return draft != pendingBaseline || passwordChanged
+        }
+        guard let existing = directory.profile(id: draft.id) else { return false }
+        return existing != draft || passwordChanged
     }
 
     func updateDraft(_ profile: ServerProfile) {
