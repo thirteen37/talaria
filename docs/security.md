@@ -1,6 +1,6 @@
 # Security
 
-Talaria must spawn `hermes dashboard`, `hermes doctor`, `hermes tools`, `hermes sessions rename`, and `ssh` for remote profiles, so the Mac App Sandbox is not part of the v1 distribution model. Hardened Runtime, Developer-ID signing, and notarisation are still required for release artifacts.
+Talaria must spawn `hermes dashboard`, `hermes doctor`, `hermes tools`, `hermes sessions rename`, `hermes chat --tui` (embedded terminal sessions), and `ssh` for remote profiles, so the Mac App Sandbox is not part of the v1 distribution model. Hardened Runtime, Developer-ID signing, and notarisation are still required for release artifacts.
 
 ## Entitlements
 
@@ -22,6 +22,7 @@ No tracking, no third-party SDKs, no data collected from the user.
 - Keep profile secrets out of `profiles.json`; use Keychain only when a future feature needs stored tokens.
 - Prefer explicit executable paths captured during profile probing to avoid shell PATH surprises.
 - Log protocol frames only at debug level and avoid logging credential material.
+- **Embedded TUI sessions always use system `ssh -tt` for remote profiles**, even when `HermesKit.useNIOSSHTransport` is enabled (the NIO path cannot drive a local-process PTY). They therefore follow the system-ssh trust model — ssh-agent, `~/.ssh/config`, and `~/.ssh/known_hosts` — *not* HermesKit's `HostKeyStore`/pinned-store path. A remote TUI launch can trigger a `known_hosts` prompt inside the embedded terminal on first connect; it does not go through the in-app TOFU confirm sheet. `BatchMode=yes` is set so a missing/locked key fails fast in the terminal rather than hanging on an interactive auth prompt.
 
 ## Key material and host-key trust on iOS
 

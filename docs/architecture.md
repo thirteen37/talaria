@@ -5,7 +5,7 @@ Talaria is a SwiftUI macOS app backed by a shared `HermesKit` Swift package. The
 ## Core Packages
 
 - `ACP`: Codable JSON-RPC and ACP schema types.
-- `Transport`: bidirectional byte streams for local processes, SSH processes, and in-memory tests.
+- `Transport`: bidirectional byte streams for local processes, SSH processes, and in-memory tests; also the pure launch-spec/command builder for `hermes chat --tui` terminal sessions (`TUILaunchSpec.swift`).
 - `Client`: request correlation and session lifecycle orchestration.
 - `Dashboard`: HTTP client, token/session handling, dashboard process supervision, spawn specs, and update polling.
 - `Hermes`: CLI fallbacks, version parsing, doctor/tool parsers, and capability gates.
@@ -35,6 +35,19 @@ Three operations remain on CLI fallbacks because Hermes does not expose dashboar
 - Doctor report: `hermes doctor`.
 
 Remote dashboard access on macOS is provided by spawning system `ssh` with a loopback `-L <local>:127.0.0.1:<remote>` forward and running `hermes dashboard` on the remote host. iOS reaches the dashboard over the pure-Swift NIO-SSH transport instead: one connection both execs `hermes dashboard` on the remote host and tunnels its HTTP over a `direct-tcpip` channel (no local forward), reusing the window's host-key trust so it doesn't re-prompt for a key the chat transport already trusted.
+
+## Terminal (TUI) Sessions (macOS)
+
+Alongside the native ACP chat, a chat can be opened as the real Hermes TUI — the full terminal experience Hermes ships — rendered inline in the detail pane by an embedded terminal emulator (SwiftTerm). It is a per-launch choice: a "New TUI session" button beside "New session", and an "Open as TUI" item on a row in the sessions browser (which resumes that session). There is no global default or setting.
+
+A TUI tab bypasses the entire `Transport` / `Client` / `SessionManager` / ACP stack *and* the dashboard. Talaria spawns `hermes chat --tui` directly in a PTY (resume adds `-r <id>`; the `-p <name>` profile flag precedes the subcommand, as for `acp`) and renders its raw terminal output:
+
+- **Local** profiles run `env hermes [-p <name>] chat --tui` with the login-shell PATH and `HERMES_HOME` (the same env story as the local ACP transport), and the session cwd as the process working directory.
+- **Remote** profiles always use system `ssh -tt` (a local PTY process the terminal can drive), even when the macOS NIO-SSH opt-in is enabled — the NIO path cannot feed a local-process terminal view. The remote command line is byte-identical in shape to the ACP one but runs `chat --tui` instead of `acp`.
+
+The launch command is assembled in `HermesKit` (`Transport/TUILaunchSpec.swift`, pure and unit-tested for exact command shape). The SwiftTerm view, the per-process lifetime, and a process-wide registry that keeps a terminal alive across tab switches (and reaps it on tab close and window teardown) live in a macOS-only app seam (`Chat/macOS/HermesTerminalView.swift`). SwiftTerm is a dependency of the macOS app target only — not the iOS target and not `HermesKit`, which stays UI-free. iOS has no local-process / PTY path, so TUI tabs cannot be created there; the shared code compiles via a seam stub.
+
+Only one mode runs per session id at a time: opening a session as a TUI is disabled while it is open inline (ACP), and opening a session inline focuses an existing TUI tab instead of starting a second `hermes` resuming the same session.
 
 ## Window Model
 

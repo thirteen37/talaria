@@ -53,7 +53,34 @@ extension ServerWindowHarness {
             ),
             hermesProfileName: hermesProfileName
         )
-        let store = SessionsStore(manager: manager, adminRunner: adminRunner)
+        // TUI factory: spawn `env hermes [-p <name>] chat --tui [-r <id>]` under
+        // a PTY, mirroring the ACP transport's binary/PATH/env story. The
+        // session's cwd is applied as the process working directory (hermes
+        // chat uses it as the session cwd); PATH comes from the login-shell
+        // resolver so a Finder-launched app still finds `hermes`.
+        let tuiSpecFactory: SessionsStore.TUISpecFactory = { resume, cwd in
+            let extraEnv = await resolver.extraEnv()
+            var environment = extraEnv
+            if let hermesHome {
+                environment["HERMES_HOME"] = hermesHome
+            }
+            var args = [hermesPath] + HermesProfiles.cliFlag(hermesProfileName) + ["chat", "--tui"]
+            if let resume, !resume.isEmpty {
+                args += ["-r", resume]
+            }
+            return TUILaunchSpec(
+                executableURL: URL(fileURLWithPath: "/usr/bin/env"),
+                arguments: args,
+                environment: environment,
+                cwd: cwd
+            )
+        }
+        let store = SessionsStore(
+            manager: manager,
+            adminRunner: adminRunner,
+            tuiSpecFactory: tuiSpecFactory,
+            onCloseTUI: { tabId in HermesTerminalRegistry.shared.terminate(tabId) }
+        )
         return ServerWindowHarness(store: store, profile: profile, hermesProfileName: hermesProfileName)
     }
 
@@ -119,12 +146,41 @@ extension ServerWindowHarness {
             inner: RemoteHermesAdminRunner(profile: profile),
             hermesProfileName: hermesProfileName
         )
+        // TUI factory always uses system `ssh -tt` (a local PTY process SwiftTerm
+        // can drive), regardless of the NIO opt-in — the NIO path can't feed
+        // SwiftTerm's local-process terminal. Mirrors `SSHTransport.makeArguments`
+        // but forces `-tt` (PTY) instead of `-T` and runs `chat --tui`. cwd isn't
+        // forwarded remotely (the resumed session carries its own).
+        let tuiSpecFactory: SessionsStore.TUISpecFactory = { resume, _ in
+            var args = ["-tt", "-o", "BatchMode=yes"]
+            if let port = profile.port {
+                args += ["-p", String(port)]
+            }
+            if let identityFile = profile.identityFile {
+                args += ["-i", identityFile]
+            }
+            let destination = profile.user.map { "\($0)@\(profile.host ?? "")" } ?? (profile.host ?? "")
+            args += ["--", destination]
+            args.append(buildHermesTUIRemoteCommand(
+                profile: profile,
+                hermesProfileName: hermesProfileName,
+                resume: resume
+            ))
+            return TUILaunchSpec(
+                executableURL: URL(fileURLWithPath: "/usr/bin/ssh"),
+                arguments: args,
+                environment: [:],
+                cwd: nil
+            )
+        }
         let store = SessionsStore(
             manager: manager,
             adminRunner: admin,
             // Pause the open timeout while the trust prompt is up so a slow
             // fingerprint comparison doesn't tear down the pending connection.
-            isAwaitingUserInput: { hostKeyCoordinator.pending != nil }
+            isAwaitingUserInput: { hostKeyCoordinator.pending != nil },
+            tuiSpecFactory: tuiSpecFactory,
+            onCloseTUI: { tabId in HermesTerminalRegistry.shared.terminate(tabId) }
         )
         return ServerWindowHarness(
             store: store,
@@ -205,6 +261,14 @@ extension ServerWindowHarness {
     /// process. Explicit hook (rather than `deinit`) because Swift 6 makes
     /// MainActor deinits nonisolated.
     func tearDown() {
+        // Reap any embedded TUI terminals this window owns. `closeTab` is the
+        // only other path that terminates them, so without this a window closed
+        // (or a profile switch that rebuilds the harness) with a `.tui` tab
+        // still open would leak its hermes/`ssh -tt` PTY child — the registry is
+        // a process-wide singleton with no per-window ownership.
+        for session in store.openSessions where session.kind == .tui {
+            HermesTerminalRegistry.shared.terminate(session.id)
+        }
         if dashboardStarted, !dashboardReleased {
             dashboardReleased = true
             // Chain release behind the acquire task. Cancelling it doesn't stop

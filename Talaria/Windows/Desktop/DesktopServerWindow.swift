@@ -329,24 +329,18 @@ struct DesktopServerWindow: View {
     private func detail(harness: ServerWindowHarness) -> some View {
         if let selection = harness.store.selection,
            let session = harness.store.openSessions.first(where: { $0.id == selection }),
-           let viewModel = harness.store.viewModel(for: session.id) {
+           session.kind == .tui {
+            // TUI tabs render the embedded Hermes terminal (macOS) instead of
+            // the ACP `ChatView`; they have no view model.
+            platformTUIDetail(tabId: session.id, spec: harness.store.tuiSpec(for: session.id))
+                .id(session.id)
+                .background { closeTabShortcut(harness: harness) }
+        } else if let selection = harness.store.selection,
+                  let session = harness.store.openSessions.first(where: { $0.id == selection }),
+                  let viewModel = harness.store.viewModel(for: session.id) {
             ChatView(viewModel: viewModel)
                 .id(session.id)
-                .background {
-                    // ⌘W normally closes the window; when a session tab is
-                    // selected we hijack the shortcut to close that tab
-                    // instead. Disabled with no selection so the default
-                    // `Performs Close` handles the keystroke as usual. Works on
-                    // iPad with a hardware keyboard too — no `#if` needed.
-                    Button("Close Session") {
-                        if let id = harness.store.selection {
-                            Task { await harness.store.closeTab(id) }
-                        }
-                    }
-                    .keyboardShortcut("w", modifiers: .command)
-                    .disabled(harness.store.selection == nil)
-                    .hidden()
-                }
+                .background { closeTabShortcut(harness: harness) }
         } else {
             BrowseDetailView(
                 harness: harness,
@@ -357,6 +351,22 @@ struct DesktopServerWindow: View {
                 onOpenDestination: { dest in browse = dest }
             )
         }
+    }
+
+    /// ⌘W normally closes the window; when a session tab is selected we hijack
+    /// the shortcut to close that tab instead (ACP and TUI alike). Disabled with
+    /// no selection so the default `Performs Close` handles the keystroke as
+    /// usual. Works on iPad with a hardware keyboard too — no `#if` needed.
+    @ViewBuilder
+    private func closeTabShortcut(harness: ServerWindowHarness) -> some View {
+        Button("Close Session") {
+            if let id = harness.store.selection {
+                Task { await harness.store.closeTab(id) }
+            }
+        }
+        .keyboardShortcut("w", modifiers: .command)
+        .disabled(harness.store.selection == nil)
+        .hidden()
     }
 
     /// SSH profiles show `user@host[:port]` so users can tell two same-named

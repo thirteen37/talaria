@@ -6,11 +6,12 @@ as ACP, dashboard routes, and CLI fallbacks evolve independently.
 
 ## Integration Boundaries
 
-Talaria talks to Hermes through three channels:
+Talaria talks to Hermes through four channels:
 
 - **ACP / JSON-RPC** for live chat sessions.
 - **Dashboard HTTP** for durable state and management screens.
 - **Hermes CLI fallbacks** where the dashboard does not expose a route yet.
+- **Embedded TUI (PTY)** for rendering `hermes chat --tui` inline as an alternative to native ACP chat (macOS only).
 
 Talaria does not read or write Hermes SQLite files directly.
 
@@ -97,6 +98,28 @@ the matching `-p <name>` context for fallback commands.
 Updates intentionally use the CLI path rather than the dashboard update action:
 `GET /api/status` reports only the installed version and release date, while
 `hermes update --check` can report source installs that are behind `origin/main`.
+
+## Terminal (TUI) Sessions
+
+A chat can be launched as the real Hermes TUI inside an embedded terminal
+emulator (SwiftTerm), instead of the native ACP renderer. This path bypasses
+both ACP and the dashboard: Talaria spawns `hermes chat --tui` directly in a PTY
+and renders its raw output. macOS only — iOS has no local-process/PTY path.
+
+| Surface | Hermes CLI command |
+| --- | --- |
+| New TUI chat | `hermes [-p <name>] chat --tui` |
+| Resume as TUI | `hermes [-p <name>] chat --tui -r <id>` |
+
+- **Local** profiles run the command via `env` with the login-shell PATH and
+  `HERMES_HOME`, and the session cwd as the process working directory.
+- **Remote** profiles always use system `ssh -tt` (PTY), even when the macOS
+  NIO-SSH ACP opt-in is enabled — the NIO transport cannot drive a local-process
+  terminal view.
+
+The command builder is pure and unit-tested (`HermesKit` `TUILaunchSpec.swift`).
+SwiftTerm is a macOS-app-target-only dependency. Only one mode runs per session
+id at a time (TUI and inline ACP are mutually exclusive for the same session).
 
 ## Known Gaps
 

@@ -43,23 +43,31 @@ Run this script before a v1 release candidate.
 15. **Dashboard lifecycle**: open two windows for the same profile and confirm they share one `hermes dashboard` process. Close both and verify the child exits.
 16. Set a fixed dashboard port in the profile editor, reopen the profile, and confirm `hermes dashboard` binds that port. Clear the field and confirm Talaria returns to automatic port allocation.
 17. Open an SSH profile and repeat steps 8–14 against the remote profile. Confirm dashboard startup failures surface useful messages for missing `[web]`, auth failure, and connection timeout.
+18. **Terminal (TUI) sessions** (macOS):
+    - **Local, new**: click the terminal button beside *New session*. Confirm the real Hermes TUI renders in the detail pane, accepts keystrokes, and that the tab shows a `terminal` glyph.
+    - **Tab survival**: switch to another tab (or a Browse page) and back. Confirm the TUI process and scrollback survive (it is not relaunched).
+    - **Close**: close the TUI tab (⌘W or the row close button) and confirm the `hermes` process exits (e.g. `pgrep -f 'chat --tui'` drops it). Repeat by closing the *window* with a TUI tab open — the process must also exit (no leak).
+    - **Resume**: in Manage → Sessions, right-click a session → *Open as TUI*. Confirm it resumes that session (`-r <id>`).
+    - **Conflict rule**: open a session inline (normal tap), then confirm *Open as TUI* is disabled for it; and that with a TUI tab open, tapping the same session in the browser focuses the existing TUI tab instead of starting a second chat.
+    - **Relaunch overlay**: exit the TUI from inside (e.g. `/exit` or Ctrl-D). Confirm the "Session ended" overlay appears and *Relaunch* starts a fresh TUI in the same tab.
+    - **SSH**: repeat the new/resume flows against an SSH profile. Confirm interactive keys work over `ssh -tt` and the remote TUI draws correctly (including, on a first connect, any `known_hosts` prompt shown inside the terminal).
 
 ## Release artifact verification
 
 Run these against the signed, notarised, stapled build produced by `scripts/release.sh` — **not** a `CODE_SIGNING_ALLOWED=NO` dev build.
 
-18. **Signing assertions** (in a shell):
+19. **Signing assertions** (in a shell):
     - `codesign --verify --deep --strict --verbose=2 build/export/Talaria.app` exits 0.
     - `xcrun stapler validate build/export/Talaria.app` reports `The validate action worked!`.
     - `xcrun stapler validate build/Talaria-<VERSION>.dmg` reports the same.
     - `spctl -a -vvv -t install build/export/Talaria.app` reports `accepted source=Notarized Developer ID`.
-19. **Gatekeeper first-launch** (on a fresh Mac or a fresh user account):
+20. **Gatekeeper first-launch** (on a fresh Mac or a fresh user account):
     - Download the DMG from the GitHub Release page **via the browser** (not `curl` — Gatekeeper relies on the download quarantine xattr).
     - Drag `Talaria.app` to `/Applications`.
     - Launch from Finder (double-click). Confirm no quarantine warning appears.
-20. **Sparkle in-app update** (only if the previous signed build is available):
+21. **Sparkle in-app update** (only if the previous signed build is available):
     - Install the previous signed build, launch it once so Sparkle stores its profile.
     - Replace `docs/appcast.xml` to point at the new version.
     - Re-launch the older build. Confirm Sparkle finds the new release, downloads it, validates the ed25519 signature, and relaunches into the new build.
     - Trigger manually via **Talaria → Check for Updates…** and confirm the menu item is reachable.
-21. **Version display**: the macOS About panel shows the `MARKETING_VERSION` and build number from `Info.plist`.
+22. **Version display**: the macOS About panel shows the `MARKETING_VERSION` and build number from `Info.plist`.

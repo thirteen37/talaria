@@ -77,26 +77,45 @@ struct SessionsSidebar: View {
                     row(for: session)
                 }
 
-                Button {
-                    Task { await store.openNew() }
-                } label: {
-                    if store.isOpening {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .controlSize(.small)
-                                .frame(width: 16, height: 16)
-                            Text("Connecting…")
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                    } else {
-                        Label("New session", systemImage: "plus")
+                HStack(spacing: 8) {
+                    Button {
+                        Task { await store.openNew() }
+                    } label: {
+                        if store.isOpening {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .frame(width: 16, height: 16)
+                                Text("Connecting…")
+                                    .foregroundStyle(.secondary)
+                            }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
+                        } else {
+                            Label("New session", systemImage: "plus")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(store.isOpening)
+
+                    // Launch a chat as the real Hermes TUI inside an embedded
+                    // terminal instead of the native ACP view (macOS only; the
+                    // store injects no spec factory where unsupported).
+                    if store.supportsTUI {
+                        Button {
+                            Task { await store.openTUI(resume: nil) }
+                        } label: {
+                            Image(systemName: "terminal")
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(store.isOpening)
+                        .help("New terminal (TUI) session")
+                        .accessibilityLabel("New terminal session")
                     }
                 }
-                .disabled(store.isOpening)
             }
         }
         .sheet(item: $renameTarget) { target in
@@ -121,8 +140,17 @@ struct SessionsSidebar: View {
                             .fill(statusColor(for: session.id))
                             .frame(width: 9, height: 9)
                             .alignmentGuide(.firstTextBaseline) { $0.height + 2 }
-                        Text(session.title ?? shortId(session.id))
+                        Text(rowTitle(for: session))
                             .lineLimit(1)
+                        // Distinguish embedded-terminal (TUI) tabs from native
+                        // ACP chats; the status dot stays neutral for them
+                        // (there's no ACP status stream).
+                        if session.kind == .tui {
+                            Image(systemName: "terminal")
+                                .imageScale(.small)
+                                .foregroundStyle(.secondary)
+                                .help("Terminal (TUI) session")
+                        }
                     }
                     Text((session.cwd as NSString).lastPathComponent)
                         .font(.caption2)
@@ -188,6 +216,19 @@ struct SessionsSidebar: View {
 
     private func shortId(_ id: SessionId) -> String {
         SessionIdFormatter.short(id)
+    }
+
+    /// Sidebar label for a tab. TUI tabs carry a synthetic `tui:…` id, so fall
+    /// back to the resumed session's short id (resume) or a generic "Terminal"
+    /// (new) rather than formatting the synthetic id.
+    private func rowTitle(for session: SessionsStore.OpenSession) -> String {
+        if let title = session.title, !title.isEmpty {
+            return title
+        }
+        if session.kind == .tui {
+            return session.resumeId.map(shortId) ?? "Terminal"
+        }
+        return shortId(session.id)
     }
 
     /// Sidebar row showing the active profile's name with a menu that

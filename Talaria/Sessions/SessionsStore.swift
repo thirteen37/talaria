@@ -38,10 +38,32 @@ struct HermesSessionSummary: Identifiable, Equatable {
 @MainActor
 @Observable
 final class SessionsStore {
+    /// Distinguishes the two kinds of tab a window can hold. `.acp` is the
+    /// native chat path (ACP over `Transport`/`Client`); `.tui` bypasses that
+    /// stack entirely and renders the real `hermes chat --tui` inside an
+    /// embedded terminal emulator (macOS only). Defaulting to `.acp` keeps
+    /// every existing call site unchanged.
+    enum SessionKind: Equatable {
+        case acp
+        case tui
+    }
+
+    /// Builds the `TUILaunchSpec` an embedded terminal needs to spawn a Hermes
+    /// TUI. Injected per platform (nil on iOS / when unsupported), mirroring how
+    /// `SessionManager`'s transport factory is supplied by the harness seam.
+    /// `resume` is the real hermes session id when resuming, nil for a new chat.
+    typealias TUISpecFactory = @MainActor @Sendable (_ resume: SessionId?, _ cwd: String) async throws -> TUILaunchSpec
+
     struct OpenSession: Identifiable, Equatable {
         var id: SessionId
         var cwd: String
         var title: String?
+        /// `.acp` for native chat tabs, `.tui` for embedded-terminal tabs.
+        var kind: SessionKind = .acp
+        /// The real hermes session id this TUI tab resumes, or nil for a new
+        /// chat. Only meaningful when `kind == .tui` (ACP tabs use the real id
+        /// as their `id` directly).
+        var resumeId: SessionId? = nil
     }
 
     enum Status: Equatable {
@@ -74,9 +96,25 @@ final class SessionsStore {
     var dashboardClient: DashboardClient?
     let defaultCwd: String
 
+    /// Builds the launch spec for a `.tui` tab, or nil where embedded terminals
+    /// aren't supported (iOS, the mock harness). Wired by the macOS harness seam.
+    let tuiSpecFactory: TUISpecFactory?
+    /// Called when a `.tui` tab closes so the macOS terminal registry can
+    /// terminate the live process. Nil where TUI tabs can't exist.
+    private let onCloseTUI: (@MainActor @Sendable (SessionId) -> Void)?
+    /// Launch specs for open `.tui` tabs, keyed by synthetic tab id. The detail
+    /// view reads this to spawn (or re-attach) the embedded terminal; dropped
+    /// when the tab closes.
+    private(set) var tuiSpecs: [SessionId: TUILaunchSpec] = [:]
+
     private var statusTasks: [SessionId: Task<Void, Never>] = [:]
     private var viewModels: [SessionId: LocalChatViewModel] = [:]
     private var pendingOpens: Set<SessionId> = []
+    /// Session ids whose TUI resume is in flight (the spec-build await window,
+    /// which can be slow on a cold local profile while the login-shell PATH is
+    /// probed). Mirrors `pendingOpens` so the one-mode-per-session guards catch
+    /// a conflict in *both* directions before either tab is registered.
+    private var pendingTUIOpens: Set<SessionId> = []
     private var toolKinds: [SessionId: [ToolCallId: ToolKind]] = [:]
     private let cwdStore: SessionsCwdStore
     /// Returns true while the open is blocked on interactive user input (the
@@ -90,7 +128,9 @@ final class SessionsStore {
         dashboardClient: DashboardClient? = nil,
         defaultCwd: String = Platform.defaultHomeDirectory(),
         cwdStore: SessionsCwdStore = SessionsCwdStore(),
-        isAwaitingUserInput: @escaping @MainActor @Sendable () -> Bool = { false }
+        isAwaitingUserInput: @escaping @MainActor @Sendable () -> Bool = { false },
+        tuiSpecFactory: TUISpecFactory? = nil,
+        onCloseTUI: (@MainActor @Sendable (SessionId) -> Void)? = nil
     ) {
         self.manager = manager
         self.adminRunner = adminRunner
@@ -98,7 +138,13 @@ final class SessionsStore {
         self.defaultCwd = defaultCwd
         self.cwdStore = cwdStore
         self.isAwaitingUserInput = isAwaitingUserInput
+        self.tuiSpecFactory = tuiSpecFactory
+        self.onCloseTUI = onCloseTUI
     }
+
+    /// True when this store can open `.tui` tabs (the macOS harness injected a
+    /// spec factory). Drives whether the sidebar surfaces the TUI affordances.
+    var supportsTUI: Bool { tuiSpecFactory != nil }
 
     /// Upper bound on opening a session. The SSH connect already has its own
     /// 15s bound, but the ACP `initialize` + `session/new` round-trips that
@@ -177,6 +223,16 @@ final class SessionsStore {
     }
 
     func openExisting(_ summary: HermesSessionSummary) async {
+        // One mode per session id: if this session is already open (or being
+        // opened) as a TUI tab, focus it rather than spawning a second hermes
+        // that resumes the same session concurrently. The synthetic `tui:<id>`
+        // id means the same-id check below would otherwise miss it; the
+        // pending-set check closes the window before the tab is registered.
+        let tuiId = tuiTabId(for: summary.id)
+        if openSessions.contains(where: { $0.id == tuiId }) || pendingTUIOpens.contains(summary.id) {
+            selection = tuiId
+            return
+        }
         // Either already open or being opened concurrently — treat a second
         // tap as a benign "switch to it once it exists" intent instead of
         // racing through manager.openExisting and surfacing duplicateSession
@@ -252,6 +308,80 @@ final class SessionsStore {
         selection = summary.id
     }
 
+    /// Opens a Hermes TUI tab — a new chat (`resume: nil`) or a resume of an
+    /// existing session — rendered by an embedded terminal instead of the ACP
+    /// `ChatView`. No-op with a surfaced error where TUI isn't supported.
+    ///
+    /// The tab id is synthetic (`tui:<sessionId-or-uuid>`) so a TUI tab never
+    /// collides with an ACP tab of the same session. Resuming a session that
+    /// already has a TUI tab just focuses it.
+    func openTUI(resume summary: HermesSessionSummary? = nil, cwd: String? = nil) async {
+        guard let tuiSpecFactory else {
+            lastError = "Terminal sessions aren't supported on this platform."
+            return
+        }
+        let resumeId = summary?.id
+        // One mode per session id: never run a TUI alongside an inline ACP tab
+        // for the same session (two hermes processes resuming one session). The
+        // browser disables this action when inline, but guard here too so a
+        // stale UI state can't slip a second process through. `pendingOpens`
+        // covers an inline open that's still mid-connect — its `.acp` tab isn't
+        // in `openSessions` yet, so `isOpenInline` alone would miss it and let
+        // both resume the same session at once.
+        if let resumeId, isOpenInline(resumeId) || pendingOpens.contains(resumeId) {
+            selection = resumeId
+            return
+        }
+        let tabId = resumeId.map { tuiTabId(for: $0) } ?? ("tui:" + UUID().uuidString)
+        if openSessions.contains(where: { $0.id == tabId }) {
+            selection = tabId
+            return
+        }
+        let workingDir = cwd
+            ?? resumeId.flatMap { cwdStore.cwd(for: $0) }
+            ?? summary?.cwd
+            ?? defaultCwd
+        AppLog.session.info("openTUI: begin resume=\(resumeId ?? "nil", privacy: .public) cwd=\(workingDir, privacy: .public)")
+        // Mark the resume in flight across the spec-build await so a concurrent
+        // inline open of the same session sees the conflict before our tab is
+        // registered (symmetric with `pendingOpens` on the ACP side).
+        if let resumeId { pendingTUIOpens.insert(resumeId) }
+        defer { if let resumeId { pendingTUIOpens.remove(resumeId) } }
+        do {
+            let spec = try await tuiSpecFactory(resumeId, workingDir)
+            tuiSpecs[tabId] = spec
+            insert(OpenSession(
+                id: tabId,
+                cwd: workingDir,
+                title: summary?.title,
+                kind: .tui,
+                resumeId: resumeId
+            ))
+            selection = tabId
+        } catch {
+            AppLog.session.error("openTUI: failed: \(String(describing: error), privacy: .public)")
+            lastError = Self.describe(error)
+        }
+    }
+
+    /// True when an `.acp` (inline chat) tab is open for `id`. The Sessions
+    /// browser uses this to disable "Open as TUI" — one mode per session id at
+    /// a time (the conflict rule).
+    func isOpenInline(_ id: SessionId) -> Bool {
+        openSessions.contains { $0.id == id && $0.kind == .acp }
+    }
+
+    /// The synthetic tab id a TUI tab uses to resume `sessionId`. Centralized so
+    /// the open paths and the one-mode-per-session guards agree on its shape.
+    private func tuiTabId(for sessionId: SessionId) -> SessionId {
+        "tui:" + sessionId
+    }
+
+    /// The launch spec for an open `.tui` tab, if any. Read by the detail view.
+    func tuiSpec(for id: SessionId) -> TUILaunchSpec? {
+        tuiSpecs[id]
+    }
+
     func viewModel(for id: SessionId) -> LocalChatViewModel? {
         viewModels[id]
     }
@@ -276,9 +406,18 @@ final class SessionsStore {
         statusTasks[id] = nil
         statuses[id] = nil
         toolKinds.removeValue(forKey: id)
+        let isTUI = openSessions.first(where: { $0.id == id })?.kind == .tui
         openSessions.removeAll { $0.id == id }
         if selection == id {
             selection = openSessions.first?.id
+        }
+        // TUI tabs never touched the ACP stack (`manager` / `viewModels`); they
+        // own a live terminal process instead. Drop the spec and let the macOS
+        // registry terminate the process.
+        if isTUI {
+            tuiSpecs.removeValue(forKey: id)
+            onCloseTUI?(id)
+            return
         }
         if let vm = viewModels.removeValue(forKey: id) {
             await vm.shutdown()
