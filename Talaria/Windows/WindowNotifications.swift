@@ -68,7 +68,7 @@ final class WindowNotificationCenter {
                     title: "Doctor reports issues",
                     detail: firstSection.map { "\($0) (exit \(report.exitCode))" }
                         ?? "Exit \(report.exitCode)",
-                    destination: .doctor
+                    destination: .system
                 ))
             } else {
                 remove(.doctorFailure)
@@ -147,7 +147,7 @@ struct NotificationsView: View {
     private func actionButton(for issue: WindowNotificationCenter.Issue) -> some View {
         switch issue.id {
         case .doctorFailure:
-            Button("Open Doctor") { onOpenDestination(.doctor) }
+            Button("Open Doctor") { onOpenDestination(.system) }
         }
     }
 
