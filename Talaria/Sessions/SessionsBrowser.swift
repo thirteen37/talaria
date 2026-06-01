@@ -55,25 +55,23 @@ struct SessionsBrowser: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(sessions) { summary in
-                    SessionRow(summary: summary) {
-                        Task { await store.openExisting(summary) }
-                        onOpen?()
-                    }
-                    .contextMenu {
+                    SessionRow(
+                        summary: summary,
+                        open: {
+                            Task { await store.openExisting(summary) }
+                            onOpen?()
+                        },
                         // Resume this session as the real Hermes TUI (embedded
-                        // terminal) instead of the native ACP view. macOS only;
-                        // disabled when the session is already open inline — one
-                        // mode per session id at a time.
-                        if store.supportsTUI {
-                            Button {
-                                Task { await store.openTUI(resume: summary) }
-                                onOpen?()
-                            } label: {
-                                Label("Open as TUI", systemImage: "terminal")
-                            }
-                            .disabled(store.isOpenInline(summary.id))
-                        }
-                    }
+                        // terminal) instead of the native ACP view. `nil` hides
+                        // the button on platforms without TUI support (iOS);
+                        // `tuiDisabled` enforces one mode per session id at a
+                        // time (disabled when already open inline).
+                        openTUI: store.supportsTUI ? {
+                            Task { await store.openTUI(resume: summary) }
+                            onOpen?()
+                        } : nil,
+                        tuiDisabled: store.isOpenInline(summary.id)
+                    )
                 }
             }
         }
@@ -164,22 +162,46 @@ struct SessionsBrowser: View {
 private struct SessionRow: View {
     let summary: HermesSessionSummary
     let open: () -> Void
+    var openTUI: (() -> Void)?
+    var tuiDisabled: Bool = false
+
+    @State private var isHovering = false
 
     var body: some View {
-        Button(action: open) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(summary.title.isEmpty ? SessionIdFormatter.short(summary.id) : summary.title)
-                    .font(.body)
-                    .lineLimit(2)
-                if let updatedAt = summary.updatedAt {
-                    Text(updatedAt, style: .relative)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        HStack(spacing: 8) {
+            Button(action: open) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(summary.title.isEmpty ? SessionIdFormatter.short(summary.id) : summary.title)
+                        .font(.body)
+                        .lineLimit(2)
+                    if let updatedAt = summary.updatedAt {
+                        Text(updatedAt, style: .relative)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+
+            if let openTUI {
+                Button(action: openTUI) {
+                    Image(systemName: "terminal")
+                }
+                .buttonStyle(.borderless)
+                .disabled(tuiDisabled)
+                .help(tuiDisabled
+                    ? "Already open inline — close it to open as a terminal session"
+                    : "Open as a terminal (TUI) session")
+                .accessibilityLabel("Open as TUI")
+                #if os(macOS)
+                .opacity(isHovering ? 1 : 0)   // hover-reveal on macOS
+                #endif
+            }
         }
-        .buttonStyle(.plain)
+        #if os(macOS)
+        .onHover { isHovering = $0 }
+        #endif
     }
 }
