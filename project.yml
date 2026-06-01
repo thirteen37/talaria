@@ -10,6 +10,17 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: "2.6.0"
+  # macOS-only: embedded terminal emulator that renders `hermes chat --tui`.
+  # Added to the Talaria (macOS) target's dependencies only — not TalariaIOS
+  # (no local/PTY path there) and not HermesKit (which stays UI-free).
+  #
+  # Pinned below 1.12.0 deliberately: 1.12.0+ bundles a Metal shader that forces
+  # every build host (and CI) to install the Metal toolchain, which Talaria's
+  # CoreText-rendered terminal doesn't need. 1.11.2 has the identical
+  # LocalProcessTerminalView API (startProcess/terminate/delegate) without it.
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    exactVersion: "1.11.2"
 targets:
   Talaria:
     type: application
@@ -26,6 +37,7 @@ targets:
     dependencies:
       - package: HermesKit
       - package: Sparkle
+      - package: SwiftTerm
     scheme:
       testTargets:
         - TalariaTests

@@ -59,6 +59,21 @@ struct SessionsBrowser: View {
                         Task { await store.openExisting(summary) }
                         onOpen?()
                     }
+                    .contextMenu {
+                        // Resume this session as the real Hermes TUI (embedded
+                        // terminal) instead of the native ACP view. macOS only;
+                        // disabled when the session is already open inline — one
+                        // mode per session id at a time.
+                        if store.supportsTUI {
+                            Button {
+                                Task { await store.openTUI(resume: summary) }
+                                onOpen?()
+                            } label: {
+                                Label("Open as TUI", systemImage: "terminal")
+                            }
+                            .disabled(store.isOpenInline(summary.id))
+                        }
+                    }
                 }
             }
         }

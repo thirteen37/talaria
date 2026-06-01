@@ -86,6 +86,23 @@ extension View {
     }
 }
 
+/// Detail view for a `.tui` session tab. macOS embeds the SwiftTerm terminal;
+/// the iOS mirror returns an unavailable placeholder (never reached, since TUI
+/// tabs can't be created there).
+@MainActor
+@ViewBuilder
+func platformTUIDetail(tabId: SessionId, spec: TUILaunchSpec?) -> some View {
+    if let spec {
+        HermesTUIDetailView(tabId: tabId, spec: spec)
+    } else {
+        ContentUnavailableView(
+            "Terminal unavailable",
+            systemImage: "exclamationmark.triangle",
+            description: Text("The terminal session couldn't be prepared.")
+        )
+    }
+}
+
 /// Two-pane split for desktop surfaces. macOS uses a resizable `HSplitView`.
 struct PlatformSplit<Primary: View, Secondary: View>: View {
     var showsSecondary: Bool = true

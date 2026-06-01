@@ -100,6 +100,20 @@ extension View {
     }
 }
 
+/// Detail view for a `.tui` session tab. iOS has no local/PTY path, so this is
+/// an unavailable placeholder — never reached, since TUI tabs can't be created
+/// on iOS (the store's `tuiSpecFactory` is nil there). Mirrors the macOS seam,
+/// which embeds the SwiftTerm terminal.
+@MainActor
+@ViewBuilder
+func platformTUIDetail(tabId: SessionId, spec: TUILaunchSpec?) -> some View {
+    ContentUnavailableView(
+        "Terminal sessions aren't available",
+        systemImage: "terminal",
+        description: Text("Open this session as a regular chat instead.")
+    )
+}
+
 /// Two-pane split for desktop surfaces. iPad uses a plain `HStack` + `Divider`
 /// (no draggable splitter, which AppKit's `HSplitView` provides on macOS).
 struct PlatformSplit<Primary: View, Secondary: View>: View {
