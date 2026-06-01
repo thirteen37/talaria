@@ -222,14 +222,6 @@ struct DesktopServerWindow: View {
         } detail: {
             detail(harness: harness)
         }
-        // Swap the system sidebar toggle for our own so it can show a red dot
-        // when the window has active notifications — visible even when the
-        // sidebar is collapsed and the Notifications row is out of view.
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                sidebarToggle(harness: harness)
-            }
-        }
         .alert(
             "Trust this server?",
             isPresented: Binding(
@@ -319,9 +311,6 @@ struct DesktopServerWindow: View {
         // iPad surfaces a gear to open the editor (no Settings scene there);
         // no-op on macOS.
         .platformSettingsToolbarItem { showingSettings = true }
-        // The default sidebar toggle is replaced by `sidebarToggle` (attached to
-        // the split view) so we can badge it with a notification dot.
-        .toolbar(removing: .sidebarToggle)
         .navigationSplitViewColumnWidth(min: 220, ideal: 240)
     }
 
@@ -347,8 +336,7 @@ struct DesktopServerWindow: View {
                 destination: browse ?? .sessions,
                 hermesProfiles: hermesProfiles,
                 activeHermesProfile: activeHermesProfile,
-                onProfilesChanged: { reconcileHermesProfiles(harness: harness) },
-                onOpenDestination: { dest in browse = dest }
+                onProfilesChanged: { reconcileHermesProfiles(harness: harness) }
             )
         }
     }
@@ -379,34 +367,6 @@ struct DesktopServerWindow: View {
         let user = profile.user.map { "\($0)@" } ?? ""
         let port = profile.port.map { ":\($0)" } ?? ""
         return "\(user)\(host)\(port)"
-    }
-
-    /// Replacement for the system sidebar toggle. Toggles `columnVisibility` and
-    /// shows a small red dot when the window has active notifications, so the
-    /// indicator is reachable even with the sidebar (and its Notifications row)
-    /// collapsed.
-    private func sidebarToggle(harness: ServerWindowHarness) -> some View {
-        Button {
-            withAnimation {
-                columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
-            }
-        } label: {
-            Image(systemName: "sidebar.leading")
-                .overlay(alignment: .topTrailing) {
-                    if !harness.notifications.issues.isEmpty {
-                        Circle()
-                            .fill(.red)
-                            .frame(width: 6, height: 6)
-                            .offset(x: 4, y: -3)
-                    }
-                }
-        }
-        .help("Toggle Sidebar")
-        .accessibilityLabel(
-            harness.notifications.issues.isEmpty
-                ? "Toggle Sidebar"
-                : "Toggle Sidebar, \(harness.notifications.issues.count) notification(s)"
-        )
     }
 
     private func browseRow(_ destination: BrowseDestination, store: SessionsStore) -> some View {

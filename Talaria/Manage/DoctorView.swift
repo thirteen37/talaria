@@ -2,7 +2,7 @@ import HermesKit
 import SwiftUI
 
 /// Window-owned (not view-owned) holder for the Doctor run state. Sits on
-/// `ServerWindowHarness` like `WindowNotificationCenter`, so a run survives
+/// `ServerWindowHarness` like `UpdatesHarness`, so a run survives
 /// Browse navigation that destroys `DoctorView`. The view is a thin observer.
 @MainActor
 @Observable
