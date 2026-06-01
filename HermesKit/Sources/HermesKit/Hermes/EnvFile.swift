@@ -93,11 +93,21 @@ public struct HermesEnvFileReader: EnvFileReading {
     private let runner: HermesAdminRunning?
     private let snapshotTransfer: RemoteSnapshotTransfer?
     private let isLocal: Bool
+    /// The SSH profile, used to build the macOS `SFTPSubprocessTransfer`
+    /// fallback when no transfer is injected (the system-`ssh` remote path) —
+    /// mirroring ``HermesConfigReader``. Nil for local reads.
+    private let profile: ServerProfile?
 
-    public init(runner: HermesAdminRunning?, snapshotTransfer: RemoteSnapshotTransfer?, isLocal: Bool) {
+    public init(
+        runner: HermesAdminRunning?,
+        snapshotTransfer: RemoteSnapshotTransfer?,
+        isLocal: Bool,
+        profile: ServerProfile? = nil
+    ) {
         self.runner = runner
         self.snapshotTransfer = snapshotTransfer
         self.isLocal = isLocal
+        self.profile = profile
     }
 
     public func read() async throws -> [EnvFileEntry] {
@@ -126,19 +136,37 @@ public struct HermesEnvFileReader: EnvFileReading {
     }
 
     private func readRemote(path: String) async throws -> String {
-        guard let snapshotTransfer else { throw EnvFileError.transferUnavailable }
+        // An injected transfer works on any platform (NIO on iOS / the macOS
+        // NIO opt-in); otherwise fall back to the macOS `sftp` subprocess for
+        // the system-`ssh` path — same resolution ``HermesConfigReader`` uses.
+        let active: RemoteSnapshotTransfer
+        if let snapshotTransfer {
+            active = snapshotTransfer
+        } else {
+            #if os(macOS)
+            guard let profile else { throw EnvFileError.transferUnavailable }
+            active = SFTPSubprocessTransfer(profile: profile)
+            #else
+            throw EnvFileError.transferUnavailable
+            #endif
+        }
         let tmpURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("talaria-env-\(UUID().uuidString).env")
         defer { try? FileManager.default.removeItem(at: tmpURL) }
 
         do {
-            try await snapshotTransfer.fetch(remotePath: path, to: tmpURL)
+            try await active.fetch(remotePath: path, to: tmpURL)
         } catch let error as SSHTransportError {
             // A missing remote `.env` is the "no custom vars yet" state, not a
-            // failure — match the local missing-file behavior.
-            if case let .transferFailed(message) = error,
-               message.lowercased().contains("no such file") {
-                return ""
+            // failure — match the local `readLocal` behavior (returns ""). The
+            // wording varies by transport: `cat`/OpenSSH-sftp say "No such file
+            // or directory"; some SFTP servers say "… not found." Accept both so
+            // a fresh-install host doesn't surface a persistent error banner.
+            if case let .transferFailed(message) = error {
+                let lowered = message.lowercased()
+                if lowered.contains("no such file") || lowered.contains("not found") {
+                    return ""
+                }
             }
             throw EnvFileError.readFailed(error.message)
         } catch {

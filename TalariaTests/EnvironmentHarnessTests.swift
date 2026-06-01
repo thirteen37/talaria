@@ -29,14 +29,45 @@ struct EnvironmentHarnessTests {
         let known = harness.vars.filter { $0.name == "ANTHROPIC_API_KEY" }
         #expect(known.count == 1)
         #expect(known.first?.category == "provider")
+        // …and its value is NOT un-masked from the file: it's a secret
+        // (`is_password`), so the `.env` overlay leaves it reveal-on-demand.
+        #expect(known.first?.redactedValue == nil)
 
-        // The file-only key surfaces as a synthesized custom var with a locally
-        // redacted preview and no password masking.
+        // The file-only key surfaces as a synthesized custom var with its raw
+        // value (custom vars are non-secret, so they're shown in full — no
+        // password masking).
         let custom = try #require(harness.vars.first { $0.name == "MY_CUSTOM" })
         #expect(custom.category == "custom")
         #expect(custom.isPassword == false)
         #expect(custom.isSet == true)
-        #expect(custom.redactedValue == redactEnvValue("supersecretvalue123"))
+        #expect(custom.redactedValue == "supersecretvalue123")
+        #expect(harness.lastError == nil)
+    }
+
+    @Test
+    func refreshUnmasksNonSecretKnownVarFromFile() async throws {
+        // The dashboard redacts a non-secret var whose value is short (`***`).
+        let json = Data(#"""
+        {"TELEGRAM_ALLOWED_USERS":{"is_set":true,"redacted_value":"***","description":"Allowed users.","url":null,"category":"messaging","is_password":false,"tools":[],"advanced":false}}
+        """#.utf8)
+        let http = EnvStubHTTP(responses: [
+            .init(path: "/api/env", body: json)
+        ])
+        let reader = StubEnvFileReader(result: .success([
+            EnvFileEntry(key: "TELEGRAM_ALLOWED_USERS", value: "123,456"),
+        ]))
+        let harness = EnvironmentHarness(client: makeClient(http), fileReader: reader)
+
+        await harness.refresh()
+
+        // The non-secret var is un-masked from the `.env` value, not the
+        // dashboard's `***`, so the user sees their own value with no eye toggle.
+        let v = try #require(harness.vars.first { $0.name == "TELEGRAM_ALLOWED_USERS" })
+        #expect(v.isPassword == false)
+        #expect(v.redactedValue == "123,456")
+        // It stays a known var (not re-appended as custom).
+        #expect(harness.vars.filter { $0.name == "TELEGRAM_ALLOWED_USERS" }.count == 1)
+        #expect(v.category == "messaging")
         #expect(harness.lastError == nil)
     }
 
