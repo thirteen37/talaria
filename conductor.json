@@ -1,0 +1,5 @@
+{
+  "scripts": {
+    "setup": "command -v xcodegen >/dev/null 2>&1 || brew install xcodegen; xcodegen generate"
+  }
+}
