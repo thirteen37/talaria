@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release (e.g. 1.0.0). Required."
+        description: "Version to release (e.g. 1.0). Required."
         required: true
         type: string
 
@@ -30,12 +30,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Full history required: scripts/release.sh derives
-          # CURRENT_PROJECT_VERSION from `git rev-list --count HEAD`. With the
-          # default fetch-depth=1 every CI build pins CFBundleVersion=1, which
-          # Sparkle's SUStandardVersionComparator falls back to when short
-          # versions tie — preventing users on older releases from seeing the
-          # update as an upgrade.
+          # CFBundleVersion no longer comes from git history — scripts/release.sh
+          # sets it from `date -u +%Y%m%d.%H%M`, so a shallow clone would build
+          # correctly. We keep full history only because
+          # generate_release_notes pulls the commit log for the GitHub Release
+          # body; it is not load-bearing for versioning.
           fetch-depth: 0
 
       - name: Resolve version string
@@ -189,7 +188,7 @@ jobs:
           mv build/appcast-input/appcast.xml docs/appcast.xml
 
           # generate_appcast emits bare-filename enclosure URLs (e.g.
-          # `url="Talaria-1.0.0.dmg"`). Sparkle resolves those relative to
+          # `url="Talaria-1.0.dmg"`). Sparkle resolves those relative to
           # the appcast URL (https://thirteen37.github.io/talaria/appcast.xml),
           # but the DMGs actually live on GitHub Releases at
           # https://github.com/<repo>/releases/download/v<VERSION>/...
@@ -205,7 +204,7 @@ jobs:
           def rewrite(match):
               ver = match.group(1)
               return f'url="https://github.com/{repo}/releases/download/v{ver}/Talaria-{ver}.dmg"'
-          new = re.sub(r'url="Talaria-(\d+\.\d+\.\d+(?:-[A-Za-z0-9.\-]+)?)\.dmg"', rewrite, text)
+          new = re.sub(r'url="Talaria-(\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.\-]+)?)\.dmg"', rewrite, text)
           if new == text:
               raise SystemExit("appcast had no Talaria-<VER>.dmg enclosure URLs to rewrite — refusing to ship a feed with relative URLs.")
           path.write_text(new)

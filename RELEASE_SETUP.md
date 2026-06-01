@@ -151,8 +151,8 @@ remain silent — we'd rather under-warn than nag.
 Once 1-7 are done:
 
 ```sh
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0
+git push origin v1.0
 ```
 
 The `Release` workflow will pick it up and produce a signed, notarised DMG

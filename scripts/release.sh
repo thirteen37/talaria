@@ -2,7 +2,7 @@
 # Talaria release pipeline.
 #
 #   scripts/release.sh                  # full release using ./VERSION
-#   scripts/release.sh 1.2.0            # override version
+#   scripts/release.sh 1.1              # override version
 #   scripts/release.sh --skip-notarize  # build + sign locally, skip Apple round-trip
 #
 # Required environment / setup (see RELEASE_SETUP.md):
@@ -60,7 +60,10 @@ if [[ -z "$VERSION" ]]; then
     exit 1
 fi
 
-BUILD_NUMBER="$(git -C "${REPO_ROOT}" rev-list --count HEAD 2>/dev/null || echo 1)"
+# Date-based, UTC: always monotonic, no same-day collisions, and identical
+# between CI (UTC) and local builds. CFBundleVersion permits period-separated
+# integers, and Sparkle's SUStandardVersionComparator orders these correctly.
+BUILD_NUMBER="$(date -u +%Y%m%d.%H%M)"
 
 readonly DMG_PATH="${BUILD_DIR}/${APP_NAME}-${VERSION}.dmg"
 readonly APP_PATH="${EXPORT_DIR}/${APP_NAME}.app"
@@ -208,3 +211,6 @@ log "done"
 echo "Artifacts:"
 echo "  app: ${APP_PATH}"
 echo "  dmg: ${DMG_PATH}"
+# Homebrew cask (Casks/talaria.rb) is updated by hand; print the DMG sha256 so
+# bumping the `sha256` stanza after a release is a copy-paste.
+echo "  sha256: $(shasum -a 256 "${DMG_PATH}" | awk '{print $1}')"
