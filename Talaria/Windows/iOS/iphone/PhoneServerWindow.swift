@@ -33,6 +33,10 @@ struct PhoneServerWindow: View {
     /// Hermes profiles available on the active server, enumerated after the
     /// dashboard comes online. Drives the sidebar switcher.
     @State private var hermesProfiles: [HermesProfileInfo] = []
+    /// True while the Hermes-profile list is loading, so the sidebar shows a
+    /// placeholder in the selector slot instead of popping the menu in. Cleared
+    /// once the dashboard produces an authoritative answer (success or error).
+    @State private var hermesProfilesLoading = true
 
     private var currentProfileId: UUID { activeProfileId ?? profileId }
 
@@ -70,6 +74,12 @@ struct PhoneServerWindow: View {
             guard hasClient, let harness else { return }
             Task { await loadHermesProfiles(harness: harness) }
         }
+        // Clear the loading placeholder if the dashboard fails to spawn: the
+        // client stays nil so the success path never fires, leaving the spinner
+        // up forever otherwise.
+        .onChange(of: harness?.dashboardError != nil) { _, hasError in
+            if hasError { hermesProfilesLoading = false }
+        }
         // Auto-build only when no server is active yet (the no-server empty
         // state), so saving the first server connects without a relaunch.
         .onChange(of: directory.profiles) { _, _ in
@@ -103,11 +113,17 @@ struct PhoneServerWindow: View {
     @MainActor
     private func rebuildHarness() async {
         if UITestFlags.mockServer {
+            // The mock never loads profiles and keeps a nil dashboard client, so
+            // clear the loading flag here or the placeholder would spin forever.
+            hermesProfilesLoading = false
             let previous = harness
             harness = ServerWindowHarness.makeMock()
             previous?.tearDown()
             return
         }
+        // Re-arm the loading state so each rebuild/profile-switch re-shows the
+        // placeholder until the dashboard resolves the list.
+        hermesProfilesLoading = true
         await directory.reload()
         AppLog.general.info("rebuildHarness: \(directory.profiles.count) profile(s) configured")
         let previous = harness
@@ -134,7 +150,11 @@ struct PhoneServerWindow: View {
     /// the `.onChange` below) to upgrade the list.
     @MainActor
     private func loadHermesProfiles(harness: ServerWindowHarness) async {
-        let profiles = await HermesProfiles.selectorProfiles(client: harness.dashboardClient)
+        // Capture the client before the await: only a dashboard-backed load is
+        // authoritative. The first client-less load returns default-only and
+        // must keep the placeholder up until the dashboard lands.
+        let client = harness.dashboardClient
+        let profiles = await HermesProfiles.selectorProfiles(client: client)
         // Drop a stale listing if the window rebuilt its harness (server or
         // Hermes-profile switch) while this read was in flight, so it can't
         // overwrite the active harness's profiles with the previous one's.
@@ -142,6 +162,7 @@ struct PhoneServerWindow: View {
         // keeps the server id but builds a fresh harness.
         guard self.harness === harness else { return }
         hermesProfiles = profiles
+        if client != nil { hermesProfilesLoading = false }
     }
 
     /// Re-runs the Hermes-profile listing after a Profiles mutation so the
@@ -243,7 +264,8 @@ struct PhoneServerWindow: View {
                 onSwitchProfile: switchProfile,
                 hermesProfiles: hermesProfiles,
                 activeHermesProfile: activeHermesProfile,
-                onSwitchHermesProfile: switchHermesProfile
+                onSwitchHermesProfile: switchHermesProfile,
+                isLoadingHermesProfiles: hermesProfilesLoading
             )
 
             if let error = harness.store.lastError {
