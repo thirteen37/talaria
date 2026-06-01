@@ -209,7 +209,7 @@ private struct ComparisonRowView: View {
     /// path off `working`.
     @ViewBuilder
     private var copyGutter: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 2) {
             if hovering, let sourceField = row.sourceField, let destField = row.destField {
                 let sourceValue = source.value(for: sourceField)
                 let destValue = dest.value(for: destField)
@@ -230,6 +230,7 @@ private struct ComparisonRowView: View {
             }
         }
         .buttonStyle(.borderless)
+        .imageScale(.small)
         .frame(width: copyGutterWidth)
     }
 }
