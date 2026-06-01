@@ -164,6 +164,14 @@ final class ModelsHarness {
     /// writes back into the same object — so a slug added by another window or a
     /// hand edit since the last refresh is both de-duped against and preserved.
     ///
+    /// Editing a `providers:` dict endpoint rewrites it in place. Editing a
+    /// `custom_providers:` **list** endpoint **migrates** it into the dict: the
+    /// list path in Hermes ignores a `key_env:` reference (the shape Talaria
+    /// writes to keep secrets out of config) and so skips live model discovery,
+    /// collapsing the provider to its one configured model; the dict path
+    /// resolves the key and discovers the full catalog. The stored secret in
+    /// `.env` is untouched — only the config *shape* changes.
+    ///
     /// The `api_key` field is governed by what the user did: entering a new key
     /// stores the secret in `.env` and writes the derived `${VAR}` reference
     /// (`.set`); leaving the field blank on a keyed endpoint keeps the existing
@@ -182,11 +190,44 @@ final class ModelsHarness {
             return false
         }
 
-        // A new endpoint (empty slug) lands in the `providers:` dict under a slug
-        // de-duped against the *fresh* config. An edit keeps its slug and source,
-        // so the write targets wherever the entry actually lives.
+        // Slugs already taken on disk: the displayed endpoints' slugs plus the
+        // raw `providers` keys. The raw keys matter because `list(in:)` hides a
+        // `providers.<slug>` entry that duplicates a `custom_providers` list
+        // entry — without them a fresh slug could land on that hidden key and
+        // `upsert` would overwrite it, losing its api_key/settings.
+        func takenSlugs(excludingDisplay display: String? = nil) -> [String] {
+            var taken = CustomEndpoint.list(in: fresh).map(\.slug)
+            if let display { taken.removeAll { $0 == display } }
+            if case let .object(root) = fresh, case let .object(providers) = root["providers"] {
+                taken.append(contentsOf: providers.keys)
+            }
+            return taken
+        }
+
+        func dictDraft(slug: String) -> CustomEndpoint {
+            CustomEndpoint(
+                slug: slug,
+                name: endpoint.name,
+                baseURL: endpoint.baseURL,
+                models: endpoint.models,
+                defaultModel: endpoint.defaultModel,
+                discoverModels: endpoint.discoverModels,
+                hasAPIKey: endpoint.hasAPIKey,
+                source: .providersDict(slug: slug)
+            )
+        }
+
+        // Resolve the draft we'll actually write. A new endpoint and a migrated
+        // list entry both land in the `providers:` dict under a freshly de-duped
+        // slug; `migratingFrom` is the list anchor to remove for the latter, and
+        // `oldKeyEnv` the entry's current key var so a rekey can clean up a stale
+        // app-managed one.
         let draft: CustomEndpoint
-        if endpoint.slug.isEmpty {
+        let migratingFrom: CustomEndpoint.ListAnchor?
+        var oldKeyEnv: String?
+
+        switch endpoint.source {
+        case .providersDict where endpoint.slug.isEmpty:
             // Reject an exact (name, base_url, model) duplicate up front. The new
             // entry would be written to `providers.<slug>` but `list(in:)`'s
             // list-wins dedup would hide it behind the matching `custom_providers`
@@ -200,44 +241,32 @@ final class ModelsHarness {
                 lastError = "An endpoint named “\(endpoint.name)” with that base URL already exists."
                 return false
             }
-            // De-dup the slug against the displayed slugs *and* the raw `providers`
-            // keys. The raw keys matter because `list(in:)` hides a
-            // `providers.<slug>` entry that duplicates a `custom_providers` list
-            // entry — without them a new endpoint could slugify onto that hidden
-            // key and `upsert` would overwrite it, losing its api_key/settings.
-            var taken = CustomEndpoint.list(in: fresh).map(\.slug)
-            if case let .object(root) = fresh, case let .object(providers) = root["providers"] {
-                taken.append(contentsOf: providers.keys)
-            }
-            let slug = CustomEndpoint.slug(forName: endpoint.name, existing: taken)
-            draft = CustomEndpoint(
-                slug: slug,
-                name: endpoint.name,
-                baseURL: endpoint.baseURL,
-                models: endpoint.models,
-                defaultModel: endpoint.defaultModel,
-                discoverModels: endpoint.discoverModels,
-                hasAPIKey: endpoint.hasAPIKey,
-                source: .providersDict(slug: slug)
-            )
-        } else {
+            draft = dictDraft(slug: CustomEndpoint.slug(forName: endpoint.name, existing: takenSlugs()))
+            migratingFrom = nil
+        case .providersDict:
+            // Editing an existing dict entry — keep its slug and rewrite in place.
             draft = endpoint
-        }
-
-        // For a list edit, confirm the target still exists in the fresh config
-        // *before* mutating anything. If it was removed elsewhere since the last
-        // refresh, `upsertListEntry` would re-resolve to nothing and no-op — but
-        // the sheet would still report success while a just-written key var was
-        // left orphaned. Failing up front keeps the sheet open with a real error
-        // and writes nothing. `oldKeyEnv` captures the entry's current key var so
-        // a rename (which moves the derived var name) can clean up the stale one.
-        var oldKeyEnv: String?
-        if case let .customProvidersList(anchor) = draft.source {
+            migratingFrom = nil
+        case let .customProvidersList(anchor):
+            // Confirm the target still exists *before* mutating anything. If it
+            // was removed elsewhere since the last refresh, the migration would
+            // re-resolve to nothing and no-op — but the sheet would still report
+            // success while a just-written key var was left orphaned. Failing up
+            // front keeps the sheet open with a real error and writes nothing.
             guard let entry = CustomEndpoint.listEntry(for: anchor, in: fresh) else {
                 lastError = "This endpoint no longer exists — it may have been removed in another window. Reopen the list and try again."
                 return false
             }
             oldKeyEnv = Self.listEntryKeyEnv(entry)
+            // De-dup the new dict slug against live providers keys + the *other*
+            // endpoints' display slugs; the entry's own display slug is freed by
+            // the same write that removes it from the list, so it stays available.
+            let slug = CustomEndpoint.slug(
+                forName: endpoint.name,
+                existing: takenSlugs(excludingDisplay: endpoint.slug)
+            )
+            draft = dictDraft(slug: slug)
+            migratingFrom = anchor
         }
 
         let action: CustomEndpoint.APIKeyWrite =
@@ -249,17 +278,16 @@ final class ModelsHarness {
                 try await $0.setEnvVar(key: newVarName, value: newKey)
             }
             let updated: JSONValue
-            switch draft.source {
-            case .providersDict:
+            if let anchor = migratingFrom {
+                updated = CustomEndpoint.migrateListEntryToDict(draft, apiKey: action, from: anchor, in: fresh)
+            } else {
                 updated = CustomEndpoint.upsert(draft, apiKey: action, in: fresh)
-            case let .customProvidersList(anchor):
-                updated = CustomEndpoint.upsertListEntry(draft, apiKey: action, anchor: anchor, in: fresh)
             }
             try await $0.updateConfig(updated)
-            // Renaming a list entry moves its derived var name; delete the stale
-            // app-managed one so a rekey-on-rename doesn't orphan a secret (the
-            // dict path never orphans, its slug being stable). Best-effort, and
-            // never a user's own/shared var.
+            // A rekey under a new derived var (migrating a list entry whose key
+            // var doesn't match the new slug, or renaming) can orphan the old
+            // app-managed var; delete it. Best-effort, and never a user's
+            // own/shared var.
             if action == .set,
                let oldVar = oldKeyEnv,
                oldVar != newVarName,

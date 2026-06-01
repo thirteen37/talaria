@@ -255,11 +255,14 @@ struct ModelsHarnessEndpointTests {
     // MARK: - custom_providers list-path endpoints
 
     @Test
-    func editListEndpointUpdatesListElementInPlaceWithNoProvidersDict() async throws {
-        // Editing an endpoint that lives in `custom_providers:` must rewrite that
-        // list element in place — never create a `providers.<slug>` duplicate —
-        // and preserve sibling keys (here `model_aliases`) + unmodeled per-entry
-        // keys (here `api_mode`).
+    func editListEndpointMigratesItIntoTheProvidersDict() async throws {
+        // Editing an endpoint that lives in `custom_providers:` migrates it into
+        // the `providers:` dict (so Hermes resolves its key and discovers the
+        // full model catalog) rather than rewriting the list element in place.
+        // The list element is dropped, a `providers.<slug>` entry appears,
+        // sibling top-level keys (here `model_aliases`) and unmodeled per-entry
+        // keys (here `api_mode`) survive, and a blank key field carries the
+        // existing key forward in a dict-resolvable form.
         let http = StatusStubHTTP(responses: [
             .init(path: "/api/config", body: Data(#"""
             {"model_aliases":{"x":"y"},"custom_providers":[{"name":"My LLM","base_url":"https://old/v1","api_mode":"chat_completions","api_key":"sk-literal"}]}
@@ -287,16 +290,19 @@ struct ModelsHarnessEndpointTests {
         let body = try #require(put.httpBody)
         let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         let config = try #require(json["config"] as? [String: Any])
-        // No providers dict was created.
-        #expect(config["providers"] == nil)
         // Sibling top-level key preserved.
         #expect((config["model_aliases"] as? [String: Any])?["x"] as? String == "y")
+        // The list element is gone (the list is now empty).
         let list = try #require(config["custom_providers"] as? [[String: Any]])
-        #expect(list.count == 1)
-        #expect(list[0]["base_url"] as? String == "https://new/v1")
-        // Unmodeled per-entry key preserved; blank key field keeps the literal.
-        #expect(list[0]["api_mode"] as? String == "chat_completions")
-        #expect(list[0]["api_key"] as? String == "sk-literal")
+        #expect(list.isEmpty)
+        // The entry now lives under providers.<slug> with its edited fields.
+        let providers = try #require(config["providers"] as? [String: Any])
+        let migrated = try #require(providers["my-llm"] as? [String: Any])
+        #expect(migrated["base_url"] as? String == "https://new/v1")
+        // Unmodeled per-entry key preserved; blank key field carries the literal
+        // forward (the dict path resolves it).
+        #expect(migrated["api_mode"] as? String == "chat_completions")
+        #expect(migrated["api_key"] as? String == "sk-literal")
     }
 
     @Test
@@ -329,11 +335,11 @@ struct ModelsHarnessEndpointTests {
     }
 
     @Test
-    func editListEndpointRenameWithNewKeyDeletesTheOrphanedOldVar() async throws {
-        // The entry references HERMES_CUSTOM_OLD_API_KEY, but the endpoint's slug
-        // has drifted to "new" (the name changed in a prior edit). Setting a new
-        // key writes under the new derived var and deletes the stale app-managed
-        // old one, matching the dict path's no-orphan behavior.
+    func editListEndpointWithNewKeyDeletesTheOrphanedOldVarOnMigration() async throws {
+        // The entry references the app-managed HERMES_CUSTOM_OLD_API_KEY. Setting
+        // a new key migrates it into the dict under a freshly derived var (from
+        // the name "New Name" → HERMES_CUSTOM_NEW_NAME_API_KEY) and deletes the
+        // stale app-managed old one, matching the dict path's no-orphan behavior.
         let http = StatusStubHTTP(responses: [
             .init(path: "/api/config", body: Data(#"""
             {"custom_providers":[{"name":"New Name","base_url":"https://host/v1","key_env":"HERMES_CUSTOM_OLD_API_KEY"}]}
@@ -347,7 +353,7 @@ struct ModelsHarnessEndpointTests {
         ])
         let harness = ModelsHarness(client: makeClient(http))
         let edited = CustomEndpoint(
-            slug: "new", name: "New Name", baseURL: "https://host/v1",
+            slug: "new-name", name: "New Name", baseURL: "https://host/v1",
             models: [], defaultModel: nil, discoverModels: true, hasAPIKey: true,
             source: .customProvidersList(
                 .init(index: 0, name: "New Name", baseURL: "https://host/v1", defaultModel: nil)
@@ -361,19 +367,30 @@ struct ModelsHarnessEndpointTests {
         let put = try #require(envReqs.first { $0.httpMethod == "PUT" })
         let putData = try #require(put.httpBody)
         let putBody = try #require(try JSONSerialization.jsonObject(with: putData) as? [String: Any])
-        #expect(putBody["key"] as? String == "HERMES_CUSTOM_NEW_API_KEY")
+        #expect(putBody["key"] as? String == "HERMES_CUSTOM_NEW_NAME_API_KEY")
         #expect(putBody["value"] as? String == "sk-new")
         let del = try #require(envReqs.first { $0.httpMethod == "DELETE" })
         let delData = try #require(del.httpBody)
         let delBody = try #require(try JSONSerialization.jsonObject(with: delData) as? [String: Any])
         #expect(delBody["key"] as? String == "HERMES_CUSTOM_OLD_API_KEY")
+
+        // The migrated dict entry references the new derived var, not the old one.
+        let put2 = try #require(http.recordedRequests.first {
+            $0.httpMethod == "PUT" && $0.url?.path == "/api/config"
+        })
+        let cfgData = try #require(put2.httpBody)
+        let cfg = try #require(try JSONSerialization.jsonObject(with: cfgData) as? [String: Any])
+        let providers = try #require((cfg["config"] as? [String: Any])?["providers"] as? [String: Any])
+        let migrated = try #require(providers["new-name"] as? [String: Any])
+        #expect(migrated["api_key"] as? String == "${HERMES_CUSTOM_NEW_NAME_API_KEY}")
     }
 
     @Test
-    func editListEndpointWithNewKeyWritesEnvVarAndKeyEnvStrippingLiteral() async throws {
-        // Entering a new key for a list endpoint stores the secret in `.env`
-        // under the derived var and writes a `key_env:` reference, dropping the
-        // literal `api_key` so the secret never lands in config.
+    func editListEndpointWithNewKeyMigratesAndWritesDerivedRefStrippingLiteral() async throws {
+        // Entering a new key while editing a list endpoint stores the secret in
+        // `.env` under the derived var and migrates the entry into the dict with
+        // an `api_key: ${derived-var}` reference, dropping the old literal so the
+        // secret never lands in config.
         let http = StatusStubHTTP(responses: [
             .init(path: "/api/config", body: Data(#"""
             {"custom_providers":[{"name":"My LLM","base_url":"https://host/v1","api_key":"sk-old-literal"}]}
@@ -410,9 +427,14 @@ struct ModelsHarnessEndpointTests {
         })
         let putData = try #require(put.httpBody)
         let json = try #require(try JSONSerialization.jsonObject(with: putData) as? [String: Any])
-        let list = try #require((json["config"] as? [String: Any])?["custom_providers"] as? [[String: Any]])
-        #expect(list[0]["key_env"] as? String == "HERMES_CUSTOM_MY_LLM_API_KEY")
-        #expect(list[0]["api_key"] == nil)
+        let config = try #require(json["config"] as? [String: Any])
+        // Migrated out of the list into the dict.
+        let list = try #require(config["custom_providers"] as? [[String: Any]])
+        #expect(list.isEmpty)
+        let providers = try #require(config["providers"] as? [String: Any])
+        let migrated = try #require(providers["my-llm"] as? [String: Any])
+        #expect(migrated["api_key"] as? String == "${HERMES_CUSTOM_MY_LLM_API_KEY}")
+        #expect(migrated["key_env"] == nil)
     }
 
     @Test

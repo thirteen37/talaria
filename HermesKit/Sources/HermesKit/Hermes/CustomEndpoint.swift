@@ -318,7 +318,11 @@ public struct CustomEndpoint: Equatable, Sendable, Identifiable {
     }
 
     /// Rewrites the `custom_providers` element identified by `anchor` in place
-    /// from `endpoint`, preserving keys the app doesn't model (`api_mode`,
+    /// from `endpoint`. **Note:** the app's save path no longer edits list
+    /// entries in place — it migrates them into the `providers:` dict via
+    /// ``migrateListEntryToDict(_:apiKey:from:in:)`` so Hermes resolves their key
+    /// and discovers the full model catalog. This in-place rewriter is kept as a
+    /// tested utility. It preserves keys the app doesn't model (`api_mode`,
     /// `rate_limit_delay`, `extra_body`, per-model overrides for kept models, …)
     /// and **not** creating a `providers.<slug>` entry. The element is re-found
     /// by its original content against the freshly-fetched config (the position
@@ -392,6 +396,92 @@ public struct CustomEndpoint: Equatable, Sendable, Identifiable {
         list[index] = .object(entry)
         root["custom_providers"] = .array(list)
         return .object(root)
+    }
+
+    /// Migrates the `custom_providers` element identified by `anchor` into a
+    /// `providers.<endpoint.slug>` dict entry in one atomic transform: the list
+    /// element is removed and the dict entry written in the same returned config,
+    /// so the removal and the new entry land in a single `PUT` (and `list(in:)`'s
+    /// list-wins dedup can't hide the migrated result behind the entry being
+    /// removed).
+    ///
+    /// Why migrate at all: Hermes' `custom_providers` list path reads only a
+    /// literal `api_key` and ignores a `key_env:` reference — so a list entry
+    /// keyed by `key_env` (the shape Talaria writes to keep secrets out of
+    /// config) skips live `/models` discovery and collapses to its single
+    /// configured model. The `providers:` dict path resolves both `api_key: ${VAR}`
+    /// and `key_env:`, so moving the entry there restores full discovery. The
+    /// stored secret in `.env` does **not** move; only the config *shape* changes.
+    ///
+    /// The new dict entry is seeded from the found list element so unmodeled
+    /// per-entry keys (`api_mode`, `extra_body`, per-model overrides, …) survive,
+    /// then the modeled fields and the API key are written by reusing ``upsert``.
+    /// The `apiKey` action governs the key — see ``APIKeyWrite``:
+    /// - `.set` → `upsert` writes the derived `${HERMES_CUSTOM_<slug>_API_KEY}`
+    ///   reference (the secret is stored under that var by the caller).
+    /// - `.keep` → the list element's current key reference is carried forward as
+    ///   an `api_key` value the dict path can resolve: `key_env`/`api_key_env: V`
+    ///   becomes `api_key: ${V}`; a literal (or existing `${VAR}`) `api_key` is
+    ///   carried verbatim. The secret does not move.
+    /// - `.remove` → no key is written.
+    ///
+    /// The element is re-found by content against the freshly-fetched config (the
+    /// anchored position is only a tiebreaker). When the original element is gone
+    /// (deleted elsewhere since the read) the config is returned untouched rather
+    /// than materializing a dict entry from nothing.
+    public static func migrateListEntryToDict(
+        _ endpoint: CustomEndpoint,
+        apiKey action: APIKeyWrite,
+        from anchor: ListAnchor,
+        in config: JSONValue
+    ) -> JSONValue {
+        // Read the element before removing it; if it's gone, leave config alone.
+        guard let found = listEntry(for: anchor, in: config) else { return config }
+        guard case var .object(root) = removeListEntry(anchor: anchor, from: config) else {
+            return config
+        }
+        var providers: [String: JSONValue]
+        if case let .object(object) = root["providers"] { providers = object } else { providers = [:] }
+
+        // Seed the dict entry from the list element so unmodeled keys survive,
+        // dropping the URL/model aliases (`upsert` canonicalizes onto
+        // `base_url`/`model` but doesn't strip the aliases) and the list-form key
+        // references (`key_env`/`api_key_env`, which the dict path doesn't use).
+        var seed = found
+        seed.removeValue(forKey: "url")
+        seed.removeValue(forKey: "api")
+        seed.removeValue(forKey: "default_model")
+        seed.removeValue(forKey: "key_env")
+        seed.removeValue(forKey: "api_key_env")
+        switch action {
+        case .keep:
+            // Carry the existing key forward in a form the dict path resolves, so
+            // `upsert(.keep)` (which leaves api_key untouched) preserves it.
+            if let carried = carriedKeyReference(found) {
+                seed["api_key"] = .string(carried)
+            } else {
+                seed.removeValue(forKey: "api_key")
+            }
+        case .set, .remove:
+            // `upsert` owns api_key here (writes the derived ref / removes it).
+            seed.removeValue(forKey: "api_key")
+        }
+
+        providers[endpoint.slug] = .object(seed)
+        root["providers"] = .object(providers)
+        return upsert(endpoint, apiKey: action, in: .object(root))
+    }
+
+    /// The key reference a `custom_providers` element carries, normalized to a
+    /// value the `providers:` dict path resolves: a `key_env`/`api_key_env: V`
+    /// becomes `${V}`; a literal or `${VAR}` `api_key` is returned verbatim. Nil
+    /// when the element has no key. `key_env` wins over `api_key_env` wins over a
+    /// literal `api_key`, matching how the entry's key is otherwise read.
+    private static func carriedKeyReference(_ entry: [String: JSONValue]) -> String? {
+        if case let .string(value) = entry["key_env"], !value.isEmpty { return "${\(value)}" }
+        if case let .string(value) = entry["api_key_env"], !value.isEmpty { return "${\(value)}" }
+        if case let .string(value) = entry["api_key"], !value.isEmpty { return value }
+        return nil
     }
 
     /// Removes the `custom_providers` element identified by `anchor`, re-resolved
