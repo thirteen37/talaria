@@ -21,6 +21,8 @@ struct SettingsTabs: View {
                 .tabItem { Label("Server Profiles", systemImage: "server.rack") }
             sidebarOrderTab
                 .tabItem { Label("Sidebar Order", systemImage: "sidebar.left") }
+            notificationsTab
+                .tabItem { Label("Notifications", systemImage: "bell") }
         }
     }
 
@@ -46,6 +48,17 @@ struct SettingsTabs: View {
         SidebarCustomizeView(onDismiss: onDismiss)
         #else
         SidebarCustomizeView(onDismiss: onDismiss)
+            .settingsTabFrame()
+            .navigationTitle("Settings")
+        #endif
+    }
+
+    @ViewBuilder
+    private var notificationsTab: some View {
+        #if os(iOS)
+        NotificationsSettingsView(onDismiss: onDismiss)
+        #else
+        NotificationsSettingsView(onDismiss: onDismiss)
             .settingsTabFrame()
             .navigationTitle("Settings")
         #endif

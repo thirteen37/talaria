@@ -79,7 +79,9 @@ extension ServerWindowHarness {
             manager: manager,
             adminRunner: adminRunner,
             tuiSpecFactory: tuiSpecFactory,
-            onCloseTUI: { tabId in HermesTerminalRegistry.shared.terminate(tabId) }
+            onCloseTUI: { tabId in HermesTerminalRegistry.shared.terminate(tabId) },
+            profileId: profile.id,
+            notifier: ChatNotifier.shared
         )
         return ServerWindowHarness(store: store, profile: profile, hermesProfileName: hermesProfileName)
     }
@@ -180,7 +182,9 @@ extension ServerWindowHarness {
             // fingerprint comparison doesn't tear down the pending connection.
             isAwaitingUserInput: { hostKeyCoordinator.pending != nil },
             tuiSpecFactory: tuiSpecFactory,
-            onCloseTUI: { tabId in HermesTerminalRegistry.shared.terminate(tabId) }
+            onCloseTUI: { tabId in HermesTerminalRegistry.shared.terminate(tabId) },
+            profileId: profile.id,
+            notifier: ChatNotifier.shared
         )
         return ServerWindowHarness(
             store: store,

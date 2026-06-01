@@ -10,6 +10,7 @@ struct PhoneServerWindow: View {
     @Environment(ProfileDirectory.self) private var directory
     @Environment(RecentServers.self) private var recents
     @Environment(SidebarLayout.self) private var sidebarLayout
+    @Environment(NotificationSettings.self) private var notificationSettings
     @State private var harness: ServerWindowHarness?
     @State private var showingSettings = false
     @State private var showingAllSessions = false
@@ -92,6 +93,7 @@ struct PhoneServerWindow: View {
             SettingsTabs(onDismiss: { showingSettings = false })
                 .environment(directory)
                 .environment(sidebarLayout)
+                .environment(notificationSettings)
         }
         .onDisappear {
             harness?.tearDown()
@@ -241,6 +243,9 @@ struct PhoneServerWindow: View {
                 + "Trust and remember this server? Only do this if the fingerprint matches your server."
             )
         }
+        // Track this window's foreground state (to gate notifications) and
+        // consume a tapped-notification route addressed to this profile.
+        .chatNotificationRouting(store: harness.store, profileId: harness.profile.id)
     }
 
     @ViewBuilder

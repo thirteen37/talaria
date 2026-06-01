@@ -189,6 +189,12 @@ final class LocalChatViewModel {
             do {
                 let response = try await client.prompt(sessionId: id, content: text)
                 self?.statusText = "Stopped: \(response.stopReason.rawValue)"
+                // Only the success branch is a real turn completion —
+                // cancellation and errors take the catch paths below — so notify
+                // here (gated by the store's policy + foreground/selection).
+                if let self {
+                    self.store?.handleTurnCompleted(id: id, title: self.title)
+                }
             } catch is CancellationError {
                 self?.statusText = "Cancelled"
             } catch {
