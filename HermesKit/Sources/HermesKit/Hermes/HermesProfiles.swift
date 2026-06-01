@@ -101,9 +101,10 @@ public enum HermesProfiles {
     /// CLI `profile list` table (whose default-marker glyph would otherwise leak
     /// into the menu — the bug this path replaces).
     ///
-    /// Returns a default-only list (so the switcher stays hidden) when the
-    /// dashboard client isn't online yet or the call fails. The caller re-runs
-    /// this once `dashboardClient` becomes available to upgrade to the live list.
+    /// Returns a default-only list when the dashboard client isn't online yet or
+    /// the call fails — the switcher then shows a `default`-only menu. The caller
+    /// re-runs this once `dashboardClient` becomes available to upgrade to the
+    /// live list.
     public static func selectorProfiles(client: DashboardClient?) async -> [HermesProfileInfo] {
         guard let client else { return defaultOnly }
         do {
@@ -115,8 +116,9 @@ public enum HermesProfiles {
         }
     }
 
-    /// The default-only state for the switcher: a single `default` row, which the
-    /// sidebar treats as "nothing to switch to" and hides.
+    /// The default-only state for the switcher: a single `default` row, used
+    /// while the dashboard isn't online yet or after a failed read. The sidebar
+    /// shows it as a `default`-only menu.
     private static var defaultOnly: [HermesProfileInfo] {
         [HermesProfileInfo(name: defaultProfileName, isDefault: true, status: nil)]
     }

@@ -11,6 +11,9 @@ struct SessionsSidebar: View {
     /// The window's active Hermes profile name.
     let activeHermesProfile: String
     let onSwitchHermesProfile: (String) -> Void
+    /// Whether the Hermes-profile list is still loading. Drives a placeholder
+    /// row in the selector slot so it resolves in place rather than popping in.
+    let isLoadingHermesProfiles: Bool
 
     @State private var renameTarget: SessionsStore.OpenSession?
     @State private var renameText: String = ""
@@ -23,7 +26,8 @@ struct SessionsSidebar: View {
         onSwitchProfile: @escaping (UUID) -> Void = { _ in },
         hermesProfiles: [HermesProfileInfo] = [],
         activeHermesProfile: String = HermesProfiles.defaultProfileName,
-        onSwitchHermesProfile: @escaping (String) -> Void = { _ in }
+        onSwitchHermesProfile: @escaping (String) -> Void = { _ in },
+        isLoadingHermesProfiles: Bool = false
     ) {
         self.store = store
         self.profile = profile
@@ -32,6 +36,7 @@ struct SessionsSidebar: View {
         self.hermesProfiles = hermesProfiles
         self.activeHermesProfile = activeHermesProfile
         self.onSwitchHermesProfile = onSwitchHermesProfile
+        self.isLoadingHermesProfiles = isLoadingHermesProfiles
     }
 
     var body: some View {
@@ -45,9 +50,19 @@ struct SessionsSidebar: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 // Second stacked menu: the window's active Hermes profile.
-                // Hidden when only `default` exists (nothing to switch to) to
-                // keep the sidebar uncluttered for the common single-profile case.
-                if hermesProfiles.count > 1 {
+                // While the list is loading, hold the slot with a placeholder
+                // row; once resolved it swaps to the selector in place — even
+                // for a single (`default`-only) row — so the slot never appears
+                // and then vanishes. A not-yet-online or failed dashboard also
+                // resolves to that `default`-only row (see
+                // `HermesProfiles.selectorProfiles`), so failure shows a
+                // `default`-only menu rather than going empty. The empty branch
+                // is defensive: the profile source always yields at least
+                // `default`.
+                if isLoadingHermesProfiles {
+                    HermesProfileLoadingRow()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if !hermesProfiles.isEmpty {
                     HermesProfileHeader(
                         active: activeHermesProfile,
                         profiles: hermesProfiles,
@@ -284,6 +299,27 @@ struct SessionsSidebar: View {
             .menuIndicator(.hidden)
             .fixedSize(horizontal: false, vertical: true)
             .onHover { isHovering = $0 }
+        }
+    }
+
+    /// Placeholder shown in the Hermes-profile selector slot while the list is
+    /// loading. Styled to match `HermesProfileHeader` (same padding/leading icon
+    /// slot) so the swap to the resolved menu doesn't shift layout. Reuses the
+    /// "Connecting…" spinner styling from the New-session row above.
+    private struct HermesProfileLoadingRow: View {
+        var body: some View {
+            HStack(spacing: 4) {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 16, height: 16)
+                Text("Profile: …")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
         }
     }
 
