@@ -656,4 +656,237 @@ struct CustomEndpointTests {
         let updated = CustomEndpoint.removeListEntry(anchor: anchor, from: config)
         #expect(updated == config)
     }
+
+    // MARK: - migrateListEntryToDict
+
+    @Test
+    func migrateListEntryWithKeyEnvProducesResolvableDictAndRemovesListElement() {
+        // The bug case: a `custom_providers` entry keyed by `key_env` (so the
+        // list path skips discovery). Migrating moves it to `providers.<slug>`
+        // with `api_key: ${that-var}` — which the dict path resolves — and drops
+        // the now-empty list element.
+        let config = JSONValue.object([
+            "custom_providers": .array([
+                .object([
+                    "name": .string("Binky"),
+                    "base_url": .string("https://binky/v1"),
+                    "key_env": .string("HERMES_CUSTOM_BINKY_API_KEY"),
+                    "model": .string("high"),
+                ]),
+            ]),
+        ])
+        let anchor = CustomEndpoint.ListAnchor(
+            index: 0, name: "Binky", baseURL: "https://binky/v1", defaultModel: "high"
+        )
+        let endpoint = CustomEndpoint(
+            slug: "binky", name: "Binky", baseURL: "https://binky/v1",
+            models: [], defaultModel: "high", discoverModels: true, hasAPIKey: true,
+            source: .providersDict(slug: "binky")
+        )
+
+        let updated = CustomEndpoint.migrateListEntryToDict(endpoint, apiKey: .keep, from: anchor, in: config)
+
+        guard case let .object(root) = updated else { Issue.record("expected object"); return }
+        // The list element is gone (the list is now empty).
+        if case let .array(list) = root["custom_providers"] { #expect(list.isEmpty) }
+        guard case let .object(providers) = root["providers"],
+              case let .object(entry) = providers["binky"] else {
+            Issue.record("expected providers.binky"); return
+        }
+        // key_env carried forward as a dict-resolvable ${VAR}; the list-form key
+        // field is dropped.
+        #expect(entry["api_key"] == .string("${HERMES_CUSTOM_BINKY_API_KEY}"))
+        #expect(entry["key_env"] == nil)
+        #expect(entry["name"] == .string("Binky"))
+        #expect(entry["base_url"] == .string("https://binky/v1"))
+        #expect(entry["model"] == .string("high"))
+        #expect(entry["discover_models"] == .bool(true))
+        // Re-reading the migrated config surfaces a single dict-sourced, keyed
+        // endpoint — no list duplicate hiding it.
+        let endpoints = CustomEndpoint.list(in: updated)
+        #expect(endpoints.count == 1)
+        #expect(endpoints.first?.source == .providersDict(slug: "binky"))
+        #expect(endpoints.first?.hasAPIKey == true)
+    }
+
+    @Test
+    func migrateListEntryCarriesLiteralKeyForwardOnKeep() {
+        let config = JSONValue.object([
+            "custom_providers": .array([
+                .object([
+                    "name": .string("Lit"),
+                    "base_url": .string("https://lit/v1"),
+                    "api_key": .string("sk-literal"),
+                ]),
+            ]),
+        ])
+        let anchor = CustomEndpoint.ListAnchor(
+            index: 0, name: "Lit", baseURL: "https://lit/v1", defaultModel: nil
+        )
+        let endpoint = CustomEndpoint(
+            slug: "lit", name: "Lit", baseURL: "https://lit/v1",
+            models: [], defaultModel: nil, discoverModels: true, hasAPIKey: true,
+            source: .providersDict(slug: "lit")
+        )
+
+        let updated = CustomEndpoint.migrateListEntryToDict(endpoint, apiKey: .keep, from: anchor, in: config)
+
+        guard case let .object(root) = updated,
+              case let .object(providers) = root["providers"],
+              case let .object(entry) = providers["lit"] else {
+            Issue.record("expected providers.lit"); return
+        }
+        // The literal (already worked for discovery from `hermes model`) carries
+        // forward verbatim — the secret does not move.
+        #expect(entry["api_key"] == .string("sk-literal"))
+    }
+
+    @Test
+    func migrateListEntrySetWritesDerivedRefAndStripsListKeyFields() {
+        // A fresh key flips api_key to the derived ${VAR}; any stale list-form key
+        // fields are stripped so none can shadow it.
+        let config = JSONValue.object([
+            "custom_providers": .array([
+                .object([
+                    "name": .string("My LLM"),
+                    "base_url": .string("https://host/v1"),
+                    "api_key": .string("sk-old"),
+                    "api_key_env": .string("MY_OLD_VAR"),
+                    "key_env": .string("HERMES_CUSTOM_OLD_API_KEY"),
+                ]),
+            ]),
+        ])
+        let anchor = CustomEndpoint.ListAnchor(
+            index: 0, name: "My LLM", baseURL: "https://host/v1", defaultModel: nil
+        )
+        let endpoint = CustomEndpoint(
+            slug: "my-llm", name: "My LLM", baseURL: "https://host/v1",
+            models: [], defaultModel: nil, discoverModels: true, hasAPIKey: true,
+            source: .providersDict(slug: "my-llm")
+        )
+
+        let updated = CustomEndpoint.migrateListEntryToDict(endpoint, apiKey: .set, from: anchor, in: config)
+
+        guard case let .object(root) = updated,
+              case let .object(providers) = root["providers"],
+              case let .object(entry) = providers["my-llm"] else {
+            Issue.record("expected providers.my-llm"); return
+        }
+        #expect(entry["api_key"] == .string("${HERMES_CUSTOM_MY_LLM_API_KEY}"))
+        #expect(entry["key_env"] == nil)
+        #expect(entry["api_key_env"] == nil)
+    }
+
+    @Test
+    func migrateListEntryRemoveOmitsKey() {
+        let config = JSONValue.object([
+            "custom_providers": .array([
+                .object([
+                    "name": .string("NoKey"),
+                    "base_url": .string("https://nokey/v1"),
+                    "api_key": .string("sk-old"),
+                ]),
+            ]),
+        ])
+        let anchor = CustomEndpoint.ListAnchor(
+            index: 0, name: "NoKey", baseURL: "https://nokey/v1", defaultModel: nil
+        )
+        let endpoint = CustomEndpoint(
+            slug: "nokey", name: "NoKey", baseURL: "https://nokey/v1",
+            models: [], defaultModel: nil, discoverModels: true, hasAPIKey: false,
+            source: .providersDict(slug: "nokey")
+        )
+
+        let updated = CustomEndpoint.migrateListEntryToDict(endpoint, apiKey: .remove, from: anchor, in: config)
+
+        guard case let .object(root) = updated,
+              case let .object(providers) = root["providers"],
+              case let .object(entry) = providers["nokey"] else {
+            Issue.record("expected providers.nokey"); return
+        }
+        #expect(entry["api_key"] == nil)
+        #expect(entry["key_env"] == nil)
+        #expect(entry["api_key_env"] == nil)
+    }
+
+    @Test
+    func migrateListEntryPreservesUnmodeledKeysDropsAliasesKeepsSiblings() {
+        let config = JSONValue.object([
+            "custom_providers": .array([
+                .object([
+                    "name": .string("My LLM"),
+                    "api": .string("https://old/v1"),               // URL alias
+                    "default_model": .string("old-model"),          // model alias
+                    "api_mode": .string("chat_completions"),        // unmodeled
+                    "extra_body": .object(["foo": .string("bar")]), // unmodeled
+                    "key_env": .string("HERMES_CUSTOM_MY_LLM_API_KEY"),
+                    "models": .object([
+                        "keep": .object(["context_length": .number(8192)]),
+                        "drop": .object([:]),
+                    ]),
+                ]),
+            ]),
+            "providers": .object([
+                "sibling": .object(["name": .string("Sibling")]),
+            ]),
+        ])
+        let anchor = CustomEndpoint.ListAnchor(
+            index: 0, name: "My LLM", baseURL: "https://old/v1", defaultModel: "old-model"
+        )
+        let endpoint = CustomEndpoint(
+            slug: "my-llm", name: "My LLM", baseURL: "https://new/v1",
+            models: ["keep", "added"], defaultModel: "new-model", discoverModels: false, hasAPIKey: true,
+            source: .providersDict(slug: "my-llm")
+        )
+
+        let updated = CustomEndpoint.migrateListEntryToDict(endpoint, apiKey: .keep, from: anchor, in: config)
+
+        guard case let .object(root) = updated,
+              case let .object(providers) = root["providers"],
+              case let .object(entry) = providers["my-llm"] else {
+            Issue.record("expected providers.my-llm"); return
+        }
+        // Sibling dict provider untouched.
+        #expect(providers["sibling"] != nil)
+        // Modeled fields canonicalized onto base_url/model.
+        #expect(entry["base_url"] == .string("https://new/v1"))
+        #expect(entry["model"] == .string("new-model"))
+        #expect(entry["discover_models"] == .bool(false))
+        // URL/model aliases dropped (single source of truth in the dict).
+        #expect(entry["api"] == nil)
+        #expect(entry["default_model"] == nil)
+        // Unmodeled per-entry keys survive.
+        #expect(entry["api_mode"] == .string("chat_completions"))
+        #expect(entry["extra_body"] == .object(["foo": .string("bar")]))
+        // Key carried forward; list-form reference dropped.
+        #expect(entry["api_key"] == .string("${HERMES_CUSTOM_MY_LLM_API_KEY}"))
+        #expect(entry["key_env"] == nil)
+        // Models: kept override preserved, removed gone, added empty.
+        guard case let .object(models) = entry["models"] else { Issue.record("expected models"); return }
+        #expect(models["keep"] == .object(["context_length": .number(8192)]))
+        #expect(models["drop"] == nil)
+        #expect(models["added"] == .object([:]))
+    }
+
+    @Test
+    func migrateListEntryIsNoOpWhenOriginalElementIsGone() {
+        // Deleted elsewhere since the read: don't materialize a dict entry from
+        // nothing — leave the config (and the unrelated sibling) untouched.
+        let config = JSONValue.object([
+            "custom_providers": .array([
+                .object(["name": .string("Unrelated"), "base_url": .string("https://other/v1")]),
+            ]),
+        ])
+        let anchor = CustomEndpoint.ListAnchor(
+            index: 0, name: "Gone", baseURL: "https://gone/v1", defaultModel: nil
+        )
+        let endpoint = CustomEndpoint(
+            slug: "gone", name: "Gone", baseURL: "https://edited/v1",
+            models: [], defaultModel: nil, discoverModels: true, hasAPIKey: false,
+            source: .providersDict(slug: "gone")
+        )
+
+        let updated = CustomEndpoint.migrateListEntryToDict(endpoint, apiKey: .remove, from: anchor, in: config)
+        #expect(updated == config)
+    }
 }
