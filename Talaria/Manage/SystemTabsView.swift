@@ -7,8 +7,7 @@ import SwiftUI
 /// `.navigationTitle`, so the detail title tracks the active tab.
 struct SystemTabsView: View {
     let harness: ServerWindowHarness
-    /// Deep-link / default lands on Doctor (matching the `.doctorFailure`
-    /// notification's "Open Doctor" action).
+    /// Defaults to the Doctor tab — the most actionable of the three surfaces.
     @State private var selection: Tab = .doctor
 
     enum Tab { case doctor, updates, logs }

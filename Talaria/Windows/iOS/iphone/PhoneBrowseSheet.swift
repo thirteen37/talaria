@@ -66,10 +66,7 @@ struct PhoneBrowseSheet: View {
                     destination: destination,
                     hermesProfiles: hermesProfiles,
                     activeHermesProfile: activeHermesProfile,
-                    onProfilesChanged: onProfilesChanged,
-                    // Keep deep links inside this sheet's stack (e.g. a
-                    // notification's "Open Doctor" pushes Doctor here).
-                    onOpenDestination: { dest in path.append(dest) }
+                    onProfilesChanged: onProfilesChanged
                 )
             }
             .toolbar {

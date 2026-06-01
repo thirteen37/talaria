@@ -157,7 +157,6 @@ extension ServerWindowHarness {
                 self.dashboardSupervisor = nil
             }
         }
-        notifications.stop()
         doctor.cancelRun()
         updates?.cancelApply()
         updates = nil

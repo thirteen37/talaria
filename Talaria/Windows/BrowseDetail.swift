@@ -17,10 +17,6 @@ struct BrowseDetailView: View {
     /// Invoked after a Profiles mutation so the window refreshes its sidebar
     /// switcher and reconciles the active profile if it was renamed/deleted.
     var onProfilesChanged: () -> Void = {}
-    /// Lets `NotificationsView` deep-link into another destination (e.g. "Open
-    /// Doctor"). Desktop points this at its `browse` selection; the iPhone sheet
-    /// pushes onto its navigation path.
-    var onOpenDestination: (BrowseDestination) -> Void = { _ in }
 
     var body: some View {
         switch destination {
@@ -68,8 +64,6 @@ struct BrowseDetailView: View {
             )
         case .system:
             SystemTabsView(harness: harness)
-        case .notifications:
-            NotificationsView(center: harness.notifications, onOpenDestination: onOpenDestination)
         }
     }
 }

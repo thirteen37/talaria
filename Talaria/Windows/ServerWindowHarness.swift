@@ -31,10 +31,6 @@ final class ServerWindowHarness {
     /// Drives the trust-on-first-use prompt for unknown SSH host keys. Always
     /// present for SSH profiles; nil for the bundled local profile.
     let hostKeyCoordinator: HostKeyConfirmationCoordinator?
-    /// Aggregates cross-cutting issues (update available, doctor failure)
-    /// for the bell + notifications detail page. Built once per harness;
-    /// cancelled in `tearDown()`.
-    let notifications: WindowNotificationCenter
     /// Doctor run state. Window-owned (not view-owned) so a "Run Doctor"
     /// capture survives Browse navigation that destroys `DoctorView`. Built in
     /// `init` because its dependency (`store.adminRunner`) is ready then.
@@ -75,8 +71,6 @@ final class ServerWindowHarness {
         self.hermesProfileName = hermesProfileName
         self.snapshotTransfer = snapshotTransfer
         self.hostKeyCoordinator = hostKeyCoordinator
-        self.notifications = WindowNotificationCenter(adminRunner: store.adminRunner)
-        self.notifications.start()
         self.doctor = DoctorHarness(runner: store.adminRunner)
         self.updates = UpdatesHarness(runner: store.adminRunner)
     }

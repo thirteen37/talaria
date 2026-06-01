@@ -294,7 +294,6 @@ extension ServerWindowHarness {
                 }
             }
         }
-        notifications.stop()
         doctor.cancelRun()
         updates?.cancelApply()
         updates = nil
