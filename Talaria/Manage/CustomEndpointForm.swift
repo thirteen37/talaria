@@ -142,20 +142,47 @@ struct CustomEndpointForm: View {
             .font(.system(.body, design: .monospaced))
 
             Button {
-                showKey.toggle()
+                toggleReveal()
             } label: {
-                Image(systemName: showKey ? "eye.slash" : "eye")
+                if revealing {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: showKey ? "eye.slash" : "eye")
+                }
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel(showKey ? "Hide API key" : "Show API key")
-            .help(showKey ? "Hide the API key" : "Show the API key")
-
-            if isEditing, existing?.hasAPIKey == true {
-                Button("Reveal") { reveal() }
-                    .disabled(revealing)
-                    .help("Reveal the stored API key")
-            }
+            .disabled(revealing)
+            .accessibilityLabel(revealAccessibilityLabel)
+            .help(revealHelp)
         }
+    }
+
+    /// One control for both "show what I typed" and "fetch the stored key".
+    /// When hidden and the field is empty but a key is stored, fetch it from
+    /// `~/.hermes/.env`; otherwise just flip visibility of the typed value.
+    private func toggleReveal() {
+        if showKey {
+            showKey = false
+            return
+        }
+        if isEditing, existing?.hasAPIKey == true, keyInput.isEmpty {
+            reveal()           // async: sets keyInput + showKey, or revealError
+        } else {
+            revealError = nil  // a prior failed reveal no longer applies to the typed key
+            showKey = true
+        }
+    }
+
+    private var revealHelp: String {
+        if showKey { return "Hide the API key" }
+        if isEditing, existing?.hasAPIKey == true, keyInput.isEmpty {
+            return "Reveal the stored API key"
+        }
+        return "Show the API key"
+    }
+
+    private var revealAccessibilityLabel: String {
+        showKey ? "Hide API key" : "Show API key"
     }
 
     private var apiKeyFooter: String {
