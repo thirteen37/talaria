@@ -106,8 +106,17 @@ final class SessionsStore {
     /// view reads this to spawn (or re-attach) the embedded terminal; dropped
     /// when the tab closes.
     private(set) var tuiSpecs: [SessionId: TUILaunchSpec] = [:]
+    /// Poll cadence for the TUI title reconciler. Initializer-injected (short in
+    /// tests) so the dashboard-backed title refresh can be driven deterministically,
+    /// mirroring the other injectables (`isAwaitingUserInput`, `tuiSpecFactory`).
+    let tuiPollInterval: Duration
 
     private var statusTasks: [SessionId: Task<Void, Never>] = [:]
+    /// One shared poller that refreshes the sidebar title of every *resumed*
+    /// `.tui` tab from the dashboard. TUI tabs bypass ACP entirely, so they never
+    /// receive a `session_info_update`; this is their only title source. Started
+    /// when the first resumed TUI tab opens, torn down when the last one closes.
+    private var tuiReconcileTask: Task<Void, Never>?
     private var viewModels: [SessionId: LocalChatViewModel] = [:]
     private var pendingOpens: Set<SessionId> = []
     /// Session ids whose TUI resume is in flight (the spec-build await window,
@@ -130,7 +139,8 @@ final class SessionsStore {
         cwdStore: SessionsCwdStore = SessionsCwdStore(),
         isAwaitingUserInput: @escaping @MainActor @Sendable () -> Bool = { false },
         tuiSpecFactory: TUISpecFactory? = nil,
-        onCloseTUI: (@MainActor @Sendable (SessionId) -> Void)? = nil
+        onCloseTUI: (@MainActor @Sendable (SessionId) -> Void)? = nil,
+        tuiPollInterval: Duration = .seconds(5)
     ) {
         self.manager = manager
         self.adminRunner = adminRunner
@@ -140,6 +150,7 @@ final class SessionsStore {
         self.isAwaitingUserInput = isAwaitingUserInput
         self.tuiSpecFactory = tuiSpecFactory
         self.onCloseTUI = onCloseTUI
+        self.tuiPollInterval = tuiPollInterval
     }
 
     /// True when this store can open `.tui` tabs (the macOS harness injected a
@@ -358,6 +369,13 @@ final class SessionsStore {
                 resumeId: resumeId
             ))
             selection = tabId
+            // A resumed tab carries the real hermes id, so its persisted title
+            // can be looked up from the dashboard; start the poller that keeps the
+            // sidebar row in sync. A brand-new TUI chat has no id Talaria knows,
+            // so it stays on the "Terminal"/short-id fallback (out of scope).
+            if resumeId != nil {
+                ensureTUIReconciler()
+            }
         } catch {
             AppLog.session.error("openTUI: failed: \(String(describing: error), privacy: .public)")
             lastError = Self.describe(error)
@@ -410,6 +428,12 @@ final class SessionsStore {
         openSessions.removeAll { $0.id == id }
         if selection == id {
             selection = openSessions.first?.id
+        }
+        // Once the last resumed TUI tab is gone there's nothing left to refresh,
+        // so stop polling the dashboard.
+        if !openSessions.contains(where: { $0.kind == .tui && $0.resumeId != nil }) {
+            tuiReconcileTask?.cancel()
+            tuiReconcileTask = nil
         }
         // TUI tabs never touched the ACP stack (`manager` / `viewModels`); they
         // own a live terminal process instead. Drop the spec and let the macOS
@@ -533,15 +557,14 @@ final class SessionsStore {
         // header updates live, whether or not the chat view is currently visible.
         switch update {
         case let .sessionInfoUpdate(info):
-            let title = info.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            // Never let an empty/whitespace title blank out an existing name.
-            guard !title.isEmpty else {
-                return
-            }
             if let index = openSessions.firstIndex(where: { $0.id == sessionId }) {
-                openSessions[index].title = title
+                applyTitle(info.title, to: index)
             }
-            viewModels[sessionId]?.title = title
+            // Mirror into the cached view model so the chat header updates live —
+            // same never-blank guard as `applyTitle`.
+            if let title = normalizedTitle(info.title) {
+                viewModels[sessionId]?.title = title
+            }
         case let .toolCall(toolCall):
             _ = recordAndDecide(
                 sessionId: sessionId,
@@ -558,6 +581,70 @@ final class SessionsStore {
             )
         default:
             break
+        }
+    }
+
+    /// Trims a raw title and collapses an empty/whitespace one to nil, so callers
+    /// share the single "a blank title is no title" rule.
+    private func normalizedTitle(_ raw: String?) -> String? {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Writes a resolved session title onto the open tab at `index`, enforcing the
+    /// shared "never blank an existing title" rule. Used by both the ACP
+    /// `session_info_update` path and the TUI dashboard reconciler.
+    private func applyTitle(_ rawTitle: String?, to index: Int) {
+        guard let title = normalizedTitle(rawTitle) else {
+            return
+        }
+        openSessions[index].title = title
+    }
+
+    /// Starts the dashboard-backed title poller for resumed `.tui` tabs if it
+    /// isn't already running. No-ops without a dashboard (the only title source)
+    /// or when a poller is already live — `openTUI` calls it for every resumed tab,
+    /// but one shared loop covers them all.
+    private func ensureTUIReconciler() {
+        guard dashboardClient != nil, tuiReconcileTask == nil else {
+            return
+        }
+        tuiReconcileTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else {
+                    return
+                }
+                // Self-exit when the last resumed TUI tab is gone (a belt-and-braces
+                // mirror of the teardown in `closeTab`).
+                guard self.openSessions.contains(where: { $0.kind == .tui && $0.resumeId != nil }) else {
+                    self.tuiReconcileTask = nil
+                    return
+                }
+                await self.reconcileTUITitles()
+                // Transient dashboard errors are swallowed in `reconcileTUITitles`;
+                // the sleep is the back-off. Never surfaced as `lastError`.
+                try? await Task.sleep(for: self.tuiPollInterval)
+            }
+        }
+    }
+
+    /// One dashboard sweep: pull the session list and copy each resumed TUI tab's
+    /// persisted title into its sidebar row. Swallows transient errors (the poll
+    /// loop retries) so a momentarily-unreachable dashboard never surfaces a toast.
+    private func reconcileTUITitles() async {
+        guard let dashboardClient,
+              let response = try? await dashboardClient.listSessions(limit: 200) else {
+            return
+        }
+        // Re-resolve indices after the await — tabs may have opened/closed while
+        // the request was in flight.
+        for summary in response.sessions {
+            guard let index = openSessions.firstIndex(
+                where: { $0.kind == .tui && $0.resumeId == summary.id }
+            ) else {
+                continue
+            }
+            applyTitle(summary.title, to: index)
         }
     }
 
