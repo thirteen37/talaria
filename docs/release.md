@@ -22,7 +22,7 @@ Run:
 
 ```sh
 scripts/release.sh                  # uses ./VERSION
-scripts/release.sh 1.1.0            # override version
+scripts/release.sh 1.1              # override version
 scripts/release.sh --skip-notarize  # build + sign locally only
 ```
 
@@ -86,9 +86,13 @@ codesign --sign "Developer ID Application" --options=runtime --timestamp \
 
 ## Version bump conventions
 
-- `MARKETING_VERSION` (visible) — semver in `VERSION`.
-- `CURRENT_PROJECT_VERSION` (build counter) — `git rev-list --count HEAD` (set automatically by `scripts/release.sh`).
-- Tag releases as `v<MARKETING_VERSION>` (e.g. `v1.0.0`).
+- `CFBundleShortVersionString` / `MARKETING_VERSION` (visible) — **major.minor**
+  in `VERSION` (e.g. `1.0`).
+- `CFBundleVersion` / `CURRENT_PROJECT_VERSION` (build number) —
+  **`YYYYMMDD.HHMM` (UTC)**, set automatically by `scripts/release.sh` from
+  `date -u +%Y%m%d.%H%M`. Always monotonic with no same-day collisions, and
+  Sparkle's `SUStandardVersionComparator` orders these correctly.
+- Tag releases as `v<major.minor>` (e.g. `v1.0`).
 
 ## Verification checklist
 
@@ -97,7 +101,7 @@ After `scripts/release.sh` completes:
 ```sh
 codesign --verify --deep --strict --verbose=2 build/export/Talaria.app
 xcrun stapler validate build/export/Talaria.app
-xcrun stapler validate build/Talaria-1.0.0.dmg
+xcrun stapler validate build/Talaria-1.0.dmg
 spctl -a -vvv -t install build/export/Talaria.app
 # Expect:  accepted source=Notarized Developer ID
 ```

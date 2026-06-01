@@ -21,6 +21,9 @@ struct TalariaApp: App {
             recents.ids.first ?? ProfileDirectory.localProfileID
         }
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                AboutCommand()
+            }
             CommandGroup(after: .appInfo) {
                 CheckForUpdatesView(updater: updater.updater)
             }

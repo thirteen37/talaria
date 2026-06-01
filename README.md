@@ -6,6 +6,14 @@ Talaria is a native macOS front-end for Hermes Agent. The app is built with Swif
 
 Download the latest signed DMG from the [Releases page](https://github.com/thirteen37/talaria/releases), drag `Talaria.app` to `/Applications`, and launch it from Finder. Updates land via in-app **Talaria → Check for Updates…** (Sparkle).
 
+Or install with Homebrew (no tap required):
+
+```sh
+brew install --cask https://raw.githubusercontent.com/thirteen37/talaria/main/Casks/talaria.rb
+```
+
+(Usable once v1.0 is published and the cask `sha256` is filled in.)
+
 Talaria drives [Hermes Agent](https://github.com/NousResearch/hermes-agent). Install `hermes` separately, include the dashboard web extra (`pip install -U 'hermes-agent[web]'`), and point Talaria at it via the local profile.
 
 ## Current Status
@@ -67,3 +75,9 @@ xcodebuild build \
   -destination 'generic/platform=iOS Simulator' \
   -workspace Talaria.xcworkspace
 ```
+
+## License
+
+Talaria is released under the [MIT License](LICENSE).
+
+Third-party notices: [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
