@@ -17,7 +17,7 @@ historical one:
 - **Plugins** install / enable / disable / update via the dashboard.
 - **Gateway** process control (start / stop / restart / install / uninstall via CLI).
 - **Hermes profile** management (clone / rename / delete).
-- **Soul** (`SOUL.md`) and **Personalities** (`agent.personalities`) editors.
+- **Soul & Personalities** editor — the base `SOUL.md` and the `agent.personalities` overlays in one integrated split view.
 - **Environment** screen with `.env` CRUD.
 - **Kanban** board (boards + tasks) with full CRUD, backed by the Hermes kanban plugin.
 - **Customizable Browse sidebar** — reorder and hide manage pages, shared with the iPhone Browse sheet.

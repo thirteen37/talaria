@@ -7,21 +7,49 @@ import AppKit
 import UIKit
 #endif
 
-/// A SwiftUI text editor that syntax-highlights YAML live. SwiftUI's `TextEditor`
-/// binds only to a plain `String` and has no attributed-text editor before
-/// macOS 15 / iOS 18, so this bridges to `NSTextView` (macOS) / `UITextView`
-/// (iOS) — the codebase's one `ViewRepresentable`.
+/// A SwiftUI text editor that syntax-highlights live, against a pluggable theme
+/// (YAML or Markdown — see the `.yaml` / `.markdown` factories). SwiftUI's
+/// `TextEditor` binds only to a plain `String` and has no attributed-text editor
+/// before macOS 15 / iOS 18, so this bridges to `NSTextView` (macOS) /
+/// `UITextView` (iOS) — the codebase's one `ViewRepresentable`.
 ///
 /// On each edit it writes the text back and calls `onChange` *immediately* (so
-/// the parse-error banner / dirty / Save logic in `ConfigEditingState.yamlChanged()`
-/// keeps firing per keystroke), then **debounces** the visual re-highlight so a
-/// large config stays responsive while typing.
+/// per-keystroke logic like `ConfigEditingState.yamlChanged()`'s parse-error
+/// banner / dirty / Save keeps firing), then **debounces** the visual
+/// re-highlight so a large document stays responsive while typing.
 struct HighlightingTextEditor: View {
     @Binding var text: String
-    var onChange: () -> Void
+    var onChange: () -> Void = {}
+    /// Font + default color applied across the whole string before per-token
+    /// styling. From the theme (`YAMLHighlightTheme` / `MarkdownHighlightTheme`).
+    let baseAttributes: [NSAttributedString.Key: Any]
+    /// Applies per-token attributes onto an already-base-styled storage.
+    let highlight: (NSMutableAttributedString, String) -> Void
 
     var body: some View {
-        Representable(text: $text, onChange: onChange)
+        Representable(text: $text, onChange: onChange, baseAttributes: baseAttributes, highlight: highlight)
+    }
+}
+
+extension HighlightingTextEditor {
+    /// YAML-highlighting editor (the config editor).
+    static func yaml(text: Binding<String>, onChange: @escaping () -> Void) -> HighlightingTextEditor {
+        HighlightingTextEditor(
+            text: text,
+            onChange: onChange,
+            baseAttributes: YAMLHighlightTheme.baseAttributes,
+            highlight: { YAMLHighlightTheme.apply(to: $0, text: $1) }
+        )
+    }
+
+    /// Markdown-highlighting editor (SOUL.md / personality prompts).
+    static func markdown(text: Binding<String>, onChange: @escaping () -> Void = {}) -> HighlightingTextEditor {
+        HighlightingTextEditor(
+            text: text,
+            onChange: onChange,
+            baseAttributes: MarkdownHighlightTheme.baseAttributes,
+            highlight: { MarkdownHighlightTheme.apply(to: $0, text: $1) }
+        )
     }
 }
 
@@ -32,11 +60,16 @@ private let highlightDebounce: TimeInterval = 0.18
 /// Re-lexes `text` and rewrites `storage`'s attributes in place. Only attributes
 /// change (never the characters), so the insertion point and selection are
 /// preserved by construction.
-private func rehighlight(_ storage: NSMutableAttributedString, text: String) {
+private func rehighlight(
+    _ storage: NSMutableAttributedString,
+    text: String,
+    baseAttributes: [NSAttributedString.Key: Any],
+    highlight: (NSMutableAttributedString, String) -> Void
+) {
     let full = NSRange(location: 0, length: (text as NSString).length)
     storage.beginEditing()
-    storage.setAttributes(YAMLHighlightTheme.baseAttributes, range: full)
-    YAMLHighlightTheme.apply(to: storage, text: text)
+    storage.setAttributes(baseAttributes, range: full)
+    highlight(storage, text)
     storage.endEditing()
 }
 
@@ -46,6 +79,8 @@ extension HighlightingTextEditor {
     struct Representable: NSViewRepresentable {
         @Binding var text: String
         var onChange: () -> Void
+        let baseAttributes: [NSAttributedString.Key: Any]
+        let highlight: (NSMutableAttributedString, String) -> Void
 
         func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -62,12 +97,13 @@ extension HighlightingTextEditor {
             textView.isAutomaticSpellingCorrectionEnabled = false
             textView.isAutomaticTextReplacementEnabled = false
             textView.isContinuousSpellCheckingEnabled = false
-            textView.font = YAMLHighlightTheme.monospacedFont
             textView.textContainerInset = NSSize(width: 4, height: 6)
             textView.drawsBackground = false
             textView.string = text
-            textView.typingAttributes = YAMLHighlightTheme.baseAttributes
-            if let storage = textView.textStorage { rehighlight(storage, text: text) }
+            textView.typingAttributes = baseAttributes
+            if let storage = textView.textStorage {
+                rehighlight(storage, text: text, baseAttributes: baseAttributes, highlight: highlight)
+            }
             return scrollView
         }
 
@@ -81,8 +117,10 @@ extension HighlightingTextEditor {
             textView.string = text
             let location = min(selected.location, (text as NSString).length)
             textView.setSelectedRange(NSRange(location: location, length: 0))
-            textView.typingAttributes = YAMLHighlightTheme.baseAttributes
-            if let storage = textView.textStorage { rehighlight(storage, text: text) }
+            textView.typingAttributes = baseAttributes
+            if let storage = textView.textStorage {
+                rehighlight(storage, text: text, baseAttributes: baseAttributes, highlight: highlight)
+            }
         }
 
         @MainActor
@@ -104,10 +142,12 @@ extension HighlightingTextEditor {
             // isolation boundary and its main-actor state is safe to touch.
             private func scheduleHighlight(for textView: NSTextView) {
                 pending?.cancel()
+                let baseAttributes = parent.baseAttributes
+                let highlight = parent.highlight
                 pending = Task { [weak textView] in
                     try? await Task.sleep(for: .seconds(highlightDebounce))
                     guard !Task.isCancelled, let textView, let storage = textView.textStorage else { return }
-                    rehighlight(storage, text: textView.string)
+                    rehighlight(storage, text: textView.string, baseAttributes: baseAttributes, highlight: highlight)
                 }
             }
         }
@@ -120,13 +160,14 @@ extension HighlightingTextEditor {
     struct Representable: UIViewRepresentable {
         @Binding var text: String
         var onChange: () -> Void
+        let baseAttributes: [NSAttributedString.Key: Any]
+        let highlight: (NSMutableAttributedString, String) -> Void
 
         func makeCoordinator() -> Coordinator { Coordinator(self) }
 
         func makeUIView(context: Context) -> UITextView {
             let textView = UITextView()
             textView.delegate = context.coordinator
-            textView.font = YAMLHighlightTheme.monospacedFont
             // The base font is UIFontMetrics-scaled, so let UIKit rescale it live
             // when the user changes their text size while the editor is open.
             textView.adjustsFontForContentSizeCategory = true
@@ -138,9 +179,9 @@ extension HighlightingTextEditor {
             textView.smartInsertDeleteType = .no
             textView.backgroundColor = .clear
             textView.textContainerInset = UIEdgeInsets(top: 6, left: 4, bottom: 6, right: 4)
-            textView.typingAttributes = YAMLHighlightTheme.baseAttributes
+            textView.typingAttributes = baseAttributes
             textView.text = text
-            rehighlight(textView.textStorage, text: text)
+            rehighlight(textView.textStorage, text: text, baseAttributes: baseAttributes, highlight: highlight)
             return textView
         }
 
@@ -151,8 +192,8 @@ extension HighlightingTextEditor {
             textView.text = text
             let location = min(selected.location, (text as NSString).length)
             textView.selectedRange = NSRange(location: location, length: 0)
-            textView.typingAttributes = YAMLHighlightTheme.baseAttributes
-            rehighlight(textView.textStorage, text: text)
+            textView.typingAttributes = baseAttributes
+            rehighlight(textView.textStorage, text: text, baseAttributes: baseAttributes, highlight: highlight)
         }
 
         @MainActor
@@ -173,13 +214,15 @@ extension HighlightingTextEditor {
             // isolation boundary and its main-actor state is safe to touch.
             private func scheduleHighlight(for textView: UITextView) {
                 pending?.cancel()
+                let baseAttributes = parent.baseAttributes
+                let highlight = parent.highlight
                 pending = Task { [weak textView] in
                     try? await Task.sleep(for: .seconds(highlightDebounce))
                     guard !Task.isCancelled, let textView else { return }
                     let selected = textView.selectedRange
-                    rehighlight(textView.textStorage, text: textView.text ?? "")
+                    rehighlight(textView.textStorage, text: textView.text ?? "", baseAttributes: baseAttributes, highlight: highlight)
                     textView.selectedRange = selected
-                    textView.typingAttributes = YAMLHighlightTheme.baseAttributes
+                    textView.typingAttributes = baseAttributes
                 }
             }
         }
