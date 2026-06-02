@@ -59,7 +59,7 @@ Hermes Agent is the runtime Talaria targets. Talaria should treat Hermes as the 
 
 - ACP behavior and live session protocol details.
 - Dashboard HTTP behavior for sessions, logs, skills, cron jobs, and updates.
-- CLI command surfaces that do not have dashboard routes yet: `hermes sessions rename`, `hermes tools enable/disable`, and `hermes doctor`.
+- CLI command surfaces that do not have dashboard routes yet: `hermes sessions rename`, `hermes tools enable/disable`, `hermes doctor`, and the Skills Hub mutations `hermes skills install/update/uninstall` (Skills Hub *search* reads the public Nous index over HTTP instead).
 - Version and capability gates for features that land after the MVP baseline.
 
 ### Scarf

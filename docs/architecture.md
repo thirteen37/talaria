@@ -22,7 +22,7 @@ The full route table Talaria depends on — auth header, error model, the SPA ca
 Dashboard-backed surfaces today:
 
 - Sessions browse/search/read/delete: `/api/sessions`, `/api/sessions/search`, `/api/sessions/{id}`.
-- Skills: `/api/skills`, `/api/skills/toggle`.
+- Skills list/toggle: `/api/skills`, `/api/skills/toggle`. The Skills Hub has no dashboard routes — **search** reads the public Nous index over HTTP (`SkillsHubCatalog`), and **install/update/uninstall** use the CLI fallback (below).
 - Plugins: `/api/dashboard/plugins/hub` plus install/enable/disable/update/remove.
 - Cron: `/api/cron/jobs` plus pause/resume/trigger subroutes.
 - Kanban: `/api/plugins/kanban/*` — boards, tasks, links, comments, run logs.
@@ -38,6 +38,7 @@ A few operations remain on CLI fallbacks because Hermes does not expose dashboar
 
 - Sessions rename: `hermes sessions rename`.
 - Tools enable/disable/list: `hermes tools ...`.
+- Skills Hub install/update/uninstall (+ `skills list`/`check` reads): `hermes skills ...`. Inherently local (security scan + filesystem writes). `uninstall` lacks `--yes` in v0.14.0, so Talaria confirms via stdin (`y\n`) — remote uninstall is deferred.
 - Doctor report: `hermes doctor`.
 - Gateway lifecycle writes: `hermes gateway start/stop/restart/install/uninstall`.
 

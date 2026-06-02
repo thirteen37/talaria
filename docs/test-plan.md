@@ -17,6 +17,13 @@ Run this script before a v1 release candidate.
 9. **Skills view**: open Manage → Skills. Confirm:
    - Rows from the dashboard render in the table with name, enabled toggle, and path/source metadata.
    - Toggling a skill flips the enabled state on the next refresh.
+   - **Search the Skills Hub**: expand the section, search (e.g. `git`); results show full
+     name · source · trust + description. (Works without a live Hermes — plain HTTP.)
+   - **Install** a small official skill from a search result → it appears in the table and toggles.
+   - **Install from identifier / URL**: paste an `official/…` id → green confirmation + the row appears.
+   - Select a hub-installed skill → detail pane offers **Update** and **Remove** (and flags
+     "Update available" when upstream is ahead); **Remove** confirms, then deletes the skill.
+   - A builtin/local (non-hub) skill shows **no** Update/Remove in its detail pane.
 10. **Tools view**: open Manage → Tools. Confirm:
     - Rows from `hermes tools list` render with name, platform, enabled toggle.
     - Toggling persists across a manual *Refresh*.

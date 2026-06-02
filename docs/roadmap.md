@@ -48,7 +48,11 @@ historical one:
 
 ## Deferred Management
 
-- Skills Hub category browser and install/update support.
+- Skills Hub category **browser** (in-app search + install/update/remove shipped:
+  search uses the public Nous index over HTTP, mutations use the `hermes skills`
+  CLI fallback. Caveat: v0.14.0 `hermes skills uninstall` has no `--yes`, so
+  remove feeds `y\n` on stdin and **remote** uninstall is deferred until a future
+  Hermes adds the flag or the NIO/SSH runners forward stdin).
 - Pre-run script editor for cron jobs.
 - Delivery-failure dashboard for scheduled runs.
 - Structured log explorer with session-id pills and deep links.

@@ -26,6 +26,13 @@ public enum HermesCapability: String, CaseIterable, Codable, Sendable {
     /// dashboard pin. Below it the Environment screen shows a `capabilityBanner`
     /// warning rather than breaking.
     case requiresEnvAPI
+    /// `hermes skills install/update/uninstall` — the Skills Hub *mutation*
+    /// affordances (search is plain public HTTP and is **not** gated by this).
+    /// These go through the CLI-fallback admin runner (no dashboard route
+    /// exists), so the gate is on the CLI surface, not the dashboard. Below it
+    /// the Skills screen still lists/toggles and still searches, but the
+    /// Install/Update/Remove controls show a `capabilityBanner` warning.
+    case skillsHub
 }
 
 public struct CapabilityTable: Sendable {
@@ -81,5 +88,12 @@ public struct CapabilityTable: Sendable {
         // live 0.14.0 / release 2026.5.16 instance), so the env API shares the
         // dashboard's introducing version. No separate, later gate.
         .requiresEnvAPI: HermesVersion(major: 0, minor: 14, patch: 0),
+        // `hermes skills install/update/uninstall` — verified non-interactive
+        // against an installed Hermes v0.14.0 (`--yes` on install/update;
+        // uninstall lacks `--yes` and is driven via stdin). The install/search
+        // hub machinery itself shipped earlier (per `RELEASE_v0.12.0.md`), so
+        // this pin can be lowered if the exact CLI shape is re-verified on an
+        // older build; pinned to the verified floor for now.
+        .skillsHub: HermesVersion(major: 0, minor: 14, patch: 0),
     ]
 }
