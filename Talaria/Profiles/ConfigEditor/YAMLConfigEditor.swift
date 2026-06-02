@@ -40,7 +40,7 @@ struct YAMLConfigEditor: View {
                     }
                 }
             } else {
-                HighlightingTextEditor(
+                HighlightingTextEditor.yaml(
                     text: Binding(
                         get: { state.yamlText },
                         set: { state.yamlText = $0 }

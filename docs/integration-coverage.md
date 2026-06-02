@@ -73,8 +73,7 @@ window consumers, and tears the child down when the last consumer releases it.
 | Logs | `GET /api/logs` with `file`, `lines`, `level`, `component`, and `search` query parameters |
 | Profiles | `GET` / `POST` on `/api/profiles`, `PATCH` / `DELETE` on `/api/profiles/{name}` |
 | Config editor | `GET /api/config/schema`, `GET /api/config`, `PUT /api/config` |
-| Soul editor | `GET /api/profiles/{profile}/soul`, `PUT /api/profiles/{profile}/soul` (profile-scoped; no top-level `/api/soul`) |
-| Personalities editor | `agent.personalities` via the config editor (`GET`/`PUT /api/config`) |
+| Soul & Personalities editor | Base `SOUL.md` via `GET`/`PUT /api/profiles/{profile}/soul` (profile-scoped; no top-level `/api/soul`); `agent.personalities` overlays via the config editor (`GET`/`PUT /api/config`) — both in one integrated split view |
 | Environment (.env) | `GET /api/env`, `PUT /api/env`, `DELETE /api/env`, `POST /api/env/reveal` |
 
 The default server window shares one dashboard per `ServerProfile`. Profile
