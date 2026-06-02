@@ -61,6 +61,7 @@ surfaces just stay offline.
 | `requiresDashboard` | `0.14.0`           | the dashboard itself (`web_server.py`)   |
 | `requiresModelAPI`  | `0.14.0`           | `/api/model/*`                           |
 | `requiresEnvAPI`    | `0.14.0`           | `/api/env*`                              |
+| `requiresMCPAPI`    | `0.15.1`           | `/api/mcp/*` (added after the base dashboard) |
 
 ## Routes Talaria calls
 
@@ -207,6 +208,27 @@ that its `DashboardClient` methods live in `DashboardClient+Kanban.swift`.
 | PUT    | `/api/env`          | `{key, value}`    | Set/update a known var. Server `is_managed()` rejections surface as `.http`. |
 | DELETE | `/api/env`          | `{key}`           | Remove from `.env` (JSON body). Missing key → `404`. |
 | POST   | `/api/env/reveal`   | `{key}`           | Returns `{key, value}` (unredacted). **Rate-limited 5 / 30s** → excess = `429`; unset key = `404`. |
+
+### MCP servers (gated on `requiresMCPAPI` ≥ `0.15.1`)
+
+Added *after* the base 0.14.0 dashboard (the "full administration panel" change, Hermes #36704),
+so this family carries a later pin than the rest of the dashboard. Wraps the same config layer as
+`hermes mcp`, so servers added here also show under `hermes mcp list`. stdio `env` values are
+**redacted** on read; `transport` is derived server-side (`http` if a `url`, `stdio` if a `command`,
+else `unknown`). The `DashboardClient` methods live in `DashboardClient+MCP.swift`.
+
+| Method | Path                              | Body                                      | Returns / notes |
+| ------ | -------------------------------- | ----------------------------------------- | --------------- |
+| GET    | `/api/mcp/servers`               | —                                         | `{servers: [DashboardMCPServer]}`. env redacted; `tools` is an allowlist of names or `null` = all (not a count). |
+| POST   | `/api/mcp/servers`               | `{name, url?, command?, args[], env{}, auth?}` | Add. Echoes the created server. No transport field — url ⇒ remote, command ⇒ stdio. `409` if the name exists; `400` if neither url nor command. `auth` = `oauth`/`header`. |
+| POST   | `/api/mcp/servers/{name}/test`   | —                                         | `{ok, tools: [{name, description}], error?}`. A reachable-but-failing probe still returns `200` with `ok:false`+`error`; unknown server = `404`. |
+| PUT    | `/api/mcp/servers/{name}/enabled`| `{enabled}`                               | Toggle. Returns `{ok, name, enabled}`. Disabled servers stay in config. |
+| DELETE | `/api/mcp/servers/{name}`        | —                                         | Remove. `404` if unknown. |
+| GET    | `/api/mcp/catalog`               | —                                         | `{entries: […], diagnostics: […]}`. Entry: `{name, description, source, transport, auth_type, required_env: [{name, prompt, required}], needs_install, installed, enabled}`. |
+| POST   | `/api/mcp/catalog/install`       | `{name, env{}, enable}`                   | Install a catalog entry. `{ok, name, background, action?}`; `background:true` for git-bootstrap entries (run as the `mcp-install` background action). |
+
+> There is **no** in-place edit route and **no** route to set a server's tool allowlist — the native
+> "Edit" is delete + re-add, which can't restore a `tools` allowlist (the editor warns when one exists).
 
 ## CLI fallbacks (no dashboard route)
 

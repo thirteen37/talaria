@@ -24,6 +24,7 @@ Dashboard-backed surfaces today:
 - Sessions browse/search/read/delete: `/api/sessions`, `/api/sessions/search`, `/api/sessions/{id}`.
 - Skills list/toggle: `/api/skills`, `/api/skills/toggle`. The Skills Hub has no dashboard routes — **search** reads the public Nous index over HTTP (`SkillsHubCatalog`), and **install/update/uninstall** use the CLI fallback (below).
 - Plugins: `/api/dashboard/plugins/hub` plus install/enable/disable/update/remove.
+- MCP servers: `/api/mcp/*` — registry CRUD + connection test + Nous catalog browse/install (gated on `requiresMCPAPI` ≥ `0.15.1`, added after the base dashboard).
 - Cron: `/api/cron/jobs` plus pause/resume/trigger subroutes.
 - Kanban: `/api/plugins/kanban/*` — boards, tasks, links, comments, run logs.
 - Models: `/api/model/options`, `/api/model/auxiliary`, `/api/model/set`.

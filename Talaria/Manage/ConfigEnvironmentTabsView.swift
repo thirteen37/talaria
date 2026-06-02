@@ -25,7 +25,7 @@ struct ConfigEnvironmentTabsView: View {
 
             EnvironmentView(
                 client: harness.dashboardClient,
-                hermesVersion: harness.profile.version,
+                hermesVersion: harness.effectiveHermesVersion,
                 runner: harness.store.adminRunner,
                 snapshotTransfer: harness.snapshotTransfer,
                 profile: harness.profile

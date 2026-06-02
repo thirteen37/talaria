@@ -26,6 +26,13 @@ public enum HermesCapability: String, CaseIterable, Codable, Sendable {
     /// dashboard pin. Below it the Environment screen shows a `capabilityBanner`
     /// warning rather than breaking.
     case requiresEnvAPI
+    /// `hermes dashboard`'s `/api/mcp/*` routes (servers list/add/delete/test,
+    /// `/enabled` toggle, catalog browse + install) backing the MCP Servers
+    /// management screen. Added *after* the 0.14.0 dashboard — they shipped in
+    /// the "full administration panel" change (`web_server.py`, Hermes #36704),
+    /// so they carry a later pin than the base dashboard. Below it the MCP
+    /// screen shows a `capabilityBanner` warning rather than breaking.
+    case requiresMCPAPI
     /// `hermes skills install/update/uninstall` — the Skills Hub *mutation*
     /// affordances (search is plain public HTTP and is **not** gated by this).
     /// These go through the CLI-fallback admin runner (no dashboard route
@@ -88,6 +95,12 @@ public struct CapabilityTable: Sendable {
         // live 0.14.0 / release 2026.5.16 instance), so the env API shares the
         // dashboard's introducing version. No separate, later gate.
         .requiresEnvAPI: HermesVersion(major: 0, minor: 14, patch: 0),
+        // `/api/mcp/*` (MCP server registry + catalog) was added later than the
+        // base dashboard, in the "full administration panel" change
+        // (`hermes_cli/web_server.py`, Hermes #36704, commit b571ec2 — 2026-06-01,
+        // `pyproject.toml` version 0.15.1). Not yet in a tagged calver release at
+        // time of writing, so the pin is the semver from that commit's pyproject.
+        .requiresMCPAPI: HermesVersion(major: 0, minor: 15, patch: 1),
         // `hermes skills install/update/uninstall` — verified non-interactive
         // against an installed Hermes v0.14.0 (`--yes` on install/update;
         // uninstall lacks `--yes` and is driven via stdin). The install/search

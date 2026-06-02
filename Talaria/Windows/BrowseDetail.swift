@@ -26,28 +26,30 @@ struct BrowseDetailView: View {
             SkillsView(
                 client: harness.dashboardClient,
                 runner: harness.store.adminRunner,
-                hermesVersion: harness.profile.version
+                hermesVersion: harness.effectiveHermesVersion
             )
         case .plugins:
-            PluginsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            PluginsView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
+        case .mcp:
+            MCPServersView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .tools:
-            ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
+            ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.effectiveHermesVersion)
         case .cron:
-            CronView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            CronView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .kanban:
-            KanbanView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            KanbanView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .gateway:
             GatewayView(
                 client: harness.dashboardClient,
                 runner: harness.store.adminRunner,
-                hermesVersion: harness.profile.version
+                hermesVersion: harness.effectiveHermesVersion
             )
         case .hermesProfiles:
             ProfilesView(
                 client: harness.dashboardClient,
                 runner: harness.store.adminRunner,
                 activeProfile: activeHermesProfile,
-                hermesVersion: harness.profile.version,
+                hermesVersion: harness.effectiveHermesVersion,
                 onProfilesChanged: onProfilesChanged
             )
         case .profiles:
@@ -55,7 +57,7 @@ struct BrowseDetailView: View {
         case .personalities:
             SoulAndPersonalitiesView(windowHarness: harness)
         case .models:
-            ModelsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            ModelsView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .system:
             SystemTabsView(harness: harness)
         }
