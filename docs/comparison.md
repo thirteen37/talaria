@@ -83,12 +83,12 @@ integration.
 | Capability | Talaria | Hermes Desktop | Built-in dashboard | Scarf | hermes-workspace |
 | --- | :---: | :---: | :---: | :---: | :---: |
 | Live chat (rich, streaming) | ✅ ACP | ✅ | ✅ SSE | ✅ ACP | ✅ SSE |
-| Terminal / TUI escape hatch | ⬜ | 🟡 | ⬜ | ✅ SwiftTerm | ✅ PTY |
+| Terminal / TUI escape hatch | ✅ SwiftTerm (macOS) | 🟡 | ⬜ | ✅ SwiftTerm | ✅ PTY |
 | Sessions browse / search / read | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Session rename / delete | ✅ (rename via CLI) | ✅ | ✅ | ✅ | 🟡 |
 | Session JSONL export | ⬜ | ? | ⬜ | ✅ | ⬜ |
 | Skills list / toggle | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Skills Hub install / search | ⬜ | ✅ | ✅ | ✅ | ✅ (2,000+) |
+| Skills Hub install / search | ✅ (search HTTP, install CLI) | ✅ | ✅ | ✅ | ✅ (2,000+) |
 | Plugins install / enable / update | ✅ | 🟡 | ✅ | ✅ | 🟡 |
 | Tools enable / disable | ✅ (CLI) | ✅ | 🟡 list-only | ✅ | 🟡 |
 | MCP server registry / presets | ⬜ | ✅ | ✅ | ✅ | ✅ |
@@ -151,10 +151,9 @@ Several are tracked in `docs/roadmap.md` as deliberately deferred:
   exposes none of this yet.
 - **No memory editor.** Talaria edits Soul and Personalities but not
   `MEMORY.md` / `USER.md`.
-- **No terminal escape hatch, activity feed, credential pools, webhooks, quick
-  commands, or Hermes Proxy UI.**
-- **No Skills Hub install/search** — Talaria lists and toggles skills but cannot
-  install from a registry (it *can* install plugins).
+- **No activity feed, credential pools, webhooks, quick commands, or Hermes
+  Proxy UI.** (A terminal/TUI escape hatch *has* shipped on macOS — chats can be
+  opened as the real `hermes chat --tui` in an embedded SwiftTerm terminal.)
 
 ## Takeaway
 

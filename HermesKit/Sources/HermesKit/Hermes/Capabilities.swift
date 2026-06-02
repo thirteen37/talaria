@@ -33,6 +33,13 @@ public enum HermesCapability: String, CaseIterable, Codable, Sendable {
     /// so they carry a later pin than the base dashboard. Below it the MCP
     /// screen shows a `capabilityBanner` warning rather than breaking.
     case requiresMCPAPI
+    /// `hermes skills install/update/uninstall` — the Skills Hub *mutation*
+    /// affordances (search is plain public HTTP and is **not** gated by this).
+    /// These go through the CLI-fallback admin runner (no dashboard route
+    /// exists), so the gate is on the CLI surface, not the dashboard. Below it
+    /// the Skills screen still lists/toggles and still searches, but the
+    /// Install/Update/Remove controls show a `capabilityBanner` warning.
+    case skillsHub
 }
 
 public struct CapabilityTable: Sendable {
@@ -94,5 +101,12 @@ public struct CapabilityTable: Sendable {
         // `pyproject.toml` version 0.15.1). Not yet in a tagged calver release at
         // time of writing, so the pin is the semver from that commit's pyproject.
         .requiresMCPAPI: HermesVersion(major: 0, minor: 15, patch: 1),
+        // `hermes skills install/update/uninstall` — verified non-interactive
+        // against an installed Hermes v0.14.0 (`--yes` on install/update;
+        // uninstall lacks `--yes` and is driven via stdin). The install/search
+        // hub machinery itself shipped earlier (per `RELEASE_v0.12.0.md`), so
+        // this pin can be lowered if the exact CLI shape is re-verified on an
+        // older build; pinned to the verified floor for now.
+        .skillsHub: HermesVersion(major: 0, minor: 14, patch: 0),
     ]
 }

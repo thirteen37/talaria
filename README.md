@@ -44,7 +44,7 @@ Talaria drives [Hermes Agent](https://github.com/NousResearch/hermes-agent). Ins
 
 This repository contains the dashboard-mode build:
 
-- `Talaria`: SwiftUI app (macOS, with a shared iOS target) — ACP chat plus dashboard-backed Browse surfaces: Sessions, Skills, Plugins, Tools, Cron, Kanban, Gateway, Hermes profiles, Configuration, Soul, Personalities, Models, Environment, Logs, Doctor, and Updates. The Browse sidebar is reorderable and pages can be hidden. Sparkle auto-update.
+- `Talaria`: SwiftUI app (macOS, with a shared iOS target) — ACP chat plus dashboard-backed Browse surfaces: Sessions, Skills, Plugins, Tools, Cron, Kanban, Gateway, Hermes profiles, **Configuration** (the `config.yaml` editor and the `.env` Environment editor as two tabs), Soul, Personalities, Models, and **System** (Doctor, Updates, and Logs as three tabs). Chats can also be opened as the real Hermes TUI in an embedded terminal (macOS). The Browse sidebar is reorderable and pages can be hidden; a Settings screen holds Server Profiles, Sidebar Order, and Notifications. Optional OS-level chat notifications (agent-finished / tool-approval) and Sparkle auto-update.
 - `HermesKit`: Swift package for ACP/JSON-RPC, transports, dashboard HTTP client/supervisor, CLI fallbacks, profile models, and capability gates.
 - `docs`: architecture, security, release, integration coverage, dashboard API, competitor comparison, roadmap, and manual test-plan notes.
 
@@ -59,7 +59,7 @@ Hermes Agent is the runtime Talaria targets. Talaria should treat Hermes as the 
 
 - ACP behavior and live session protocol details.
 - Dashboard HTTP behavior for sessions, logs, skills, cron jobs, and updates.
-- CLI command surfaces that do not have dashboard routes yet: `hermes sessions rename`, `hermes tools enable/disable`, and `hermes doctor`.
+- CLI command surfaces that do not have dashboard routes yet: `hermes sessions rename`, `hermes tools enable/disable`, `hermes doctor`, and the Skills Hub mutations `hermes skills install/update/uninstall` (Skills Hub *search* reads the public Nous index over HTTP instead).
 - Version and capability gates for features that land after the MVP baseline.
 
 ### Scarf

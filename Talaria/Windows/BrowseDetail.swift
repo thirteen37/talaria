@@ -23,7 +23,11 @@ struct BrowseDetailView: View {
         case .sessions:
             SessionsBrowser(store: harness.store, client: harness.dashboardClient)
         case .skills:
-            SkillsView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
+            SkillsView(
+                client: harness.dashboardClient,
+                runner: harness.store.adminRunner,
+                hermesVersion: harness.effectiveHermesVersion
+            )
         case .plugins:
             PluginsView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .mcp:
@@ -49,21 +53,11 @@ struct BrowseDetailView: View {
                 onProfilesChanged: onProfilesChanged
             )
         case .profiles:
-            ConfigEditorContainer(windowHarness: harness, profiles: hermesProfiles)
-        case .soul:
-            SoulEditorContainer(windowHarness: harness)
+            ConfigEnvironmentTabsView(harness: harness, hermesProfiles: hermesProfiles)
         case .personalities:
-            PersonalitiesView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
+            SoulAndPersonalitiesView(windowHarness: harness)
         case .models:
             ModelsView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
-        case .environment:
-            EnvironmentView(
-                client: harness.dashboardClient,
-                hermesVersion: harness.effectiveHermesVersion,
-                runner: harness.store.adminRunner,
-                snapshotTransfer: harness.snapshotTransfer,
-                profile: harness.profile
-            )
         case .system:
             SystemTabsView(harness: harness)
         }
