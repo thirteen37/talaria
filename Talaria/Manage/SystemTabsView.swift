@@ -18,16 +18,16 @@ struct SystemTabsView: View {
                 doctor: harness.doctor,
                 profile: harness.profile,
                 client: harness.dashboardClient,
-                hermesVersion: harness.profile.version
+                hermesVersion: harness.effectiveHermesVersion
             )
             .tabItem { Label("Doctor", systemImage: "stethoscope") }
             .tag(Tab.doctor)
 
-            UpdatesView(updates: harness.updates, hermesVersion: harness.profile.version)
+            UpdatesView(updates: harness.updates, hermesVersion: harness.effectiveHermesVersion)
                 .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
                 .tag(Tab.updates)
 
-            LogsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            LogsView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
                 .tabItem { Label("Logs", systemImage: "doc.text") }
                 .tag(Tab.logs)
         }

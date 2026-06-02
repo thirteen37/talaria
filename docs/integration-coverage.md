@@ -27,6 +27,7 @@ Talaria does not read or write Hermes SQLite files directly.
 | `requiresDashboard` | `0.14.0` | `v2026.5.16` | Dashboard-backed sessions, management, config, logs, plugins, and kanban |
 | `requiresModelAPI` | `0.14.0` | `v2026.5.16` | `/api/model/*` (main + auxiliary model assignment) |
 | `requiresEnvAPI` | `0.14.0` | `v2026.5.16` | `/api/env*` (Environment screen `.env` CRUD) |
+| `requiresMCPAPI` | `0.15.1` | (untagged) | `/api/mcp/*` (MCP Servers screen: registry CRUD + catalog) |
 
 Dashboard-backed screens render a warning banner when `requiresDashboard` is
 not met. Profiles still load and ACP chat can still run; non-chat dashboard
@@ -76,6 +77,7 @@ window consumers, and tears the child down when the last consumer releases it.
 | Soul editor | `GET /api/profiles/{profile}/soul`, `PUT /api/profiles/{profile}/soul` (profile-scoped; no top-level `/api/soul`) |
 | Personalities editor | `agent.personalities` via the config editor (`GET`/`PUT /api/config`) |
 | Environment (.env) | `GET /api/env`, `PUT /api/env`, `DELETE /api/env`, `POST /api/env/reveal` |
+| MCP servers | `GET`/`POST /api/mcp/servers`, `POST /api/mcp/servers/{name}/test`, `PUT /api/mcp/servers/{name}/enabled`, `DELETE /api/mcp/servers/{name}`, `GET /api/mcp/catalog`, `POST /api/mcp/catalog/install` (gated on `requiresMCPAPI` ≥ `0.15.1`) |
 
 The default server window shares one dashboard per `ServerProfile`. Profile
 editing can acquire additional scoped dashboards with `hermes -p <name>

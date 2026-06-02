@@ -112,6 +112,9 @@ extension ServerWindowHarness {
             dashboardClient = endpoint.session.client()
             store.dashboardClient = dashboardClient
             dashboardError = nil
+            // Capture the live version now the dashboard is reachable, so
+            // capability gating uses it over the profile's cached probe value.
+            await refreshLiveVersion()
         } catch {
             guard !Task.isCancelled, !dashboardReleased else { return }
             dashboardClient = nil

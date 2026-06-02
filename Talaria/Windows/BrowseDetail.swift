@@ -23,27 +23,29 @@ struct BrowseDetailView: View {
         case .sessions:
             SessionsBrowser(store: harness.store, client: harness.dashboardClient)
         case .skills:
-            SkillsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            SkillsView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .plugins:
-            PluginsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            PluginsView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
+        case .mcp:
+            MCPServersView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .tools:
-            ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
+            ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.effectiveHermesVersion)
         case .cron:
-            CronView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            CronView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .kanban:
-            KanbanView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            KanbanView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .gateway:
             GatewayView(
                 client: harness.dashboardClient,
                 runner: harness.store.adminRunner,
-                hermesVersion: harness.profile.version
+                hermesVersion: harness.effectiveHermesVersion
             )
         case .hermesProfiles:
             ProfilesView(
                 client: harness.dashboardClient,
                 runner: harness.store.adminRunner,
                 activeProfile: activeHermesProfile,
-                hermesVersion: harness.profile.version,
+                hermesVersion: harness.effectiveHermesVersion,
                 onProfilesChanged: onProfilesChanged
             )
         case .profiles:
@@ -51,13 +53,13 @@ struct BrowseDetailView: View {
         case .soul:
             SoulEditorContainer(windowHarness: harness)
         case .personalities:
-            PersonalitiesView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            PersonalitiesView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .models:
-            ModelsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            ModelsView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .environment:
             EnvironmentView(
                 client: harness.dashboardClient,
-                hermesVersion: harness.profile.version,
+                hermesVersion: harness.effectiveHermesVersion,
                 runner: harness.store.adminRunner,
                 snapshotTransfer: harness.snapshotTransfer,
                 profile: harness.profile
