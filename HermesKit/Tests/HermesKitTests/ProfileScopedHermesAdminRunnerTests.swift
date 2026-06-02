@@ -9,6 +9,12 @@ private final class RecordingAdminRunner: HermesAdminRunning, @unchecked Sendabl
     private var _runArguments: [[String]] = []
     private var _streamArguments: [[String]] = []
 
+    let deliversStdin: Bool
+
+    init(deliversStdin: Bool = false) {
+        self.deliversStdin = deliversStdin
+    }
+
     var runArguments: [[String]] { lock.withLock { _runArguments } }
     var streamArguments: [[String]] { lock.withLock { _streamArguments } }
 
@@ -83,6 +89,20 @@ struct ProfileScopedHermesAdminRunnerTests {
             ["profile", "rename", "office", "studio"],
             ["profile", "delete", "studio", "-y"],
         ])
+    }
+
+    @Test
+    func forwardsDeliversStdinFromInner() {
+        // The decorator must not mask the inner runner's stdin capability — the
+        // UI reads it through the wrapper to gate Skills Hub Remove.
+        let local = ProfileScopedHermesAdminRunner(
+            inner: RecordingAdminRunner(deliversStdin: true), hermesProfileName: "work"
+        )
+        let remote = ProfileScopedHermesAdminRunner(
+            inner: RecordingAdminRunner(deliversStdin: false), hermesProfileName: "work"
+        )
+        #expect(local.deliversStdin == true)
+        #expect(remote.deliversStdin == false)
     }
 
     @Test

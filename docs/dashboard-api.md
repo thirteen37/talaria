@@ -94,6 +94,12 @@ bodies are JSON; the "Body" column lists the wrapping the dashboard's Pydantic m
 | GET    | `/api/skills`         | —                             | `[DashboardSkill]`. |
 | PUT    | `/api/skills/toggle`  | `{name, enabled}`             | Enable/disable a skill. |
 
+> The Skills Hub has **no dashboard routes**. **Search** reads the public Nous
+> index over plain HTTP (`https://hermes-agent.nousresearch.com/docs/api/skills-index.json`,
+> no auth, cached client-side via `SkillsHubCatalog`). **Install / update /
+> uninstall** are inherently local (quarantine + `skills_guard` scan + write to
+> `~/.hermes/skills/`) and run via the CLI fallback `hermes skills …`.
+
 ### Cron
 
 | Method | Path                            | Body                                    | Returns / notes |
@@ -209,6 +215,12 @@ Several operations still shell out to `hermes` because the dashboard exposes no 
 - **Sessions rename** — `hermes sessions rename`.
 - **Tools enable/disable/list** — `hermes tools ...`. (The dashboard has `GET /api/tools/toolsets`
   for listing but no toggle route, so the whole flow stays on the CLI.)
+- **Skills Hub install/update/uninstall + installed/check reads** —
+  `hermes skills install/update/uninstall/list/check`. No dashboard route exists,
+  and these are inherently local (security scan + filesystem writes). Uninstall
+  has no `--yes` in v0.14.0, so Talaria feeds `y\n` on stdin; remote uninstall is
+  deferred (the SSH runners drop stdin). Search is **not** a fallback — it uses
+  the public Nous index over HTTP (`SkillsHubCatalog`).
 - **Doctor report** — `hermes doctor`.
 - **Gateway lifecycle** — `hermes gateway start/stop/restart/install/uninstall`.
 

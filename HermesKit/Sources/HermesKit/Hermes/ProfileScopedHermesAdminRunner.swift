@@ -23,6 +23,10 @@ public struct ProfileScopedHermesAdminRunner: HermesAdminRunning {
         self.hermesProfileName = hermesProfileName
     }
 
+    /// Pure profile-scoping wrapper — stdin delivery is whatever the inner
+    /// runner supports (local: yes; SSH/NIO: no).
+    public var deliversStdin: Bool { inner.deliversStdin }
+
     public func run(_ command: HermesAdminCommand) async throws -> HermesAdminResult {
         try await inner.run(scoped(command))
     }

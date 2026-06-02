@@ -23,7 +23,11 @@ struct BrowseDetailView: View {
         case .sessions:
             SessionsBrowser(store: harness.store, client: harness.dashboardClient)
         case .skills:
-            SkillsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            SkillsView(
+                client: harness.dashboardClient,
+                runner: harness.store.adminRunner,
+                hermesVersion: harness.profile.version
+            )
         case .plugins:
             PluginsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
         case .tools:

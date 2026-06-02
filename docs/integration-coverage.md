@@ -27,6 +27,7 @@ Talaria does not read or write Hermes SQLite files directly.
 | `requiresDashboard` | `0.14.0` | `v2026.5.16` | Dashboard-backed sessions, management, config, logs, plugins, and kanban |
 | `requiresModelAPI` | `0.14.0` | `v2026.5.16` | `/api/model/*` (main + auxiliary model assignment) |
 | `requiresEnvAPI` | `0.14.0` | `v2026.5.16` | `/api/env*` (Environment screen `.env` CRUD) |
+| `skillsHub` | `0.14.0` | `v2026.5.16` | `hermes skills install/update/uninstall` CLI fallback (search is public HTTP, ungated) |
 
 Dashboard-backed screens render a warning banner when `requiresDashboard` is
 not met. Profiles still load and ACP chat can still run; non-chat dashboard
@@ -65,7 +66,8 @@ window consumers, and tears the child down when the last consumer releases it.
 | Status / version / gateway read state | `GET /api/status` |
 | Sessions browse / search | `GET /api/sessions`, `GET /api/sessions/search` |
 | Sessions read / messages / delete | `GET /api/sessions/{id}`, `GET /api/sessions/{id}/messages`, `DELETE /api/sessions/{id}` |
-| Skills | `GET /api/skills`, `PUT /api/skills/toggle` |
+| Skills (list / toggle) | `GET /api/skills`, `PUT /api/skills/toggle` |
+| Skills Hub search | `GET https://hermes-agent.nousresearch.com/docs/api/skills-index.json` (public Nous index, not a dashboard route — `SkillsHubCatalog`) |
 | Plugins | `GET /api/dashboard/plugins/hub`, `POST /api/dashboard/agent-plugins/install`, `POST /api/dashboard/agent-plugins/{name}/enable`, `POST /api/dashboard/agent-plugins/{name}/disable`, `POST /api/dashboard/agent-plugins/{name}/update`, `DELETE /api/dashboard/agent-plugins/{name}`, `PUT /api/dashboard/plugin-providers` |
 | Cron | `GET` / `POST` on `/api/cron/jobs`, `PUT` / `DELETE` on `/api/cron/jobs/{id}`, plus `/pause`, `/resume`, and `/trigger` |
 | Kanban | `/api/plugins/kanban/*` — boards, tasks (full CRUD + bulk), links, comments, run logs, diagnostics, stats, assignees |
@@ -94,6 +96,8 @@ dashboard routes for them yet:
 | Session rename | `hermes sessions rename` |
 | Updates check / apply | `hermes update --check`, `hermes update` |
 | Tools list / enable / disable | `hermes tools list`, `hermes tools enable`, `hermes tools disable` |
+| Skills Hub install / update / remove | `hermes skills install --yes`, `hermes skills update`, `hermes skills uninstall` (stdin `y\n`; local-only, remote deferred) |
+| Skills Hub installed / update reads | `hermes skills list`, `hermes skills check` (`COLUMNS=400 NO_COLOR=1`) |
 | Doctor report / fix | `hermes doctor`, `hermes doctor --fix` |
 | Gateway lifecycle writes | `hermes gateway start`, `stop`, `restart`, `install`, `uninstall` |
 
