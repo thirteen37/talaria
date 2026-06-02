@@ -21,6 +21,8 @@ historical one:
 - **Environment** screen with `.env` CRUD.
 - **Kanban** board (boards + tasks) with full CRUD, backed by the Hermes kanban plugin.
 - **Customizable Browse sidebar** — reorder and hide manage pages, shared with the iPhone Browse sheet.
+- **Terminal (TUI) sessions** — open a chat as the real `hermes chat --tui` in an embedded SwiftTerm terminal (macOS), new or resumed, local or over `ssh -tt`.
+- **OS-level chat notifications** — opt-in agent-finished and tool-approval banners via `UNUserNotificationCenter`, suppressed for the chat the user is actively watching; a tapped banner focuses the window and selects the session.
 - iOS app target (shared source tree, in progress) with a NIO-SSH dashboard tunnel.
 
 ## Deferred Chat And Interaction
@@ -30,7 +32,6 @@ historical one:
 - Subagent observability tree exposed through `/agents`.
 - Activity feed, insights, token analytics, and usage charts.
 - `/compress` focus sheet and transcript compaction UI.
-- Optional terminal escape hatch for unported TUI features.
 - JSONL export, lineage visualization, and branch/fork UI.
 - Custom quick commands and command palette extensions beyond MVP slash completion.
 

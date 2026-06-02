@@ -47,19 +47,11 @@ struct BrowseDetailView: View {
                 onProfilesChanged: onProfilesChanged
             )
         case .profiles:
-            ConfigEditorContainer(windowHarness: harness, profiles: hermesProfiles)
+            ConfigEnvironmentTabsView(harness: harness, hermesProfiles: hermesProfiles)
         case .personalities:
             SoulAndPersonalitiesView(windowHarness: harness)
         case .models:
             ModelsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
-        case .environment:
-            EnvironmentView(
-                client: harness.dashboardClient,
-                hermesVersion: harness.profile.version,
-                runner: harness.store.adminRunner,
-                snapshotTransfer: harness.snapshotTransfer,
-                profile: harness.profile
-            )
         case .system:
             SystemTabsView(harness: harness)
         }

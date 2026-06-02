@@ -16,7 +16,6 @@ enum BrowseDestination: String, Hashable {
     case profiles
     case personalities
     case models
-    case environment
 
     /// Row title shown in the desktop sidebar and the iPhone Browse list.
     var title: String {
@@ -32,7 +31,6 @@ enum BrowseDestination: String, Hashable {
         case .profiles: return "Configuration"
         case .personalities: return "Soul & Personalities"
         case .models: return "Models"
-        case .environment: return "Environment"
         case .system: return "System"
         }
     }
@@ -51,7 +49,6 @@ enum BrowseDestination: String, Hashable {
         case .profiles: return "slider.horizontal.3"
         case .personalities: return "theatermasks"
         case .models: return "cpu"
-        case .environment: return "key.fill"
         case .system: return "gauge.medium"
         }
     }
@@ -60,6 +57,6 @@ enum BrowseDestination: String, Hashable {
     /// sidebar order. Excludes `.sessions`, which iPhone reaches via the chat
     /// stack and the All-Sessions toolbar button rather than Browse.
     static let manageOrder: [BrowseDestination] = [
-        .skills, .plugins, .tools, .cron, .kanban, .gateway, .hermesProfiles, .profiles, .personalities, .models, .environment, .system,
+        .skills, .plugins, .tools, .cron, .kanban, .gateway, .hermesProfiles, .profiles, .personalities, .models, .system,
     ]
 }
