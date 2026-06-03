@@ -38,7 +38,7 @@ struct BrowseDetailView: View {
             MessagingView(
                 client: harness.dashboardClient,
                 runner: harness.store.adminRunner,
-                hermesVersion: harness.profile.version
+                hermesVersion: harness.effectiveHermesVersion
             )
         case .hermesProfiles:
             ProfilesView(
