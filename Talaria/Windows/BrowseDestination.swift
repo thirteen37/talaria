@@ -5,10 +5,7 @@ import Foundation
 /// metadata so both surfaces stay in sync.
 enum BrowseDestination: String, Hashable {
     case sessions
-    case skills
-    case plugins
-    case mcp
-    case tools
+    case extensions
     case cron
     case kanban
     case gateway
@@ -22,15 +19,12 @@ enum BrowseDestination: String, Hashable {
     var title: String {
         switch self {
         case .sessions: return "Sessions"
-        case .skills: return "Skills"
-        case .plugins: return "Plugins"
-        case .mcp: return "MCP Servers"
-        case .tools: return "Tools"
+        case .extensions: return "Skills, Tools, MCP, Plugins"
         case .cron: return "Cron"
         case .kanban: return "Kanban"
         case .gateway: return "Gateway"
         case .hermesProfiles: return "Profiles"
-        case .profiles: return "Configuration"
+        case .profiles: return "Config & Env"
         case .personalities: return "Soul & Personalities"
         case .models: return "Models"
         case .system: return "System"
@@ -41,10 +35,7 @@ enum BrowseDestination: String, Hashable {
     var systemImage: String {
         switch self {
         case .sessions: return "clock.arrow.circlepath"
-        case .skills: return "sparkles"
-        case .plugins: return "puzzlepiece.extension"
-        case .mcp: return "server.rack"
-        case .tools: return "wrench.and.screwdriver"
+        case .extensions: return "puzzlepiece.extension"
         case .cron: return "calendar"
         case .kanban: return "rectangle.split.3x1"
         case .gateway: return "antenna.radiowaves.left.and.right"
@@ -60,6 +51,6 @@ enum BrowseDestination: String, Hashable {
     /// sidebar order. Excludes `.sessions`, which iPhone reaches via the chat
     /// stack and the All-Sessions toolbar button rather than Browse.
     static let manageOrder: [BrowseDestination] = [
-        .skills, .plugins, .mcp, .tools, .cron, .kanban, .gateway, .hermesProfiles, .profiles, .personalities, .models, .system,
+        .extensions, .cron, .kanban, .gateway, .hermesProfiles, .profiles, .personalities, .models, .system,
     ]
 }

@@ -22,18 +22,8 @@ struct BrowseDetailView: View {
         switch destination {
         case .sessions:
             SessionsBrowser(store: harness.store, client: harness.dashboardClient)
-        case .skills:
-            SkillsView(
-                client: harness.dashboardClient,
-                runner: harness.store.adminRunner,
-                hermesVersion: harness.effectiveHermesVersion
-            )
-        case .plugins:
-            PluginsView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
-        case .mcp:
-            MCPServersView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
-        case .tools:
-            ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.effectiveHermesVersion)
+        case .extensions:
+            ExtensionsTabsView(harness: harness)
         case .cron:
             CronView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .kanban:
