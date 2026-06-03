@@ -43,6 +43,11 @@ public struct NIOSSHHermesAdminRunner: HermesAdminRunning {
         self.timeout = timeout
     }
 
+    // `command.stdinInput` is ignored: ``NIOSSHCommandRunner`` execs a single
+    // command with no stdin channel, and remote skills-hub uninstall (the only
+    // stdin-driven command) is deferred in v1. `deliversStdin` stays `false`
+    // (the protocol default) so the UI gates Remove off this transport. See
+    // ``RemoteHermesAdminRunner`` for the same caveat on the macOS system-ssh path.
     public func run(_ command: HermesAdminCommand) async throws -> HermesAdminResult {
         guard profile.kind == .ssh, !(profile.host ?? "").isEmpty else {
             return HermesAdminResult(exitCode: 1, stdout: "", stderr: "profile is not an SSH profile")

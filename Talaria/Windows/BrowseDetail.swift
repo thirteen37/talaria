@@ -22,21 +22,17 @@ struct BrowseDetailView: View {
         switch destination {
         case .sessions:
             SessionsBrowser(store: harness.store, client: harness.dashboardClient)
-        case .skills:
-            SkillsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
-        case .plugins:
-            PluginsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
-        case .tools:
-            ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.profile.version)
+        case .extensions:
+            ExtensionsTabsView(harness: harness)
         case .cron:
-            CronView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            CronView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .kanban:
-            KanbanView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            KanbanView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .gateway:
             GatewayView(
                 client: harness.dashboardClient,
                 runner: harness.store.adminRunner,
-                hermesVersion: harness.profile.version
+                hermesVersion: harness.effectiveHermesVersion
             )
         case .messaging:
             MessagingView(
@@ -49,25 +45,15 @@ struct BrowseDetailView: View {
                 client: harness.dashboardClient,
                 runner: harness.store.adminRunner,
                 activeProfile: activeHermesProfile,
-                hermesVersion: harness.profile.version,
+                hermesVersion: harness.effectiveHermesVersion,
                 onProfilesChanged: onProfilesChanged
             )
         case .profiles:
-            ConfigEditorContainer(windowHarness: harness, profiles: hermesProfiles)
-        case .soul:
-            SoulEditorContainer(windowHarness: harness)
+            ConfigEnvironmentTabsView(harness: harness, hermesProfiles: hermesProfiles)
         case .personalities:
-            PersonalitiesView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
+            SoulAndPersonalitiesView(windowHarness: harness)
         case .models:
-            ModelsView(client: harness.dashboardClient, hermesVersion: harness.profile.version)
-        case .environment:
-            EnvironmentView(
-                client: harness.dashboardClient,
-                hermesVersion: harness.profile.version,
-                runner: harness.store.adminRunner,
-                snapshotTransfer: harness.snapshotTransfer,
-                profile: harness.profile
-            )
+            ModelsView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .system:
             SystemTabsView(harness: harness)
         }

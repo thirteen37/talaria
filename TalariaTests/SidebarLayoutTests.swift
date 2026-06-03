@@ -29,7 +29,7 @@ struct SidebarLayoutTests {
         let defaults = makeDefaults()
         let layout = SidebarLayout(defaults: defaults)
 
-        // Move the first page (.skills) to the end.
+        // Move the first page (.extensions) to the end.
         layout.move(fromOffsets: IndexSet(integer: 0), toOffset: layout.orderedManageDestinations.count)
 
         var expected = BrowseDestination.manageOrder
@@ -47,37 +47,55 @@ struct SidebarLayoutTests {
         let defaults = makeDefaults()
         let layout = SidebarLayout(defaults: defaults)
 
-        layout.setHidden(.tools, hidden: true)
-        #expect(layout.isHidden(.tools))
-        #expect(!layout.visibleManageDestinations().contains(.tools))
+        layout.setHidden(.extensions, hidden: true)
+        #expect(layout.isHidden(.extensions))
+        #expect(!layout.visibleManageDestinations().contains(.extensions))
         // Hidden page still listed in the editable order (recoverable).
-        #expect(layout.orderedManageDestinations.contains(.tools))
+        #expect(layout.orderedManageDestinations.contains(.extensions))
 
         let reloaded = SidebarLayout(defaults: defaults)
-        #expect(reloaded.isHidden(.tools))
+        #expect(reloaded.isHidden(.extensions))
 
-        layout.setHidden(.tools, hidden: false)
-        #expect(!layout.isHidden(.tools))
-        #expect(layout.visibleManageDestinations().contains(.tools))
+        layout.setHidden(.extensions, hidden: false)
+        #expect(!layout.isHidden(.extensions))
+        #expect(layout.visibleManageDestinations().contains(.extensions))
     }
 
     @Test
     func unknownStoredRawStringIsDropped() {
         let defaults = makeDefaults()
         // Seed an order containing a bogus raw value plus a real one.
-        defaults.set(["bogusRemovedPage", BrowseDestination.skills.rawValue], forKey: "sidebarOrder")
+        defaults.set(["bogusRemovedPage", BrowseDestination.extensions.rawValue], forKey: "sidebarOrder")
 
         let layout = SidebarLayout(defaults: defaults)
 
         #expect(!layout.orderedManageDestinations.contains { $0.rawValue == "bogusRemovedPage" })
-        #expect(layout.orderedManageDestinations.contains(.skills))
+        #expect(layout.orderedManageDestinations.contains(.extensions))
+    }
+
+    @Test
+    func legacyConsolidatedRawStringsAreDroppedAndExtensionsAppended() {
+        let defaults = makeDefaults()
+        // A pre-consolidation user's stored order references the four removed
+        // pages. They become unknown raw strings and are dropped; `.extensions`
+        // is appended as a missing manage page.
+        defaults.set(["skills", "tools", "mcp", "plugins"], forKey: "sidebarOrder")
+
+        let layout = SidebarLayout(defaults: defaults)
+
+        for legacy in ["skills", "tools", "mcp", "plugins"] {
+            #expect(!layout.orderedManageDestinations.contains { $0.rawValue == legacy })
+        }
+        #expect(layout.orderedManageDestinations.contains(.extensions))
+        // Every current manage page is present after reconcile.
+        #expect(Set(layout.orderedManageDestinations) == Set(BrowseDestination.manageOrder))
     }
 
     @Test
     func sessionsStoredRawStringIsDropped() {
         let defaults = makeDefaults()
         // `.sessions` is valid but pinned — it must never enter the manage list.
-        defaults.set([BrowseDestination.sessions.rawValue, BrowseDestination.skills.rawValue], forKey: "sidebarOrder")
+        defaults.set([BrowseDestination.sessions.rawValue, BrowseDestination.extensions.rawValue], forKey: "sidebarOrder")
 
         let layout = SidebarLayout(defaults: defaults)
 
@@ -108,7 +126,7 @@ struct SidebarLayoutTests {
         let layout = SidebarLayout(defaults: defaults)
 
         layout.move(fromOffsets: IndexSet(integer: 0), toOffset: layout.orderedManageDestinations.count)
-        layout.setHidden(.tools, hidden: true)
+        layout.setHidden(.extensions, hidden: true)
 
         layout.resetToDefault()
 

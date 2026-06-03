@@ -1,0 +1,11 @@
+{
+  "name": "filesystem",
+  "transport": "stdio",
+  "url": null,
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+  "env": {"FS_TOKEN": "sk-…4f9a"},
+  "auth": null,
+  "enabled": true,
+  "tools": null
+}

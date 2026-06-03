@@ -1,0 +1,29 @@
+{
+  "entries": [
+    {
+      "name": "github",
+      "description": "GitHub MCP server",
+      "source": "optional-mcps/github",
+      "transport": "http",
+      "auth_type": "oauth",
+      "required_env": [],
+      "needs_install": false,
+      "installed": false,
+      "enabled": false
+    },
+    {
+      "name": "brave-search",
+      "description": "Brave Search MCP server",
+      "source": "optional-mcps/brave-search",
+      "transport": "stdio",
+      "auth_type": "header",
+      "required_env": [
+        {"name": "BRAVE_API_KEY", "prompt": "Brave Search API key", "required": true}
+      ],
+      "needs_install": true,
+      "installed": false,
+      "enabled": false
+    }
+  ],
+  "diagnostics": []
+}

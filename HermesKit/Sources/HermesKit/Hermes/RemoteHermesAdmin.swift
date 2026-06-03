@@ -8,6 +8,12 @@ public struct RemoteHermesAdminRunner: HermesAdminRunning {
         self.profile = profile
     }
 
+    // `command.stdinInput` is intentionally ignored here: the only command that
+    // sets it today is `hermes skills uninstall` (no `--yes` in v0.14.0), and
+    // remote skills-hub uninstall is deferred in v1. The spawned `ssh -T` closes
+    // its stdin, so a remote uninstall prints "Cancelled" and exits 0 rather
+    // than removing. `deliversStdin` therefore stays `false` (the protocol
+    // default), and the UI gates Remove on that capability accordingly.
     public func run(_ command: HermesAdminCommand) async throws -> HermesAdminResult {
         guard profile.kind == .ssh, let host = profile.host, !host.isEmpty else {
             return HermesAdminResult(exitCode: 1, stdout: "", stderr: "profile is not an SSH profile")

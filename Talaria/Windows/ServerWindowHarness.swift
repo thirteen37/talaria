@@ -58,6 +58,21 @@ final class ServerWindowHarness {
     /// refcount sharing). One stored slot serves both — the platform `tearDown`
     /// releases the exact instance it acquired.
     var dashboardSupervisor: DashboardSupervisor?
+    /// Live Hermes version from the dashboard's `GET /api/status`, captured when
+    /// the dashboard client is acquired (``refreshLiveVersion()``). Preferred
+    /// over the profile's cached `hermes --version` probe (`profile.version`)
+    /// for capability gating — see ``effectiveHermesVersion``.
+    var liveHermesVersion: HermesVersion?
+
+    /// The version every capability banner should gate on: the **live**
+    /// dashboard status version when known, else the profile's cached probe
+    /// version. The cached value is captured once at probe time and never
+    /// refreshed, so after a Hermes upgrade it goes stale and version-gated
+    /// surfaces mis-banner (e.g. an MCP-capable 0.15.1 server still reading a
+    /// cached 0.14.0). The running dashboard's own status is authoritative for
+    /// "what's available right now"; the cached probe is only the fallback for
+    /// before the dashboard has connected.
+    var effectiveHermesVersion: HermesVersion? { liveHermesVersion ?? profile.version }
 
     init(
         store: SessionsStore,
@@ -135,6 +150,17 @@ final class ServerWindowHarness {
         dashboardTask?.cancel()
         dashboardError = nil
         dashboardTask = Task { [weak self] in await self?.acquireDashboard() }
+    }
+
+    /// Refreshes ``liveHermesVersion`` from the connected dashboard's
+    /// `GET /api/status`. Best-effort: a failure leaves the previous value (or
+    /// nil), so ``effectiveHermesVersion`` falls back to the cached probe.
+    /// Called from the platform `acquireDashboard()` once the client is live.
+    func refreshLiveVersion() async {
+        guard let dashboardClient else { return }
+        if let status = try? await dashboardClient.getStatus() {
+            liveHermesVersion = HermesVersion(status.version)
+        }
     }
 
     /// Process-wide singleton. `PinnedHostKeyStore`'s read-modify-write

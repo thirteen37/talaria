@@ -9,13 +9,21 @@ struct PathAwareHermesAdminRunner: HermesAdminRunning {
     let inner: HermesAdminRunning
     let resolver: LoginShellPATHResolver
 
+    /// PATH-injection wrapper — stdin delivery is whatever the inner runner
+    /// supports (it wraps the local macOS runner, which delivers stdin).
+    var deliversStdin: Bool { inner.deliversStdin }
+
     func run(_ command: HermesAdminCommand) async throws -> HermesAdminResult {
         let extra = await resolver.extraEnv()
         var env = command.environment
         for (key, value) in extra where env[key] == nil {
             env[key] = value
         }
-        return try await inner.run(HermesAdminCommand(arguments: command.arguments, environment: env))
+        return try await inner.run(HermesAdminCommand(
+            arguments: command.arguments,
+            environment: env,
+            stdinInput: command.stdinInput
+        ))
     }
 
     func runStream(_ command: HermesAdminCommand) -> AsyncThrowingStream<AdminEvent, Error> {
@@ -28,7 +36,11 @@ struct PathAwareHermesAdminRunner: HermesAdminRunning {
                 for (key, value) in extra where env[key] == nil {
                     env[key] = value
                 }
-                let stream = inner.runStream(HermesAdminCommand(arguments: command.arguments, environment: env))
+                let stream = inner.runStream(HermesAdminCommand(
+                    arguments: command.arguments,
+                    environment: env,
+                    stdinInput: command.stdinInput
+                ))
                 do {
                     for try await event in stream {
                         continuation.yield(event)

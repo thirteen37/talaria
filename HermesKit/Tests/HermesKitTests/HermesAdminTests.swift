@@ -27,6 +27,38 @@ struct HermesAdminTests {
     }
 
     @Test
+    func runFeedsStdinInputToChild() async throws {
+        // The non-interactive uninstall path feeds `y\n` to a prompt that reads
+        // stdin. Spawn `sh -c 'cat'` so whatever we inject on stdin is echoed
+        // back on stdout, proving the bytes reach the child.
+        let runner = LocalHermesAdminRunner(executableURL: URL(fileURLWithPath: "/bin/sh"))
+        let result = try await runner.run(
+            HermesAdminCommand(arguments: ["-c", "cat"], stdinInput: "y\n")
+        )
+        #expect(result.exitCode == 0)
+        #expect(result.stdout == "y\n")
+    }
+
+    @Test
+    func localRunnerAdvertisesStdinDelivery() {
+        // The capability the UI gates Skills Hub Remove on. Local delivers stdin;
+        // the SSH/NIO remote runners inherit the protocol default (false).
+        let runner = LocalHermesAdminRunner(executableURL: URL(fileURLWithPath: "/bin/sh"))
+        #expect(runner.deliversStdin == true)
+    }
+
+    @Test
+    func runWithoutStdinInputLeavesStdinClosed() async throws {
+        // No `stdinInput` → `cat` sees immediate EOF and emits nothing, the
+        // existing one-shot behavior. Guards against the Pipe being attached
+        // unconditionally (which would hang waiting for a write).
+        let runner = LocalHermesAdminRunner(executableURL: URL(fileURLWithPath: "/bin/sh"))
+        let result = try await runner.run(HermesAdminCommand(arguments: ["-c", "cat"]))
+        #expect(result.exitCode == 0)
+        #expect(result.stdout.isEmpty)
+    }
+
+    @Test
     func runStreamEmitsLinesAndExit() async throws {
         let runner = LocalHermesAdminRunner(executableURL: URL(fileURLWithPath: "/bin/sh"))
         let script = """

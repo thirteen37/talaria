@@ -3,10 +3,23 @@ import Foundation
 public struct HermesAdminCommand: Sendable {
     public var arguments: [String]
     public var environment: [String: String]
+    /// Bytes fed to the child's stdin after launch, for the rare admin command
+    /// that prompts on stdin and has no `--yes` flag (notably `hermes skills
+    /// uninstall` in v0.14.0). `nil` (the default) leaves stdin closed, which is
+    /// the existing behavior for every one-shot admin command. Honored only by
+    /// the macOS ``LocalHermesAdminRunner``'s one-shot `run`; the SSH/NIO remote
+    /// runners ignore it for now (remote uninstall is deferred — see those
+    /// runners' notes), and `runStream` never consults it.
+    public var stdinInput: String?
 
-    public init(arguments: [String], environment: [String: String] = [:]) {
+    public init(
+        arguments: [String],
+        environment: [String: String] = [:],
+        stdinInput: String? = nil
+    ) {
         self.arguments = arguments
         self.environment = environment
+        self.stdinInput = stdinInput
     }
 }
 
@@ -31,6 +44,19 @@ public enum AdminEvent: Sendable, Equatable {
 public protocol HermesAdminRunning: Sendable {
     func run(_ command: HermesAdminCommand) async throws -> HermesAdminResult
     func runStream(_ command: HermesAdminCommand) -> AsyncThrowingStream<AdminEvent, Error>
+
+    /// Whether `command.stdinInput` is actually delivered to the spawned child.
+    /// Only the local macOS runner can feed stdin today; the SSH/NIO remote
+    /// runners exec a single command with no stdin channel and ignore it. The UI
+    /// reads this to gate stdin-confirmed operations — notably Skills Hub
+    /// **uninstall**, which has no `--yes` in Hermes v0.14.0 and would otherwise
+    /// read closed stdin, print "Cancelled.", and exit 0. Defaults to `false`;
+    /// wrappers forward their inner runner's value.
+    var deliversStdin: Bool { get }
+}
+
+public extension HermesAdminRunning {
+    var deliversStdin: Bool { false }
 }
 
 public extension HermesAdminRunning {
@@ -100,6 +126,11 @@ public struct LocalHermesAdminRunner: HermesAdminRunning {
     /// the profile) without re-passing them through every `HermesAdminCommand`.
     public var baseEnvironment: [String: String]
 
+    /// The local runner attaches a `Pipe` to the child's stdin when a command
+    /// carries `stdinInput`, so it's the one runner that can drive a stdin
+    /// prompt (e.g. non-interactive `hermes skills uninstall`).
+    public var deliversStdin: Bool { true }
+
     /// Production init: invokes `/usr/bin/env <hermesPath> <args>`. Mirrors the
     /// session transport so PATH resolution and absolute-path handling behave
     /// identically across the chat and Manage surfaces.
@@ -129,6 +160,17 @@ public struct LocalHermesAdminRunner: HermesAdminRunning {
         process.standardOutput = stdout
         process.standardError = stderr
 
+        // Feed stdin only when the command asks for it. Otherwise pin stdin to
+        // the null device (immediate EOF) rather than leaving it unset — an
+        // unset `standardInput` inherits the parent's stdin, so under an
+        // interactive `swift test`/`xcodebuild test` run a command that reads
+        // stdin would block on the inherited TTY instead of seeing EOF. One-shot
+        // admin commands don't read stdin, so nullDevice is harmless for them.
+        // When `stdinInput` is set, the write happens after `run()` so the child
+        // is live to read it; closing the write end then sends EOF.
+        let stdinPipe: Pipe? = command.stdinInput != nil ? Pipe() : nil
+        process.standardInput = stdinPipe ?? FileHandle.nullDevice
+
         let stdoutReader = ProcessOutputReader(handle: stdout.fileHandleForReading)
         let stderrReader = ProcessOutputReader(handle: stderr.fileHandleForReading)
         var stdoutTask: Task<Data, Never>?
@@ -144,6 +186,12 @@ public struct LocalHermesAdminRunner: HermesAdminRunning {
                 process.terminationHandler = nil
                 continuation.resume(throwing: error)
                 return
+            }
+
+            if let stdinPipe, let bytes = command.stdinInput?.data(using: .utf8) {
+                let handle = stdinPipe.fileHandleForWriting
+                try? handle.write(contentsOf: bytes)
+                try? handle.close()
             }
 
             stdoutTask = Task.detached(priority: .userInitiated) {
@@ -177,6 +225,10 @@ public struct LocalHermesAdminRunner: HermesAdminRunning {
             let stderrPipe = Pipe()
             process.standardOutput = stdoutPipe
             process.standardError = stderrPipe
+            // Streamed admin commands are non-interactive and never carry
+            // `stdinInput`; pin stdin to the null device so a child never blocks
+            // on an inherited TTY (see the one-shot `run` for the full rationale).
+            process.standardInput = FileHandle.nullDevice
 
             let stdoutReader = AdminLineReader(handle: stdoutPipe.fileHandleForReading, label: "stdout") { line in
                 continuation.yield(.stdoutLine(line))

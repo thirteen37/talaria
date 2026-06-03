@@ -1,0 +1,7 @@
+{
+  "ok": true,
+  "tools": [
+    {"name": "read_file", "description": "Read a file from disk"},
+    {"name": "write_file", "description": "Write a file to disk"}
+  ]
+}

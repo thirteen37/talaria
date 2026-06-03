@@ -5,9 +5,7 @@ import Foundation
 /// metadata so both surfaces stay in sync.
 enum BrowseDestination: String, Hashable {
     case sessions
-    case skills
-    case plugins
-    case tools
+    case extensions
     case cron
     case kanban
     case gateway
@@ -15,28 +13,22 @@ enum BrowseDestination: String, Hashable {
     case hermesProfiles
     case system
     case profiles
-    case soul
     case personalities
     case models
-    case environment
 
     /// Row title shown in the desktop sidebar and the iPhone Browse list.
     var title: String {
         switch self {
         case .sessions: return "Sessions"
-        case .skills: return "Skills"
-        case .plugins: return "Plugins"
-        case .tools: return "Tools"
+        case .extensions: return "Skills, Tools, MCP, Plugins"
         case .cron: return "Cron"
         case .kanban: return "Kanban"
         case .gateway: return "Gateway"
         case .messaging: return "Messaging"
         case .hermesProfiles: return "Profiles"
-        case .profiles: return "Configuration"
-        case .soul: return "Soul"
-        case .personalities: return "Personalities"
+        case .profiles: return "Config & Env"
+        case .personalities: return "Soul & Personalities"
         case .models: return "Models"
-        case .environment: return "Environment"
         case .system: return "System"
         }
     }
@@ -45,19 +37,15 @@ enum BrowseDestination: String, Hashable {
     var systemImage: String {
         switch self {
         case .sessions: return "clock.arrow.circlepath"
-        case .skills: return "sparkles"
-        case .plugins: return "puzzlepiece.extension"
-        case .tools: return "wrench.and.screwdriver"
+        case .extensions: return "puzzlepiece.extension"
         case .cron: return "calendar"
         case .kanban: return "rectangle.split.3x1"
         case .gateway: return "antenna.radiowaves.left.and.right"
         case .messaging: return "bubble.left.and.bubble.right"
         case .hermesProfiles: return "square.stack.3d.up"
         case .profiles: return "slider.horizontal.3"
-        case .soul: return "heart.text.square"
         case .personalities: return "theatermasks"
         case .models: return "cpu"
-        case .environment: return "key.fill"
         case .system: return "gauge.medium"
         }
     }
@@ -66,6 +54,6 @@ enum BrowseDestination: String, Hashable {
     /// sidebar order. Excludes `.sessions`, which iPhone reaches via the chat
     /// stack and the All-Sessions toolbar button rather than Browse.
     static let manageOrder: [BrowseDestination] = [
-        .skills, .plugins, .tools, .cron, .kanban, .gateway, .messaging, .hermesProfiles, .profiles, .soul, .personalities, .models, .environment, .system,
+        .extensions, .cron, .kanban, .gateway, .messaging, .hermesProfiles, .profiles, .personalities, .models, .system,
     ]
 }
