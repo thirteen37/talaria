@@ -97,7 +97,7 @@ integration.
 | Models: main + auxiliary slots | ✅ | ✅ switch | ✅ | ✅ + aux settings | ✅ |
 | Custom OpenAI-compatible endpoints | ✅ | 🟡 | 🟡 | 🟡 | ✅ |
 | Gateway start / stop / status | ✅ (CLI) | ✅ | 🟡 | ✅ | ✅ |
-| Messaging-platform setup forms | ⬜ | ✅ 15+ | 🟡 | ✅ 13 | 🟡 |
+| Messaging-platform setup forms | ✅ 8 + auto | ✅ 15+ | 🟡 | ✅ 13 | 🟡 |
 | Soul / personality editor | ✅ both | 🟡 | 🟡 | ✅ both | ⬜ |
 | Memory (`MEMORY.md`/`USER.md`) editor | ⬜ | ✅ | 🟡 | ✅ | ✅ |
 | Config editor (schema-driven) | ✅ | 🟡 | ✅ | ✅ 10-tab | ✅ |
@@ -146,9 +146,6 @@ Several are tracked in `docs/roadmap.md` as deliberately deferred:
 - **No MCP server registry.** No browse/add/preset flow for MCP servers — a
   notable gap, since Scarf, Hermes Desktop, and the built-in dashboard all have
   one.
-- **No messaging-platform setup forms.** Scarf configures 13 platforms with
-  native forms; Hermes Desktop pitches a 15+ platform unified inbox. Talaria
-  exposes none of this yet.
 - **No memory editor.** Talaria edits Soul and Personalities but not
   `MEMORY.md` / `USER.md`.
 - **No activity feed, credential pools, webhooks, quick commands, or Hermes

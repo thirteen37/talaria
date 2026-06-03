@@ -7,24 +7,16 @@ final class EnvironmentHarness {
     var vars: [DashboardEnvVar] = []
     var isLoading: Bool = false
     var lastError: String?
-    var selectionID: String? {
-        didSet {
-            // Drop every revealed plaintext when the selection moves: a secret
-            // is scoped to the row that asked for it, so re-selecting a
-            // previously-revealed var must trigger a fresh (rate-limited)
-            // reveal rather than re-displaying cached plaintext from memory.
-            if oldValue != selectionID { revealed = [:] }
-        }
-    }
-    /// Names with an in-flight save/delete/reveal, so their detail controls
-    /// disable while the request is outstanding.
+    var selectionID: String?
+    /// Names with an in-flight save/delete, so their detail controls disable
+    /// while the request is outstanding. (Reveal has its own per-field spinner
+    /// inside ``RevealableSecretField``.)
     var busy: Set<String> = []
-    /// Revealed plaintext values keyed by var name. Cleared on every refresh and
-    /// whenever the selection changes, so a secret never lingers on screen past
-    /// the row that asked for it.
-    var revealed: [String: String] = [:]
     /// Hides `advanced` vars behind the toolbar toggle (off by default).
     var showAdvanced: Bool = false
+    /// Bumped on every refresh so expanded rows re-mask any revealed secret —
+    /// a revealed value must not stay in cleartext across a reload.
+    private(set) var refreshToken: Int = 0
 
     private let client: DashboardClient
     /// Reads the Hermes `.env` directly (local fs / SSH `cat`) purely to
@@ -50,10 +42,10 @@ final class EnvironmentHarness {
 
     func refresh() async {
         isLoading = true
+        refreshToken &+= 1
         defer { isLoading = false }
         do {
             var merged = try await client.listEnvVars()
-            revealed = [:]
             lastError = nil
             // Enumerate user-named custom keys by reading the `.env` directly,
             // and append the ones the dashboard doesn't already know about
@@ -151,20 +143,18 @@ final class EnvironmentHarness {
         }
     }
 
-    func reveal(key: String) async {
-        busy.insert(key)
-        defer { busy.remove(key) }
+    /// Fetches one var's unredacted value on demand. Returns nil (and sets
+    /// `lastError`) on failure. The plaintext lives only in the requesting
+    /// field's view state, so it can't linger past that row — no harness-side
+    /// reveal cache or selection-scoped clearing is needed.
+    func revealValue(key: String) async -> String? {
         do {
             let value = try await client.revealEnvVar(key: key)
-            // Only store the plaintext if this var is still selected: if the
-            // user moved to another row during the await, `selectionID`'s
-            // `didSet` already cleared `revealed`, and writing here would leave
-            // a secret lingering in memory keyed to the now-deselected var —
-            // breaking the "never lingers past its row" invariant.
-            if selectionID == key { revealed[key] = value }
             lastError = nil
+            return value
         } catch {
             lastError = error.localizedDescription
+            return nil
         }
     }
 }
@@ -274,8 +264,9 @@ struct EnvironmentView: View {
             // collapse it so its expanded controls (and any revealed plaintext)
             // stop rendering for a row that's no longer in the list. `selected`
             // reads the unfiltered `vars`, so without this the secret would
-            // linger past its row. Clearing `selectionID` also clears `revealed`
-            // via its `didSet`.
+            // linger past its row. Clearing `selectionID` collapses the row,
+            // and `EnvVarRow`'s `onChange(of: isExpanded)` then drops the
+            // revealed plaintext (`draft = ""`), re-masking the field.
             .onChange(of: searchText) { _, _ in reconcileSelection(harness: harness) }
             .onChange(of: harness.showAdvanced) { _, _ in reconcileSelection(harness: harness) }
             .sheet(isPresented: $showingAddSheet) {
@@ -310,10 +301,10 @@ struct EnvironmentView: View {
                                 envVar: envVar,
                                 isExpanded: harness.selectionID == envVar.name,
                                 busy: harness.busy.contains(envVar.name),
-                                revealedValue: harness.revealed[envVar.name],
                                 onSave: { value in Task { await harness.save(key: envVar.name, value: value) } },
                                 onDelete: { Task { await harness.delete(key: envVar.name) } },
-                                onReveal: { Task { await harness.reveal(key: envVar.name) } },
+                                reveal: { await harness.revealValue(key: envVar.name) },
+                                remaskToken: harness.refreshToken,
                                 onFocus: { harness.selectionID = envVar.name }
                             )
                             .tag(envVar.name)
@@ -478,10 +469,11 @@ private struct EnvVarRow: View {
     let envVar: DashboardEnvVar
     let isExpanded: Bool
     let busy: Bool
-    let revealedValue: String?
     let onSave: (String) -> Void
     let onDelete: () -> Void
-    let onReveal: () -> Void
+    let reveal: () async -> String?
+    /// Bumped per refresh so the field re-masks any revealed secret.
+    let remaskToken: Int
     /// Called when the value field gains focus, so the screen expands this row
     /// ("focusing any record expands it").
     let onFocus: () -> Void
@@ -497,9 +489,6 @@ private struct EnvVarRow: View {
     /// Typed replacement value. Empty means "keep the current value" — Save is
     /// disabled and the placeholder shows the existing (redacted) value.
     @State private var draft: String = ""
-    /// Whether the secret is shown in cleartext (eye toggle). Always false for
-    /// non-secret vars, which render a plain `TextField` regardless.
-    @State private var showKey: Bool = false
     @State private var confirmingDelete = false
     @FocusState private var fieldFocused: Bool
 
@@ -524,8 +513,19 @@ private struct EnvVarRow: View {
                 // width, so toggling the eye/clear shrinks the field rather than
                 // shoving it left.
                 HStack(spacing: 4) {
-                    valueField
-                    if envVar.isPassword, isExpanded { revealEye }
+                    // Eye only for secrets (non-secrets are un-masked inline by
+                    // the `.env` file reader) and only once expanded.
+                    RevealableSecretField(
+                        text: $draft,
+                        placeholder: placeholder,
+                        isSecret: envVar.isPassword,
+                        canReveal: envVar.isPassword && envVar.isSet,
+                        reveal: reveal,
+                        revealAvailable: isExpanded,
+                        focus: $fieldFocused,
+                        onFocus: onFocus,
+                        remaskToken: remaskToken
+                    )
                     if isExpanded, envVar.isSet { clearButton }
                 }
                 .frame(width: Self.valueColumnWidth, alignment: .leading)
@@ -540,14 +540,11 @@ private struct EnvVarRow: View {
         // isn't flush against the list edges.
         .padding(.vertical, 6)
         .padding(.trailing, 4)
-        // Drop any revealed plaintext and typed draft the moment the row
-        // collapses: a secret must never linger past the row that asked for it.
-        // The per-row analogue of `selectionID.didSet` clearing `harness.revealed`.
+        // Drop the typed/revealed draft the moment the row collapses: a secret
+        // must never linger past the row that asked for it. `RevealableSecretField`
+        // re-masks itself when the draft empties.
         .onChange(of: isExpanded) { _, expanded in
-            if !expanded {
-                draft = ""
-                showKey = false
-            }
+            if !expanded { draft = "" }
         }
         // Clear the typed draft once a save lands: a successful save refreshes
         // the harness, reloading this var with its new redacted value, so the
@@ -556,52 +553,12 @@ private struct EnvVarRow: View {
         // `redactedValue` is unchanged and the user's input is preserved to retry.
         .onChange(of: envVar.redactedValue) { _, _ in
             draft = ""
-            showKey = false
-        }
-        // The eye's `onReveal()` is async; the plaintext arrives here once the
-        // harness fetches it. Drop it into the field and switch to cleartext so
-        // the real value lands in the box for editing. When it clears back to nil
-        // — a toolbar Refresh wipes `harness.revealed` while the row stays
-        // expanded — mirror that by dropping the plaintext from the field too, so
-        // a revealed secret never survives a refresh ("cleared on every refresh").
-        .onChange(of: revealedValue) { _, newValue in
-            if let newValue {
-                draft = newValue
-                showKey = true
-            } else {
-                draft = ""
-                showKey = false
-            }
         }
         .alert("Delete \(envVar.name)?", isPresented: $confirmingDelete) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) { onDelete() }
         } message: {
             Text("This removes the variable from the Hermes host's .env file.")
-        }
-    }
-
-    /// The value editor shared by collapsed and expanded rows: a `SecureField`
-    /// while a secret is hidden, a `TextField` otherwise. The placeholder shows
-    /// the current (redacted) value greyed, so an empty `draft` reads as "keep".
-    @ViewBuilder
-    private var valueField: some View {
-        Group {
-            if envVar.isPassword, !showKey {
-                SecureField(placeholder, text: $draft)
-            } else {
-                TextField(placeholder, text: $draft)
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    #endif
-            }
-        }
-        .textFieldStyle(.roundedBorder)
-        .font(.system(.caption, design: .monospaced))
-        .focused($fieldFocused)
-        .onChange(of: fieldFocused) { _, focused in
-            if focused { onFocus() }
         }
     }
 
@@ -613,38 +570,6 @@ private struct EnvVarRow: View {
             return redacted
         }
         return "Value"
-    }
-
-    /// Icon-only reveal toggle modelled on `CustomEndpointForm.apiKeyField`.
-    private var revealEye: some View {
-        Button {
-            toggleReveal()
-        } label: {
-            if busy {
-                ProgressView().controlSize(.small)
-            } else {
-                Image(systemName: showKey ? "eye.slash" : "eye")
-            }
-        }
-        .buttonStyle(.borderless)
-        .disabled(busy)
-        .accessibilityLabel(showKey ? "Hide value" : "Show value")
-        .help(showKey ? "Hide the value" : "Reveal the current value")
-    }
-
-    /// One control for both "show what I typed" and "fetch the stored secret".
-    /// When hidden with a set var and an empty draft, fetch the plaintext from
-    /// the dashboard; otherwise just flip visibility of the typed value.
-    private func toggleReveal() {
-        if showKey {
-            showKey = false
-            return
-        }
-        if envVar.isSet, draft.isEmpty {
-            onReveal()           // async: lands in `draft` via `.onChange(of: revealedValue)`
-        } else {
-            showKey = true
-        }
     }
 
     @ViewBuilder
