@@ -19,6 +19,7 @@ historical one:
 - **Hermes profile** management (clone / rename / delete).
 - **Soul** (`SOUL.md`) and **Personalities** (`agent.personalities`) editors.
 - **Environment** screen with `.env` CRUD.
+- **Messaging** screen: per-platform setup forms (Telegram, Discord, Slack, Mattermost, Matrix, iMessage/BlueBubbles, QQ, IRC) over the messaging env vars Hermes reports, with prefix-based auto-grouping for anything uncatalogued, live connection pills from `/api/status`, and a gateway restart to apply changes. A pure presentation overlay — no new Hermes routes.
 - **Kanban** board (boards + tasks) with full CRUD, backed by the Hermes kanban plugin.
 - **Customizable Browse sidebar** — reorder and hide manage pages, shared with the iPhone Browse sheet.
 - iOS app target (shared source tree, in progress) with a NIO-SSH dashboard tunnel.
@@ -36,7 +37,6 @@ historical one:
 
 ## Deferred Configuration
 
-- Native setup forms for all messaging platforms (gateway *process* control already shipped; per-platform credential/config forms have not).
 - MCP server registry with browse, add, edit, and curated preset flows.
 - Memory and user-profile editors for `MEMORY.md` and `USER.md` (the `SOUL.md` and personality editors already shipped).
 - Webhook management.

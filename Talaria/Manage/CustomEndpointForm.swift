@@ -22,8 +22,6 @@ struct CustomEndpointForm: View {
     /// Typed API key. Empty means "leave the stored key untouched" when editing,
     /// or "no key" when adding.
     @State private var keyInput: String = ""
-    @State private var showKey: Bool = false
-    @State private var revealing: Bool = false
     /// Inline error from a failed/empty reveal, so a transient failure is
     /// visible rather than looking like a cleared key.
     @State private var revealError: String?
@@ -125,64 +123,18 @@ struct CustomEndpointForm: View {
         .frame(minWidth: 420, minHeight: 480)
     }
 
-    @ViewBuilder
     private var apiKeyField: some View {
-        HStack {
-            Group {
-                if showKey {
-                    TextField("API key", text: $keyInput)
-                        #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        #endif
-                } else {
-                    SecureField(isEditing ? "Leave blank to keep" : "API key", text: $keyInput)
-                }
-            }
-            .font(.system(.body, design: .monospaced))
-
-            Button {
-                toggleReveal()
-            } label: {
-                if revealing {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: showKey ? "eye.slash" : "eye")
-                }
-            }
-            .buttonStyle(.borderless)
-            .disabled(revealing)
-            .accessibilityLabel(revealAccessibilityLabel)
-            .help(revealHelp)
-        }
-    }
-
-    /// One control for both "show what I typed" and "fetch the stored key".
-    /// When hidden and the field is empty but a key is stored, fetch it from
-    /// `~/.hermes/.env`; otherwise just flip visibility of the typed value.
-    private func toggleReveal() {
-        if showKey {
-            showKey = false
-            return
-        }
-        if isEditing, existing?.hasAPIKey == true, keyInput.isEmpty {
-            reveal()           // async: sets keyInput + showKey, or revealError
-        } else {
-            revealError = nil  // a prior failed reveal no longer applies to the typed key
-            showKey = true
-        }
-    }
-
-    private var revealHelp: String {
-        if showKey { return "Hide the API key" }
-        if isEditing, existing?.hasAPIKey == true, keyInput.isEmpty {
-            return "Reveal the stored API key"
-        }
-        return "Show the API key"
-    }
-
-    private var revealAccessibilityLabel: String {
-        showKey ? "Hide API key" : "Show API key"
+        RevealableSecretField(
+            text: $keyInput,
+            placeholder: isEditing ? "Leave blank to keep" : "API key",
+            isSecret: true,
+            canReveal: isEditing && existing?.hasAPIKey == true,
+            reveal: { await fetchStoredKey() },
+            font: .system(.body, design: .monospaced)
+        )
+        // A prior failed-reveal error no longer applies once the field changes
+        // (typed input or a successful fetch).
+        .onChange(of: keyInput) { _, _ in revealError = nil }
     }
 
     private var apiKeyFooter: String {
@@ -225,22 +177,20 @@ struct CustomEndpointForm: View {
         newModel = ""
     }
 
-    private func reveal() {
-        guard let existing else { return }
-        revealing = true
-        revealError = nil
-        Task {
-            do {
-                if let value = try await harness.revealEndpointKey(for: existing) {
-                    keyInput = value
-                    showKey = true
-                } else {
-                    revealError = "No stored key to reveal — the referenced variable may be unset."
-                }
-            } catch {
-                revealError = error.localizedDescription
+    /// Fetches the stored key for ``RevealableSecretField``. Returns the value to
+    /// drop into the field, or nil (recording `revealError`) on an empty/failed
+    /// reveal so a transient failure reads as an error rather than a cleared key.
+    private func fetchStoredKey() async -> String? {
+        guard let existing else { return nil }
+        do {
+            if let value = try await harness.revealEndpointKey(for: existing) {
+                return value
             }
-            revealing = false
+            revealError = "No stored key to reveal — the referenced variable may be unset."
+            return nil
+        } catch {
+            revealError = error.localizedDescription
+            return nil
         }
     }
 
