@@ -14,7 +14,7 @@ Run this script before a v1 release candidate.
    - Output renders in collapsible sections (headers recognised: `== Title ==`, `--- Title ---`, ALL-CAPS standalone titles).
    - Exit code is displayed next to the title bar.
    - *Copy bundle* puts raw report + Talaria version + profile summary on the clipboard.
-9. **Skills view**: open Manage → Skills. Confirm:
+9. **Skills view**: open Manage → **Skills, Tools, MCP, Plugins** and select the *Skills* tab. Confirm:
    - Rows from the dashboard render in the table with name, enabled toggle, and path/source metadata.
    - Toggling a skill flips the enabled state on the next refresh.
    - **Search the Skills Hub**: expand the section, search (e.g. `git`); results show full
@@ -24,14 +24,14 @@ Run this script before a v1 release candidate.
    - Select a hub-installed skill → detail pane offers **Update** and **Remove** (and flags
      "Update available" when upstream is ahead); **Remove** confirms, then deletes the skill.
    - A builtin/local (non-hub) skill shows **no** Update/Remove in its detail pane.
-10. **Tools view**: open Manage → Tools. Confirm:
+10. **Tools view**: open Manage → **Skills, Tools, MCP, Plugins** and select the *Tools* tab. Confirm:
     - Rows from `hermes tools list` render with name, platform, enabled toggle.
     - Toggling persists across a manual *Refresh*.
 11. **Cron view**: open Manage → Cron. Confirm:
     - Dashboard cron rows appear left, editor right.
     - *Add* creates a job; editor saves a change; *Pause/Resume* toggle works; *Run Now* succeeds; *Delete* removes the row.
     - Profiles below Hermes `0.14.0` show the dashboard-required banner instead of a broken editor.
-12. **MCP Servers view**: open Manage → MCP Servers. Confirm:
+12. **MCP Servers view**: open Manage → **Skills, Tools, MCP, Plugins** and select the *MCP Servers* tab. Confirm:
     - Configured servers list left (name, transport, address, enabled toggle); editor/detail right.
     - *Add* a stdio server (command + one-arg-per-line args + KEY=VALUE env) **and** a remote server (URL + auth) — both appear after refresh.
     - The enabled toggle persists; *Test* shows the tool list (or an error for an unreachable server); *Delete* clears the selection.
@@ -46,7 +46,7 @@ Run this script before a v1 release candidate.
     - Banner reflects dashboard `/api/status` update state.
     - *Install update* starts the dashboard update action, polls action status, and appends only new log lines.
     - Button is disabled when no update is available.
-15. **Configuration view**: open Manage → **Configuration**. Confirm it opens a two-tab view with the *Configuration* tab (the `config.yaml` editor) selected by default and an *Environment* tab beside it, and that "Environment" no longer appears as its own sidebar row. On the *Configuration* tab, confirm:
+15. **Config & Env view**: open Manage → **Config & Env**. Confirm it opens a two-tab view with the *Configuration* tab (the `config.yaml` editor) selected by default and an *Environment* tab beside it, and that "Environment" no longer appears as its own sidebar row. On the *Configuration* tab, confirm:
     - The toolbar profile picker lists profiles from the dashboard (`GET /api/profiles`) with clean names (no CLI table marker glyphs on `default`).
     - The structured form groups fields by category with type-appropriate controls (text, number + stepper, toggle, enum picker, list add/remove).
     - Edit a field and *Save*; reopen and confirm the value persisted and unrelated keys were left untouched.
