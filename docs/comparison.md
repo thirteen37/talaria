@@ -128,7 +128,7 @@ from a phone" and lose on native feel and offline integration.
 | Doctor / health diagnostics | ✅ (CLI) | 🟡 | ? | ✅ | ✅ + audit | 🟡 |
 | Updates (self-update) | ✅ Sparkle + Hermes | ✅ one-click | ✅ auto | ✅ | ✅ Sparkle | 🟡 |
 | Hermes profile clone / rename / delete | ✅ | 🟡 switch | ✅ multi-profile | ✅ | ✅ + export/import | ✅ presets |
-| Usage insights / token cost analytics | ⬜ | 🟡 | ✅ tokens + cost | ✅ | ✅ heatmaps | ✅ ledger |
+| Usage insights / token cost analytics | ✅ tokens + cost | 🟡 | ✅ tokens + cost | ✅ | ✅ heatmaps | ✅ ledger |
 | Activity feed / tool-call log | ⬜ | 🟡 live tool activity | 🟡 tool progress | 🟡 | ✅ | ✅ |
 | Credential pools / rotation | ⬜ | ⬜ | ✅ pools | ⬜ | ✅ | ⬜ |
 | Webhooks management | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | ⬜ |
@@ -166,8 +166,6 @@ file browser that have no row here; fathah's app adds a "Hermes Office" 3D view.
 These are present in one or more competitors and absent from Talaria today.
 Several are tracked in `docs/roadmap.md` as deliberately deferred:
 
-- **No usage insights / token-cost analytics.** Scarf, the built-in dashboard,
-  and hermes-workspace all chart token usage and cost; Talaria does not.
 - **No memory editor.** Talaria edits Soul and Personalities but not
   `MEMORY.md` / `USER.md`.
 - **No activity feed, credential pools, webhooks, quick commands, or Hermes

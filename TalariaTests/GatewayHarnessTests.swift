@@ -5,7 +5,7 @@ import Testing
 
 @MainActor
 @Suite
-struct MessagingHarnessTests {
+struct GatewayHarnessTests {
     /// Telegram (token + allowed users) plus a non-messaging var that must not
     /// leak into any card.
     private static let envJSON = Data(#"""
@@ -20,6 +20,13 @@ struct MessagingHarnessTests {
     {"version":"0.14.0","gateway_running":true,"gateway_platforms":{"telegram":{"state":"connected"}}}
     """#.utf8)
 
+    /// Telegram (covered by a messaging group) plus Signal — gateway-reported
+    /// but config.yaml-only, with no messaging env var — so Signal must surface
+    /// as a status-only row rather than an editable group.
+    private static let statusWithStatusOnlyJSON = Data(#"""
+    {"version":"0.14.0","gateway_running":true,"gateway_platforms":{"telegram":{"state":"connected"},"signal":{"state":"error","error_message":"not linked"}}}
+    """#.utf8)
+
     private static let okJSON = Data(#"{"ok":true}"#.utf8)
 
     @Test
@@ -28,7 +35,7 @@ struct MessagingHarnessTests {
             .init(path: "/api/env", body: Self.envJSON),
             .init(path: "/api/status", body: Self.statusJSON),
         ])
-        let harness = MessagingHarness(client: makeClient(http), runner: nil)
+        let harness = GatewayHarness(client: makeClient(http), runner: nil)
 
         await harness.refresh()
 
@@ -47,7 +54,7 @@ struct MessagingHarnessTests {
         let http = MessagingStubHTTP(responses: [
             .init(path: "/api/env", body: Self.envJSON),
         ])
-        let harness = MessagingHarness(client: makeClient(http), runner: nil)
+        let harness = GatewayHarness(client: makeClient(http), runner: nil)
 
         await harness.refresh()
 
@@ -59,13 +66,84 @@ struct MessagingHarnessTests {
     }
 
     @Test
+    func statusOnlyRowsCoverUngroupedGatewayPlatforms() async throws {
+        let http = MessagingStubHTTP(responses: [
+            .init(path: "/api/env", body: Self.envJSON),
+            .init(path: "/api/status", body: Self.statusWithStatusOnlyJSON),
+        ])
+        let harness = GatewayHarness(client: makeClient(http), runner: nil)
+
+        await harness.refresh()
+
+        // Telegram has a messaging var → editable group, never a status-only row.
+        #expect(harness.groups.contains { $0.id == "telegram" })
+        // Signal has no messaging var but the gateway reports it → status-only.
+        #expect(harness.statusOnlyRows.map(\.id) == ["signal"])
+        let signal = try #require(harness.statusOnlyRows.first)
+        #expect(signal.platform.state == "error")
+        #expect(signal.platform.errorMessage == "not linked")
+    }
+
+    @Test
+    func listItemsPlaceEditablePlatformsBeforeStatusOnly() async throws {
+        let http = MessagingStubHTTP(responses: [
+            .init(path: "/api/env", body: Self.envJSON),
+            .init(path: "/api/status", body: Self.statusWithStatusOnlyJSON),
+        ])
+        let harness = GatewayHarness(client: makeClient(http), runner: nil)
+
+        await harness.refresh()
+
+        // Editable groups come first, then status-only rows.
+        let kinds = harness.listItems.map { item -> String in
+            switch item {
+            case .platform: return "platform:\(item.id)"
+            case .statusOnly: return "statusOnly:\(item.id)"
+            }
+        }
+        #expect(kinds == ["platform:telegram", "statusOnly:signal"])
+    }
+
+    @Test
+    func selectedItemResolvesByID() async throws {
+        let http = MessagingStubHTTP(responses: [
+            .init(path: "/api/env", body: Self.envJSON),
+            .init(path: "/api/status", body: Self.statusWithStatusOnlyJSON),
+        ])
+        let harness = GatewayHarness(client: makeClient(http), runner: nil)
+
+        await harness.refresh()
+
+        // Nothing selected → no detail pane.
+        #expect(harness.selectedItem == nil)
+
+        harness.selectionID = "telegram"
+        if case let .platform(group)? = harness.selectedItem {
+            #expect(group.id == "telegram")
+        } else {
+            Issue.record("Expected an editable platform for telegram")
+        }
+
+        harness.selectionID = "signal"
+        if case let .statusOnly(row)? = harness.selectedItem {
+            #expect(row.id == "signal")
+        } else {
+            Issue.record("Expected a status-only row for signal")
+        }
+
+        // A stale id matching nothing resolves to nil (panel hides).
+        harness.selectionID = "does-not-exist"
+        #expect(harness.selectedItem == nil)
+    }
+
+    @Test
     func saveIssuesPutWithExactKeyThenRefreshes() async throws {
         let http = MessagingStubHTTP(responses: [
             .init(path: "/api/env", body: Self.okJSON),       // PUT
             .init(path: "/api/env", body: Self.envJSON),      // refresh GET
             .init(path: "/api/status", body: Self.statusJSON), // refresh GET
         ])
-        let harness = MessagingHarness(client: makeClient(http), runner: nil)
+        let harness = GatewayHarness(client: makeClient(http), runner: nil)
 
         await harness.save(key: "TELEGRAM_BOT_TOKEN", value: "new-token")
 
@@ -88,7 +166,7 @@ struct MessagingHarnessTests {
             .init(path: "/api/env", body: Self.envJSON),      // refresh GET
             .init(path: "/api/status", body: Self.statusJSON), // refresh GET
         ])
-        let harness = MessagingHarness(client: makeClient(http), runner: nil)
+        let harness = GatewayHarness(client: makeClient(http), runner: nil)
 
         await harness.delete(key: "TELEGRAM_BOT_TOKEN")
 
@@ -106,7 +184,7 @@ struct MessagingHarnessTests {
         let http = MessagingStubHTTP(responses: [
             .init(path: "/api/env/reveal", body: Data(#"{"key":"TELEGRAM_BOT_TOKEN","value":"plain-secret"}"#.utf8)),
         ])
-        let harness = MessagingHarness(client: makeClient(http), runner: nil)
+        let harness = GatewayHarness(client: makeClient(http), runner: nil)
 
         let value = await harness.revealValue(key: "TELEGRAM_BOT_TOKEN")
 
@@ -125,7 +203,7 @@ struct MessagingHarnessTests {
                 body: Data(#"{"detail":"Too many reveal requests."}"#.utf8)
             ),
         ])
-        let harness = MessagingHarness(client: makeClient(http), runner: nil)
+        let harness = GatewayHarness(client: makeClient(http), runner: nil)
 
         let value = await harness.revealValue(key: "TELEGRAM_BOT_TOKEN")
 
@@ -136,7 +214,7 @@ struct MessagingHarnessTests {
     @Test
     func restartGatewayNoOpsWithoutRunner() async throws {
         let http = MessagingStubHTTP(responses: [])
-        let harness = MessagingHarness(client: makeClient(http), runner: nil)
+        let harness = GatewayHarness(client: makeClient(http), runner: nil)
 
         await harness.restartGateway()
 
@@ -152,7 +230,7 @@ struct MessagingHarnessTests {
             .init(path: "/api/status", body: Self.statusJSON), // refresh GET
         ])
         let runner = StubMessagingRunner(.success(HermesAdminResult(exitCode: 0, stdout: "", stderr: "")))
-        let harness = MessagingHarness(client: makeClient(http), runner: runner)
+        let harness = GatewayHarness(client: makeClient(http), runner: runner)
 
         await harness.restartGateway()
 
