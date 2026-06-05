@@ -202,12 +202,16 @@ jobs:
           repo = "${{ github.repository }}"
           path = pathlib.Path("docs/appcast.xml")
           text = path.read_text()
-          def rewrite(match):
-              ver = match.group(1)
+          pattern = r'url="([^"]*Talaria-(\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.\-]+)?)\.dmg)"'
+          seen = False
+          def normalize(match):
+              global seen
+              seen = True
+              ver = match.group(2)
               return f'url="https://github.com/{repo}/releases/download/v{ver}/Talaria-{ver}.dmg"'
-          new = re.sub(r'url="Talaria-(\d+\.\d+(?:\.\d+)?(?:-[A-Za-z0-9.\-]+)?)\.dmg"', rewrite, text)
-          if new == text:
-              raise SystemExit("appcast had no Talaria-<VER>.dmg enclosure URLs to rewrite — refusing to ship a feed with relative URLs.")
+          new = re.sub(pattern, normalize, text)
+          if not seen:
+              raise SystemExit("appcast had no Talaria-<VER>.dmg enclosure URLs to rewrite.")
           path.write_text(new)
           PY
 
