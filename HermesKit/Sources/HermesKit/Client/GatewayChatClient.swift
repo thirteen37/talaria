@@ -38,6 +38,9 @@ public actor GatewayChatClient: ChatBackend {
     private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
     private var turnContinuation: CheckedContinuation<PromptResponse, Error>?
     private var permissionCounter = 0
+    /// Whether any `reasoning.delta` chunk streamed this turn — gates the
+    /// redundant full-text `reasoning.available` emit. Reset on `message.start`.
+    private var sawReasoningDelta = false
 
     /// The id `SessionManager` registered this session under and the gateway's
     /// runtime id. Equal for new sessions; on resume `bound` is the stored id
@@ -180,8 +183,19 @@ public actor GatewayChatClient: ChatBackend {
             if let text = Self.string(p["text"]) {
                 emit(.agentMessageChunk(Content(content: .text(text))))
             }
-        case "reasoning.delta", "reasoning.available":
+        case "reasoning.delta":
             if let text = Self.string(p["text"]) {
+                sawReasoningDelta = true
+                emit(.agentThoughtChunk(Content(content: .text(text))))
+            }
+        case "reasoning.available":
+            // `reasoning.available` carries the *full* reasoning text and has
+            // replace semantics on the desktop. Talaria's thought stream only
+            // appends, so emitting the full text after the incremental
+            // `reasoning.delta` chunks would duplicate the reasoning. Only emit
+            // it when no deltas streamed this turn (some models emit just the
+            // available block).
+            if !sawReasoningDelta, let text = Self.string(p["text"]) {
                 emit(.agentThoughtChunk(Content(content: .text(text))))
             }
         case "tool.start":
@@ -238,10 +252,14 @@ public actor GatewayChatClient: ChatBackend {
                     .clientRequestError(id: .string("gateway-error"), method: "event", message: message)
                 )
             }
+        case "message.start":
+            // Turn boundary: reset per-turn reasoning de-dup state. The UI's
+            // busy/turn-started state is already driven by the in-flight prompt.
+            sawReasoningDelta = false
         default:
-            // gateway.ready, message.start, thinking.delta (kawaii spinner),
-            // tool.generating, status.update, skin.changed, background.complete,
-            // subagent.*, voice.* — not needed for v1 parity. See docs.
+            // gateway.ready, thinking.delta (kawaii spinner), tool.generating,
+            // status.update, skin.changed, background.complete, subagent.*,
+            // voice.* — not needed for v1 parity. See docs.
             break
         }
     }

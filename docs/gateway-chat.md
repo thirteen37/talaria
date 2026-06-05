@@ -158,7 +158,7 @@ fields the desktop actually reads in `handleGatewayEvent`. **All fields are unde
 | `message.complete` | `{ text, usage, status: "complete"\|"interrupted"\|"error", rendered?, reasoning?, warning? }` (`server.py:4577`) | Finalize assistant bubble with `text \|\| rendered`; apply `usage`; `status` → stop reason. → completes the `prompt` call (stop reason from `status`) + `.usageUpdate`. |
 | `thinking.delta` | `{ text }` (`server.py:2076`) | **Ignored** — this is the kawaii spinner status, not real reasoning (`use-message-stream.ts:737`). Do **not** map. |
 | `reasoning.delta` | `{ text, verbose? }` (`server.py:2077`) | Append reasoning (`payload.text`). → `.sessionUpdate(.agentThoughtChunk(text))`. |
-| `reasoning.available` | `{ text, verbose? }` (`server.py:2001`) | **Replace** reasoning block (`payload.text`). → `.agentThoughtChunk` (replace semantics; the VM coalesces). |
+| `reasoning.available` | `{ text, verbose? }` (`server.py:2001`) | Desktop **replaces** the reasoning block with `payload.text`. Talaria's thought stream is append-only, so the full text is emitted as `.agentThoughtChunk` **only when no `reasoning.delta` streamed this turn** — otherwise it's dropped to avoid duplicating the already-streamed reasoning. |
 | `status.update` | `{ kind, text? }` (`server.py:489`, e.g. `kind:"process"`) | Status line / busy hint. → optional status event; not required for parity. |
 | `tool.start` | `{ tool_id, name, context, args_text? }` (`server.py:1921`) — **no `args`** | Upsert tool row (running). → `.sessionUpdate(.toolCall)` status `in_progress`, `toolCallId=tool_id`, `title=name`, raw input from `context`/`args_text`. |
 | `tool.progress` | id-less progress (rarely emitted for tools; see `_on_tool_progress`) | Same family as `tool.start`. → `.toolCallUpdate` (best-effort). |
@@ -179,7 +179,7 @@ The migration's invariant: `GatewayChatClient` must emit the **same** `HermesNot
 ACP `HermesClient` emits, so `LocalChatViewModel` / `ChatView` are unchanged. Concretely:
 
 - `message.delta` → `.sessionUpdate(SessionNotification(sessionId, .agentMessageChunk(Content(.text(text)))))`
-- `reasoning.delta` / `reasoning.available` → `.sessionUpdate(... .agentThoughtChunk(...))`
+- `reasoning.delta` → `.sessionUpdate(... .agentThoughtChunk(...))`; `reasoning.available` → same, but suppressed when deltas already streamed this turn (append-only stream, no replace)
 - `tool.start` → `.sessionUpdate(... .toolCall(ToolCall(toolCallId: tool_id, title: name, status: .inProgress, ...)))`
 - `tool.complete` → `.sessionUpdate(... .toolCallUpdate(ToolCallUpdate(toolCallId: tool_id, status: .completed, content: [.diff(...)] or [.content(...)])))`
 - `session.info` → `.sessionUpdate(... .sessionInfoUpdate(...))` and, when `usage` present, `.sessionUpdate(... .usageUpdate(...))`

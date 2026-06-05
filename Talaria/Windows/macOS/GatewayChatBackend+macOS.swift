@@ -51,12 +51,20 @@ enum GatewayChatBackend {
     ) -> SessionManager.ChatBackendFactory {
         {
             let acquired = try await acquire(profile: profile, hermesProfileName: hermesProfileName)
-            let socket = try URLSessionGatewayWebSocket(
-                dashboardBaseURL: acquired.baseURL,
-                token: acquired.token
-            )
-            return GatewayChatClient(webSocket: socket) {
+            do {
+                let socket = try URLSessionGatewayWebSocket(
+                    dashboardBaseURL: acquired.baseURL,
+                    token: acquired.token
+                )
+                return GatewayChatClient(webSocket: socket) {
+                    await DashboardCoordinator.shared.release(acquired.supervisor)
+                }
+            } catch {
+                // The onClose release only fires once the client exists; if the
+                // socket init throws, release the refcount here so a failed open
+                // doesn't strand `hermes dashboard` past its last consumer.
                 await DashboardCoordinator.shared.release(acquired.supervisor)
+                throw error
             }
         }
     }

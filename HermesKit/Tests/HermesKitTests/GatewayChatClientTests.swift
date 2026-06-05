@@ -71,6 +71,42 @@ struct GatewayChatClientTests {
     }
 
     @Test
+    func reasoningAvailableSuppressedAfterDelta() async throws {
+        // After a reasoning.delta streamed, the full-text reasoning.available is
+        // dropped (append-only stream would otherwise duplicate the reasoning).
+        // Push delta → available → a message.delta marker, and assert only the
+        // delta + marker surface.
+        let (client, fake, sid) = try await makeReadySession()
+        var iterator = client.notifications.makeAsyncIterator()
+
+        fake.pushInbound(eventFrame(type: "reasoning.delta", sessionId: sid, payload: ["text": .string("step ")]))
+        fake.pushInbound(eventFrame(type: "reasoning.available", sessionId: sid, payload: ["text": .string("step one and two")]))
+        fake.pushInbound(eventFrame(type: "message.delta", sessionId: sid, payload: ["text": .string("answer")]))
+
+        let first = try await #require(iterator.next())
+        #expect(first == .sessionUpdate(SessionNotification(
+            sessionId: sid, update: .agentThoughtChunk(Content(content: .text("step ")))
+        )))
+        let second = try await #require(iterator.next())
+        #expect(second == .sessionUpdate(SessionNotification(
+            sessionId: sid, update: .agentMessageChunk(Content(content: .text("answer")))
+        )))
+    }
+
+    @Test
+    func reasoningAvailableEmittedWhenNoDelta() async throws {
+        // Some models emit only reasoning.available (no deltas) — it must surface.
+        let (client, fake, sid) = try await makeReadySession()
+        var iterator = client.notifications.makeAsyncIterator()
+
+        fake.pushInbound(eventFrame(type: "reasoning.available", sessionId: sid, payload: ["text": .string("full reasoning")]))
+        let note = try await #require(iterator.next())
+        #expect(note == .sessionUpdate(SessionNotification(
+            sessionId: sid, update: .agentThoughtChunk(Content(content: .text("full reasoning")))
+        )))
+    }
+
+    @Test
     func thinkingDeltaIsIgnored() async throws {
         let (client, fake, sid) = try await makeReadySession()
         var iterator = client.notifications.makeAsyncIterator()
