@@ -34,12 +34,6 @@ struct BrowseDetailView: View {
                 runner: harness.store.adminRunner,
                 hermesVersion: harness.effectiveHermesVersion
             )
-        case .messaging:
-            MessagingView(
-                client: harness.dashboardClient,
-                runner: harness.store.adminRunner,
-                hermesVersion: harness.effectiveHermesVersion
-            )
         case .hermesProfiles:
             ProfilesView(
                 client: harness.dashboardClient,
