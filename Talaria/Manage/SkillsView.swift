@@ -34,7 +34,7 @@ final class SkillsHarness {
     /// Remove), derived from `hermes skills list`. Empty when no admin runner.
     var hubInstalledNames: Set<String> = []
     /// Hub skills with an upstream update available (from `hermes skills check`),
-    /// populated lazily so the detail pane can flag "Update available".
+    /// populated off `refresh()` so each row can flag "Update available".
     var updatableNames: Set<String> = []
     /// Names with an in-flight update/remove action, to disable their buttons.
     var busy: Set<String> = []
@@ -47,11 +47,6 @@ final class SkillsHarness {
         self.client = client
         self.runner = runner
         self.catalog = catalog
-    }
-
-    var selected: DashboardSkill? {
-        guard let id = selectionID else { return nil }
-        return rows.first(where: { $0.name == id })
     }
 
     /// True once the manual install field has a non-empty identifier.
@@ -71,6 +66,10 @@ final class SkillsHarness {
             lastError = error.localizedDescription
         }
         await refreshHubInstalled()
+        // Probe every hub skill for upstream updates fire-and-forget so the
+        // "Update available" badges populate without adding network latency to
+        // `refresh()` (which also runs on every enable/disable toggle).
+        Task { await refreshUpdatable() }
     }
 
     /// Populates `hubInstalledNames` from the CLI list when an admin runner is
@@ -144,8 +143,8 @@ final class SkillsHarness {
             await refresh()
             let name = displayName ?? trimmed
             lastInstallMessage = "Installed \(name). Available in your next session."
-            // Select the freshly installed row when the refreshed list contains
-            // it, so its detail pane opens as confirmation.
+            // Highlight the freshly installed row when the refreshed list
+            // contains it, as a visual confirmation.
             if let displayName, rows.contains(where: { $0.name == displayName }) {
                 selectionID = displayName
             }
@@ -167,20 +166,16 @@ final class SkillsHarness {
         }
     }
 
-    /// Lazily checks one hub skill for an upstream update so the detail pane can
-    /// flag it, run when a hub skill is selected. `hermes skills check` hits the
-    /// network, so it's scoped to the single selected skill (not the whole list)
-    /// and is best-effort — a slow or failed check leaves the hint absent rather
-    /// than surfacing an error on the surface.
-    func checkForUpdate(_ name: String) async {
-        guard let runner, hubInstalledNames.contains(name) else { return }
+    /// Checks every installed hub skill for an upstream update in one
+    /// `hermes skills check` call so each row's "Update available" badge can
+    /// flag it. Network-bound, so it runs fire-and-forget off `refresh()` and is
+    /// best-effort — a slow or failed check leaves the badges absent rather than
+    /// surfacing an error on the surface.
+    func refreshUpdatable() async {
+        guard let runner, !hubInstalledNames.isEmpty else { return }
         do {
-            let statuses = try await HermesSkillsHub.checkUpdates(runner: runner, name: name)
-            if statuses.contains(where: { $0.name == name && $0.updateAvailable }) {
-                updatableNames.insert(name)
-            } else {
-                updatableNames.remove(name)
-            }
+            let statuses = try await HermesSkillsHub.checkUpdates(runner: runner)
+            updatableNames = Set(statuses.filter(\.updateAvailable).map(\.name))
         } catch {
             // Best-effort hint only — leave `updatableNames` untouched.
         }
@@ -192,8 +187,8 @@ final class SkillsHarness {
         defer { busy.remove(name) }
         do {
             try await HermesSkillsHub.uninstall(runner: runner, name: name)
-            // Drop the selection so the detail pane doesn't dangle on a name
-            // that no longer exists after the refresh.
+            // Drop the selection so the table highlight doesn't dangle on a
+            // name that no longer exists after the refresh.
             if selectionID == name { selectionID = nil }
             await refresh()
         } catch {
@@ -262,15 +257,10 @@ struct SkillsView: View {
     private func content(harness: SkillsHarness) -> some View {
         // Reachable only from the desktop window's Browse sidebar (macOS +
         // iPad); the iPhone shell has no Browse, so this never renders there.
-        // `PlatformSplit` is a resizable `HSplitView` on macOS and an
-        // `HStack`+`Divider` on iPad — no `#if`.
-        PlatformSplit(showsSecondary: harness.selected != nil) {
-            primaryPane(harness: harness)
-                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
-        } secondary: {
-            previewPane(harness: harness)
-                .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
-        }
+        // A single self-contained list — each row expands in place to show the
+        // full description and hub actions, so there's no secondary pane.
+        primaryPane(harness: harness)
+            .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         .toolbar {
             ToolbarItem {
                 Button {
@@ -311,7 +301,7 @@ struct SkillsView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             Divider()
-            skillsTable(harness: harness)
+            skillsList(harness: harness)
         }
     }
 
@@ -420,32 +410,29 @@ struct SkillsView: View {
     }
 
     @ViewBuilder
-    private func skillsTable(harness: SkillsHarness) -> some View {
-        Table(harness.rows, selection: Binding(
+    private func skillsList(harness: SkillsHarness) -> some View {
+        // A grouped, inline-expanding list (like the Environment screen): each
+        // row collapses to a summary and grows in place when selected to reveal
+        // the full description and the hub Update / Remove actions — no pane.
+        List(selection: Binding(
             get: { harness.selectionID },
             set: { harness.selectionID = $0 }
         )) {
-            TableColumn("Name") { row in
-                Text(row.name)
-            }
-            TableColumn("Enabled") { row in
-                Toggle("", isOn: Binding(
-                    get: { row.enabled },
-                    set: { newValue in
-                        Task { await harness.setEnabled(row.name, enabled: newValue) }
-                    }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .disabled(harness.toggling.contains(row.name))
-            }
-            .width(70)
-            TableColumn("Category") { row in
-                Text(row.category ?? "")
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+            ForEach(harness.rows) { skill in
+                SkillRow(
+                    skill: skill,
+                    isExpanded: harness.selectionID == skill.name,
+                    isHubManaged: harness.isHubManaged(skill.name),
+                    updateAvailable: harness.updatableNames.contains(skill.name),
+                    mutationsAvailable: mutationsAvailable,
+                    removeAvailable: removeAvailable,
+                    busy: harness.busy.contains(skill.name),
+                    toggling: harness.toggling.contains(skill.name),
+                    onToggle: { enabled in Task { await harness.setEnabled(skill.name, enabled: enabled) } },
+                    onUpdate: { Task { await harness.update(skill.name) } },
+                    onRemove: { Task { await harness.remove(skill.name) } }
+                )
+                .tag(skill.name)
             }
         }
         .overlay {
@@ -454,35 +441,6 @@ struct SkillsView: View {
             }
         }
         .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
-        .id(harness.rows.map(\.name).joined())
-    }
-
-    // MARK: - Detail pane
-
-    // Rendered only when a skill is selected — `PlatformSplit`'s
-    // `showsSecondary` gate hides this pane entirely otherwise, so there's no
-    // unselected placeholder branch.
-    @ViewBuilder
-    private func previewPane(harness: SkillsHarness) -> some View {
-        if let skill = harness.selected {
-            SkillDetail(
-                skill: skill,
-                isHubManaged: harness.isHubManaged(skill.name),
-                updateAvailable: harness.updatableNames.contains(skill.name),
-                mutationsAvailable: mutationsAvailable,
-                removeAvailable: removeAvailable,
-                busy: harness.busy.contains(skill.name),
-                onUpdate: { Task { await harness.update(skill.name) } },
-                onRemove: { Task { await harness.remove(skill.name) } }
-            )
-            .padding()
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            // Lazily probe the selected hub skill for an upstream update; re-runs
-            // when the selection changes. No-op for builtin/local skills.
-            .task(id: skill.name) {
-                await harness.checkForUpdate(skill.name)
-            }
-        }
     }
 }
 
@@ -546,96 +504,152 @@ private struct SkillSearchRow: View {
     }
 }
 
-private struct SkillDetail: View {
+/// One inline-expanding row in the installed-skills list (mirroring the
+/// Environment screen's `EnvVarRow`). Collapsed, it shows the skill name (with a
+/// Hub badge and an update hint), a one-line description preview, its category,
+/// and the enable toggle. Selected (`isExpanded`) it grows in place to reveal
+/// the full description and the Skills Hub Update / Remove actions — the content
+/// that used to live in the detail pane. `confirmingRemove` is per-row state, so
+/// the Remove confirmation lives here rather than on the harness.
+private struct SkillRow: View {
     let skill: DashboardSkill
+    let isExpanded: Bool
     let isHubManaged: Bool
     let updateAvailable: Bool
     let mutationsAvailable: Bool
     let removeAvailable: Bool
     let busy: Bool
+    let toggling: Bool
+    let onToggle: (Bool) -> Void
     let onUpdate: () -> Void
     let onRemove: () -> Void
 
     @State private var confirmingRemove = false
 
+    /// True when there's a non-empty description to show.
+    private var hasDescription: Bool { !(skill.description ?? "").isEmpty }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(skill.name)
-                .font(.headline)
-                .textSelection(.enabled)
+        // Header (name + toggle) and a detail row beneath it. The description
+        // always lives in the detail row — same position, gap and font whether
+        // the row is selected or not — so expanding only un-truncates the text
+        // and reveals the hub actions, never shifts the description.
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Image(systemName: skill.enabled ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(skill.enabled ? .green : .secondary)
-                Text(skill.enabled ? "Enabled" : "Disabled")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Text(skill.name)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if isHubManaged {
+                        SkillPill(text: "Hub", color: .blue)
+                    }
+                    if updateAvailable {
+                        Image(systemName: "arrow.up.circle")
+                            .font(.caption)
+                            .foregroundStyle(.blue)
+                            .help("An update is available from the source")
+                            .accessibilityLabel("Update available")
+                    }
+                }
+
+                Spacer(minLength: 8)
+
                 if let category = skill.category, !category.isEmpty {
-                    Text("· \(category)")
+                    Text(category)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                if isHubManaged {
-                    SkillPill(text: "Hub", color: .blue)
-                }
-            }
-            if let description = skill.description, !description.isEmpty {
-                Divider()
-                Text(description)
-                    .font(.body)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Toggle("", isOn: Binding(
+                    get: { skill.enabled },
+                    set: { onToggle($0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .disabled(toggling)
             }
 
-            // Update / Remove are offered only for hub-installed skills (builtin
-            // and local skills aren't managed by the hub and can't be removed
-            // this way).
-            if isHubManaged {
-                Divider()
-                if updateAvailable {
-                    Label("Update available", systemImage: "arrow.up.circle")
-                        .font(.caption)
-                        .foregroundStyle(.blue)
-                }
-                HStack(spacing: 8) {
-                    Button {
-                        onUpdate()
-                    } label: {
-                        Label("Update", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    .disabled(busy || !mutationsAvailable)
-                    .help("Pull the latest version from the source")
-
-                    Button(role: .destructive) {
-                        confirmingRemove = true
-                    } label: {
-                        Label("Remove", systemImage: "trash")
-                    }
-                    .disabled(busy || !removeAvailable)
-                    .help("Uninstall this skill from the Hermes host")
-
-                    if busy { ProgressView().controlSize(.small) }
-                }
-                if !mutationsAvailable {
-                    Text("Admin runner unavailable.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if !removeAvailable {
-                    // Update works over SSH/NIO; uninstall needs a local stdin
-                    // prompt (no `--yes` in v0.14.0), so Remove is disabled here.
-                    Text("Remove is unavailable on remote profiles.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
+            detailRow
         }
-        .id(skill.name)
+        .padding(.vertical, 6)
+        .padding(.trailing, 4)
         .alert("Remove \(skill.name)?", isPresented: $confirmingRemove) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) { onRemove() }
         } message: {
             Text("This deletes the installed skill from the Hermes host.")
         }
+    }
+
+    /// The description (left) and, when expanded, the hub actions (right) on one
+    /// shared row — like the Environment screen. The description is single-line
+    /// when collapsed and wraps when expanded, but its position/size never
+    /// change, so selecting a row isn't visually jarring.
+    @ViewBuilder
+    private var detailRow: some View {
+        if hasDescription || (isExpanded && isHubManaged) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                if hasDescription {
+                    Text(skill.description ?? "")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(isExpanded ? nil : 1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    // Keep the actions pinned right even with no description.
+                    Spacer(minLength: 0)
+                }
+
+                // Update / Remove are offered only for hub-installed skills
+                // (builtin and local skills aren't managed by the hub and can't
+                // be removed this way), once the row is expanded.
+                if isExpanded, isHubManaged {
+                    actions
+                }
+            }
+        }
+    }
+
+    /// Trailing-aligned Update / Remove buttons with the explanatory caption
+    /// directly beneath them.
+    private var actions: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 8) {
+                Button {
+                    onUpdate()
+                } label: {
+                    Label("Update", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(busy || !mutationsAvailable)
+                .help("Pull the latest version from the source")
+
+                Button(role: .destructive) {
+                    confirmingRemove = true
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                }
+                .disabled(busy || !removeAvailable)
+                .help("Uninstall this skill from the Hermes host")
+
+                if busy { ProgressView().controlSize(.small) }
+            }
+            if !mutationsAvailable {
+                Text("Admin runner unavailable.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if !removeAvailable {
+                // Update works over SSH/NIO; uninstall needs a local stdin
+                // prompt (no `--yes` in v0.14.0), so Remove is disabled here.
+                Text("Remove is unavailable on remote profiles.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
