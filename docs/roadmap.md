@@ -18,11 +18,11 @@ historical one:
   `GET /api/analytics/usage` (+ `/api/analytics/models`), with a 7/30/90-day range
   picker, totals, a per-day token/cost trend, and a by-model breakdown.
 - **Plugins** install / enable / disable / update via the dashboard.
-- **Gateway** process control (start / stop / restart / install / uninstall via CLI).
+- **Gateway & Messaging** — one destination combining gateway process control (start / stop / restart / install / uninstall via CLI) with the per-platform messaging setup forms. The gateway status spans the top; below it the platform list is the primary pane and the selected platform's configuration opens in a side panel.
 - **Hermes profile** management (clone / rename / delete).
 - **Soul & Personalities** editor — the base `SOUL.md` and the `agent.personalities` overlays in one integrated split view.
 - **Environment** screen with `.env` CRUD.
-- **Messaging** screen: per-platform setup forms (Telegram, Discord, Slack, Mattermost, Matrix, iMessage/BlueBubbles, QQ, IRC) over the messaging env vars Hermes reports, with prefix-based auto-grouping for anything uncatalogued, live connection pills from `/api/status`, and a gateway restart to apply changes. A pure presentation overlay — no new Hermes routes.
+- **Messaging** setup (now folded into **Gateway & Messaging**): per-platform setup forms (Telegram, Discord, Slack, Mattermost, Matrix, iMessage/BlueBubbles, QQ, IRC) over the messaging env vars Hermes reports, with prefix-based auto-grouping for anything uncatalogued, live connection pills from `/api/status`, status-only rows for config.yaml-only platforms, and a gateway restart to apply changes. A pure presentation overlay — no new Hermes routes.
 - **Kanban** board (boards + tasks) with full CRUD, backed by the Hermes kanban plugin.
 - **Customizable Browse sidebar** — reorder and hide manage pages, shared with the iPhone Browse sheet.
 - **Terminal (TUI) sessions** — open a chat as the real `hermes chat --tui` in an embedded SwiftTerm terminal (macOS), new or resumed, local or over `ssh -tt`.
