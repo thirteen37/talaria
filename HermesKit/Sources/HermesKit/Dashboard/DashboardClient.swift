@@ -543,7 +543,8 @@ public struct DashboardEnvVar: Codable, Equatable, Sendable, Identifiable {
 /// Resolved metadata for the currently configured model (`GET /api/model/info`).
 /// `auto*` is the auto-detected context length, `config*` the user override (0
 /// when unset), `effective*` the one actually used. `capabilities` is `{}` when
-/// the server can't resolve model metadata, so every field below is optional.
+/// the server can't resolve model metadata, so every field is optional. Reuses
+/// the shared `DashboardModelCapabilities` (defined in `AnalyticsModels.swift`).
 public struct DashboardModelInfo: Codable, Equatable, Sendable {
     public let model: String
     public let provider: String
@@ -557,26 +558,6 @@ public struct DashboardModelInfo: Codable, Equatable, Sendable {
         case autoContextLength = "auto_context_length"
         case configContextLength = "config_context_length"
         case effectiveContextLength = "effective_context_length"
-    }
-}
-
-/// Per-model capability flags from `GET /api/model/info`. All optional — the
-/// server emits `{}` when models.dev metadata is unavailable.
-public struct DashboardModelCapabilities: Codable, Equatable, Sendable {
-    public let supportsTools: Bool?
-    public let supportsVision: Bool?
-    public let supportsReasoning: Bool?
-    public let contextWindow: Int?
-    public let maxOutputTokens: Int?
-    public let modelFamily: String?
-
-    enum CodingKeys: String, CodingKey {
-        case supportsTools = "supports_tools"
-        case supportsVision = "supports_vision"
-        case supportsReasoning = "supports_reasoning"
-        case contextWindow = "context_window"
-        case maxOutputTokens = "max_output_tokens"
-        case modelFamily = "model_family"
     }
 }
 
