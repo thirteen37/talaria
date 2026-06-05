@@ -201,9 +201,32 @@ Talaria does not implement voice in v1.
   `voice.transcript` / `voice.status` events (`server.py:7469`) when the server-side mic loop is
   active, which Talaria would consume if/when voice ships.
 
-## Open items deferred past parity
+## Implementation status
 
-- **Socket multiplexing:** start one logical chat per `session_id` over a shared dashboard socket;
-  per-window multiplexing of many sessions on one socket is a later optimization.
-- **`status.update` / `tool.generating`** fine-grained UI: not required for parity; can enrich later.
-- **Subagent sidebar** over WS: out of scope for v1.
+- **HermesKit core (Phase 2):** `ChatBackend` seam, `GatewayChatClient` (event→`HermesNotification`
+  mapping, turn lifecycle, approval round-trip), `GatewayWebSocket` + `URLSessionGatewayWebSocket`,
+  `SessionManager` backend factory, `HermesCapability.gatewayChat` gate. Unit-tested.
+- **macOS wiring (Phase 2):** `GatewayChatBackend` builds a WS backend on the window's shared,
+  refcounted dashboard; `ServerWindowHarness.makeLocal`/`makeRemote` select WS vs ACP behind the
+  default-off `useGatewayChat` flag (remote: system-ssh `-L` path only — NIO stays ACP).
+- **iOS transport (Phase 3):** `NIOSSHGatewayWebSocket` runs the RFC 6455 handshake
+  (`GatewayWebSocketHandshake`, unit-tested incl. the RFC 6455 accept vector) + swift-nio frame
+  codecs over a persistent `direct-tcpip` channel (`NIOSSHDashboardConnection.openDirectTCPIPChannel`).
+  Compile-verified on iOS.
+
+## Remaining work
+
+- **iOS harness wiring (Phase 3):** the iOS chat path and the dashboard currently use *separate*
+  NIO-SSH connections, and the dashboard's `NIOSSHDashboardConnection` isn't exposed to the chat
+  backend factory. Wiring iOS gateway chat needs the dashboard endpoint/supervisor to surface its
+  connection + remote bind port so `NIOSSHGatewayWebSocket.connect(connection:remotePort:…)` can
+  tunnel `/api/ws` over it. Deferred pending that plumbing + live verification.
+- **Live end-to-end parity (all paths):** run one chat turn (prompt → thinking → tool calls w/ diff →
+  result → completion), an approval, and a cancel against a running `hermes dashboard`; compare WS vs
+  ACP rendering, over loopback (macOS local), `ssh -L` (macOS remote), and NIO-SSH (iOS). Confirm the
+  dashboard child stays single (refcount) and no `hermes acp` spawns on the WS path.
+- **Phase 4 (remove ACP):** only after parity is green on all three paths. Not yet done.
+- **Text-input prompts:** free-text `clarify` / `sudo` / `secret` map to the option-only permission
+  UI today (approval is full parity); a secure text-input affordance is needed for full capture.
+- **Socket multiplexing / `status.update` / `tool.generating` / subagent sidebar:** post-parity
+  enhancements, out of scope for v1.
