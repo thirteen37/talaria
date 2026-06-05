@@ -22,6 +22,7 @@ jobs:
   release:
     name: Build, sign, notarise, publish
     runs-on: macos-15
+    environment: release
     env:
       VERSION: ${{ github.event.inputs.version || github.ref_name }}
       KEYCHAIN_PATH: ${{ github.workspace }}/build.keychain-db
