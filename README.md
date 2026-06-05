@@ -2,7 +2,9 @@
 
 Talaria is a native SwiftUI front-end for Hermes Agent — macOS today, with an in-progress iOS target sharing the same source tree behind platform seam folders. Shared protocol and transport code lives in the `HermesKit` Swift package.
 
-See [`docs/comparison.md`](docs/comparison.md) for how Talaria stacks up against Hermes Desktop, the built-in `hermes dashboard`, Scarf, and the web UIs.
+Talaria is one of several GUIs for Hermes Agent. Its distinguishing choice is its **integration boundary**: every non-chat surface goes through the `hermes dashboard` HTTP API (live chat over ACP), so it never reads or writes Hermes' database or config files directly, and the same path works whether Hermes is local or remote over SSH. It's also fully native, signed, and notarized — not Electron, not a browser tab.
+
+See [`docs/comparison.md`](docs/comparison.md) for the full feature-by-feature breakdown against the official Hermes Desktop (and the unrelated third-party app of the same name), the built-in `hermes dashboard`, and the other Hermes front-ends.
 
 ## Screenshots
 
@@ -44,34 +46,23 @@ Talaria drives [Hermes Agent](https://github.com/NousResearch/hermes-agent). Ins
 
 This repository contains the dashboard-mode build:
 
-- `Talaria`: SwiftUI app (macOS, with a shared iOS target) — ACP chat plus dashboard-backed Browse surfaces: Sessions, Skills, Plugins, Tools, Cron, Kanban, Gateway, Hermes profiles, **Configuration** (the `config.yaml` editor and the `.env` Environment editor as two tabs), Soul, Personalities, Models, and **System** (Doctor, Updates, and Logs as three tabs). Chats can also be opened as the real Hermes TUI in an embedded terminal (macOS). The Browse sidebar is reorderable and pages can be hidden; a Settings screen holds Server Profiles, Sidebar Order, and Notifications. Optional OS-level chat notifications (agent-finished / tool-approval) and Sparkle auto-update.
+- `Talaria`: SwiftUI app (macOS, with a shared iOS target) — ACP chat plus dashboard-backed Browse surfaces: Sessions, **Skills, Tools, MCP, Plugins** (one tabbed destination — MCP servers include add/edit, enable, connection test, and a Nous-approved install catalog), Cron, Kanban, Gateway, Hermes profiles, **Configuration** (the `config.yaml` editor and the `.env` Environment editor as two tabs), Soul, Personalities, Models, and **System** (Doctor, Updates, and Logs as three tabs). Chats can also be opened as the real Hermes TUI in an embedded terminal (macOS). The Browse sidebar is reorderable and pages can be hidden; a Settings screen holds Server Profiles, Sidebar Order, and Notifications. Optional OS-level chat notifications (agent-finished / tool-approval) and Sparkle auto-update.
 - `HermesKit`: Swift package for ACP/JSON-RPC, transports, dashboard HTTP client/supervisor, CLI fallbacks, profile models, and capability gates.
 - `docs`: architecture, security, release, integration coverage, dashboard API, competitor comparison, roadmap, and manual test-plan notes.
 
-## References
+## Prerequisite: Hermes Agent
 
-### Hermes Agent Source Code
+Talaria is only a front-end; it requires a running [Hermes Agent](https://github.com/NousResearch/hermes-agent) to drive (see [Install](#install) for the `hermes-agent[web]` setup).
 
 - Repository: https://github.com/NousResearch/hermes-agent
 - Website/docs: https://hermes-agent.nousresearch.com/
 
-Hermes Agent is the runtime Talaria targets. Talaria should treat Hermes as the source of truth for:
+Hermes is the source of truth for everything Talaria renders — when behavior is ambiguous, check Hermes:
 
 - ACP behavior and live session protocol details.
 - Dashboard HTTP behavior for sessions, logs, skills, cron jobs, and updates.
 - CLI command surfaces that do not have dashboard routes yet: `hermes sessions rename`, `hermes tools enable/disable`, `hermes doctor`, and the Skills Hub mutations `hermes skills install/update/uninstall` (Skills Hub *search* reads the public Nous index over HTTP instead).
 - Version and capability gates for features that land after the MVP baseline.
-
-### Scarf
-
-- Repository: https://github.com/awizemann/scarf
-
-Scarf is now itself a native SwiftUI macOS/iOS app for Hermes — Talaria's closest peer rather than just an IA reference. The two differ most on the data boundary (Scarf reads Hermes' SQLite/files directly; Talaria stays on the dashboard API). See [`docs/comparison.md`](docs/comparison.md) for the full breakdown. Talaria borrows useful workflow ideas from Scarf while keeping a stricter implementation boundary:
-
-- Native SwiftUI rendering over Hermes ACP instead of TUI embedding as the primary surface.
-- Non-chat surfaces use `hermes dashboard` on loopback; Talaria does not read or write Hermes SQLite files directly.
-- Remote support uses system SSH on macOS for ACP, dashboard port forwarding, and remaining CLI fallbacks. The pure-Swift NIO-SSH transport remains available for ACP experimentation and future iOS work.
-- Release, signing, sandbox, and Sparkle constraints are documented before packaging work begins.
 
 ## Development
 

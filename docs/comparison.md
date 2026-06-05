@@ -12,7 +12,8 @@ truth, this file is the thing that's out of date.
 | Project | Form factor | Platforms | Talks to Hermes via | License |
 | --- | --- | --- | --- | --- |
 | **Talaria** | Native SwiftUI app | macOS (shared iOS target in progress) | Dashboard HTTP API + a few CLI fallbacks; **never** reads Hermes files/DB directly (one read-only `.env` enumerate exception) | Source-available |
-| **[Hermes Desktop][hermes-desktop]** (Nous Research, official) | Cross-platform GUI (Electron-class) | macOS, Windows, Linux | Bundled on the same Hermes core engine | MIT |
+| **[Hermes Desktop · Nous Research][hermes-desktop]** — *first-party / official flagship* | Cross-platform desktop app (Electron + React; Python backend that reuses the Hermes TUI/CLI) | macOS 12+, Windows 10/11, Linux | The **same agent core** as the CLI/gateway via standard gateway APIs — shared config, API keys, sessions, skills, and memory; history carries across surfaces | MIT |
+| **[Hermes Desktop · fathah][hermes-desktop-fathah]** — *third-party, unofficial* | Cross-platform desktop app (Electron 39 + React 19 + TypeScript) | macOS, Windows, Linux, Fedora (RPM), WSL | Gateway/CLI plus a bundled SQLite layer (`better-sqlite3`) | MIT |
 | **[Hermes built-in dashboard][hermes-dashboard]** (`hermes dashboard`) | Local web app (FastAPI + SPA) | Any browser | In-process — it *is* part of Hermes (`hermes_cli/web_server.py`) | Ships with Hermes |
 | **[Scarf][scarf]** (awizemann) | Native SwiftUI app | macOS 14.6+, iOS (ScarfGo, TestFlight) | ACP + **direct read-only SQLite** + file watching + CLI subprocess | Source-available |
 | **[hermes-workspace][hermes-workspace]** (outsourc-e) | Web app / PWA (React/TS) | Browser, installable PWA, Docker | Gateway HTTP (8642) + dashboard HTTP (9119) | MIT |
@@ -22,7 +23,17 @@ A handful of read-only web dashboards also exist (e.g.
 [`chrisryugj/hermes-dashboard`][chris], [`nesquena/hermes-webui`][nesquena]).
 They overlap heavily with the built-in dashboard and are not tracked row-by-row here.
 
-[hermes-desktop]: https://www.hermes-ai.net/desktop/
+**Two unrelated projects share the name "Hermes Desktop."** One is Nous
+Research's own **first-party** flagship GUI ([hermes-agent.nousresearch.com/desktop][hermes-desktop]);
+the other is an independent **third-party** app by @fathah
+([github.com/fathah/hermes-desktop][hermes-desktop-fathah]). They are completely
+separate codebases that happen to share a name — both are Electron + React and
+MIT-licensed — and this doc tracks them as distinct entries. Aside from the Nous
+app and the built-in dashboard (which ships inside Hermes), everything here —
+**Talaria included** — is a third-party client.
+
+[hermes-desktop]: https://hermes-agent.nousresearch.com/desktop
+[hermes-desktop-fathah]: https://github.com/fathah/hermes-desktop
 [hermes-dashboard]: https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard
 [scarf]: https://github.com/awizemann/scarf
 [hermes-workspace]: https://github.com/outsourc-e/hermes-workspace
@@ -67,59 +78,73 @@ Talaria's defining choice is its **integration boundary**, not its feature count
   keeps working. See `docs/integration-coverage.md`.
 
 - **Native, signed, notarized.** Hardened Runtime + Developer-ID signing +
-  notarization + Sparkle auto-update. Not Electron, not a browser tab.
+  notarization + Sparkle auto-update. Not Electron, not a browser tab — unlike
+  *both* apps named "Hermes Desktop" (the official Nous one and the third-party
+  fathah one are each Electron + React).
 
 Scarf shares the "native SwiftUI, multi-window, multi-server over SSH" shape —
 it is Talaria's closest peer — but takes the opposite stance on the data
-boundary. Hermes Desktop is the official cross-platform GUI but is broader and
-less Mac-native. The web UIs (built-in dashboard, hermes-workspace) win on "open
-in any browser, including from a phone" and lose on native feel and offline
-integration.
+boundary. The **official Hermes Desktop** (Nous Research) is the flagship GUI —
+it shipped as a public preview (v0.15.2) on 2 June 2026 — and because it's
+first-party it runs the *same* agent core as the CLI and gateway, so config,
+sessions, skills, and memory carry across surfaces; it leads on breadth
+(macOS/Windows/Linux, a right-hand preview rail, file browser, voice mode, image
+generation, 300+ models via the Nous Portal). The **third-party Hermes Desktop**
+by @fathah is a separate Electron app with its own strengths — full-text (FTS5)
+session search, a memory editor, a SOUL.md persona editor, live token/cost
+display, credential pools, and 16 messaging gateways. Both are cross-OS Electron
+apps rather than Mac-native,
+and neither offers Talaria's SSH-remoting-to-another-box model. The web UIs
+(built-in dashboard, hermes-workspace) win on "open in any browser, including
+from a phone" and lose on native feel and offline integration.
 
 ## Feature comparison
 
 ✅ shipped · 🟡 partial · ⬜ not present · — n/a
 
-| Capability | Talaria | Hermes Desktop | Built-in dashboard | Scarf | hermes-workspace |
-| --- | :---: | :---: | :---: | :---: | :---: |
-| Live chat (rich, streaming) | ✅ ACP | ✅ | ✅ SSE | ✅ ACP | ✅ SSE |
-| Terminal / TUI escape hatch | ✅ SwiftTerm (macOS) | 🟡 | ⬜ | ✅ SwiftTerm | ✅ PTY |
-| Sessions browse / search / read | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Session rename / delete | ✅ (rename via CLI) | ✅ | ✅ | ✅ | 🟡 |
-| Session JSONL export | ⬜ | ? | ⬜ | ✅ | ⬜ |
-| Skills list / toggle | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Skills Hub install / search | ✅ (search HTTP, install CLI) | ✅ | ✅ | ✅ | ✅ (2,000+) |
-| Plugins install / enable / update | ✅ | 🟡 | ✅ | ✅ | 🟡 |
-| Tools enable / disable | ✅ (CLI) | ✅ | 🟡 list-only | ✅ | 🟡 |
-| MCP server registry / presets | ⬜ | ✅ | ✅ | ✅ | ✅ |
-| Cron full CRUD | ✅ | 🟡 | ✅ | ✅ | 🟡 |
-| Kanban board (multi-agent) | ✅ full CRUD | ⬜ | ✅ | 🟡 project dash | ✅ |
-| Models: main + auxiliary slots | ✅ | ✅ switch | ✅ | ✅ + aux settings | ✅ |
-| Custom OpenAI-compatible endpoints | ✅ | 🟡 | 🟡 | 🟡 | ✅ |
-| Gateway start / stop / status | ✅ (CLI) | ✅ | 🟡 | ✅ | ✅ |
-| Messaging-platform setup forms | ✅ 8 + auto | ✅ 15+ | 🟡 | ✅ 13 | 🟡 |
-| Soul / personality editor | ✅ both | 🟡 | 🟡 | ✅ both | ⬜ |
-| Memory (`MEMORY.md`/`USER.md`) editor | ⬜ | ✅ | 🟡 | ✅ | ✅ |
-| Config editor (schema-driven) | ✅ | 🟡 | ✅ | ✅ 10-tab | ✅ |
-| Environment (`.env`) CRUD | ✅ | 🟡 | ✅ | ✅ | 🟡 |
-| Logs viewer (filter / tail) | ✅ | 🟡 | ✅ | ✅ session pills | 🟡 |
-| Doctor / health diagnostics | ✅ (CLI) | 🟡 | ✅ | ✅ + audit | 🟡 |
-| Updates (self-update) | ✅ Sparkle + Hermes | ✅ | ✅ | ✅ Sparkle | 🟡 |
-| Hermes profile clone / rename / delete | ✅ | 🟡 | ✅ | ✅ + export/import | ✅ presets |
-| Usage insights / token cost analytics | ⬜ | ✅ | ✅ | ✅ heatmaps | ✅ ledger |
-| Activity feed / tool-call log | ⬜ | 🟡 | 🟡 | ✅ | ✅ |
-| Credential pools / rotation | ⬜ | 🟡 | ⬜ | ✅ | ⬜ |
-| Webhooks management | ⬜ | 🟡 | ⬜ | ✅ | ⬜ |
-| Quick commands (custom `/cmd`) | ⬜ | 🟡 | ⬜ | ✅ | ⬜ |
-| Hermes Proxy (OpenAI-compatible) | ⬜ | 🟡 | ⬜ | ✅ | ✅ swarm |
-| Multi-window / multi-server | ✅ | 🟡 | ⬜ tab | ✅ | 🟡 |
-| Remote over SSH | ✅ system+NIO | ? | ⬜ (you forward) | ✅ + Citadel | 🟡 Tailscale |
-| Customizable sidebar (reorder/hide) | ✅ | ? | ⬜ | 🟡 | 🟡 themes |
-| iOS / iPhone companion | 🟡 in progress | ⬜ | 🟡 PWA | ✅ ScarfGo | ✅ PWA |
+| Capability | Talaria | HD · Nous (official) | HD · fathah (3rd-party) | Built-in dashboard | Scarf | hermes-workspace |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| Live chat (rich, streaming) | ✅ ACP | ✅ streaming | ✅ streaming | ✅ SSE | ✅ ACP | ✅ SSE |
+| Terminal / TUI escape hatch | ✅ SwiftTerm (macOS) | 🟡 TUI backend | ⬜ | ⬜ | ✅ SwiftTerm | ✅ PTY |
+| Sessions browse / search / read | ✅ | ✅ | ✅ full-text | ✅ | ✅ | ✅ |
+| Session rename / delete | ✅ (rename via CLI) | 🟡 | 🟡 | ✅ | ✅ | 🟡 |
+| Session JSONL export | ⬜ | ? | ? | ⬜ | ✅ | ⬜ |
+| Skills list / toggle | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Skills Hub install / search | ✅ (search HTTP, install CLI) | ✅ | ✅ | ✅ | ✅ | ✅ (2,000+) |
+| Plugins install / enable / update | ✅ | 🟡 | 🟡 | ✅ | ✅ | 🟡 |
+| Tools enable / disable | ✅ (CLI) | ✅ | ✅ 14 toolsets | 🟡 list-only | ✅ | 🟡 |
+| MCP server registry / presets | ✅ + catalog, test | ✅ | ? | ✅ | ✅ | ✅ |
+| Cron full CRUD | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 |
+| Kanban board (multi-agent) | ✅ full CRUD | 🟡 Agents/Command Center | ⬜ | ✅ | 🟡 project dash | ✅ |
+| Models: main + auxiliary slots | ✅ | ✅ | ✅ | ✅ | ✅ + aux settings | ✅ |
+| Custom OpenAI-compatible endpoints | ✅ | ✅ | ✅ | 🟡 | 🟡 | ✅ |
+| Gateway start / stop / status | ✅ (CLI) | ✅ | 🟡 | 🟡 | ✅ | ✅ |
+| Messaging-platform setup forms | ✅ 8 + auto | ✅ | ✅ 16 | 🟡 | ✅ 13 | 🟡 |
+| Soul / personality editor | ✅ both | 🟡 | ✅ SOUL.md | 🟡 | ✅ both | ⬜ |
+| Memory (`MEMORY.md`/`USER.md`) editor | ⬜ | 🟡 | ✅ | 🟡 | ✅ | ✅ |
+| Config editor (schema-driven) | ✅ | ✅ | 🟡 | ✅ | ✅ 10-tab | ✅ |
+| Environment (`.env`) CRUD | ✅ | 🟡 | 🟡 | ✅ | ✅ | 🟡 |
+| Logs viewer (filter / tail) | ✅ | 🟡 | ✅ | ✅ | ✅ session pills | 🟡 |
+| Doctor / health diagnostics | ✅ (CLI) | 🟡 | ? | ✅ | ✅ + audit | 🟡 |
+| Updates (self-update) | ✅ Sparkle + Hermes | ✅ one-click | ✅ auto | ✅ | ✅ Sparkle | 🟡 |
+| Hermes profile clone / rename / delete | ✅ | 🟡 switch | ✅ multi-profile | ✅ | ✅ + export/import | ✅ presets |
+| Usage insights / token cost analytics | ⬜ | 🟡 | ✅ tokens + cost | ✅ | ✅ heatmaps | ✅ ledger |
+| Activity feed / tool-call log | ⬜ | 🟡 live tool activity | 🟡 tool progress | 🟡 | ✅ | ✅ |
+| Credential pools / rotation | ⬜ | ⬜ | ✅ pools | ⬜ | ✅ | ⬜ |
+| Webhooks management | ⬜ | ⬜ | ⬜ | ⬜ | ✅ | ⬜ |
+| Quick commands (custom `/cmd`) | ⬜ | ? | 🟡 slash cmds | ⬜ | ✅ | ⬜ |
+| Hermes Proxy (OpenAI-compatible) | ⬜ | ? | ⬜ | ⬜ | ✅ | ✅ swarm |
+| Multi-window / multi-server | ✅ | 🟡 | 🟡 | ⬜ tab | ✅ | 🟡 |
+| Remote over SSH | ✅ system+NIO | ? | ? | ⬜ (you forward) | ✅ + Citadel | 🟡 Tailscale |
+| Customizable sidebar (reorder/hide) | ✅ | ? | ? | ⬜ | 🟡 | 🟡 themes |
+| iOS / iPhone companion | 🟡 in progress | ⬜ | ⬜ | 🟡 PWA | ✅ ScarfGo | ✅ PWA |
 
-`?` = couldn't confirm from public material at time of writing. Hermes Desktop is
-"coming soon" as of this writing, so several of its cells are marketing claims,
-not verified behavior.
+`?` = couldn't confirm from public material. The two "Hermes Desktop" columns are
+separate projects (see above): **HD · Nous** is the official app (public preview
+v0.15.2, shipped 2 June 2026); **HD · fathah** is the unofficial third-party app.
+Most of their cells come from launch announcements and READMEs, not hands-on
+testing. The Nous app also ships voice mode, image generation, a preview rail and
+file browser that have no row here; fathah's app adds a "Hermes Office" 3D view.
 
 ## Where Talaria is ahead
 
@@ -143,9 +168,6 @@ Several are tracked in `docs/roadmap.md` as deliberately deferred:
 
 - **No usage insights / token-cost analytics.** Scarf, the built-in dashboard,
   and hermes-workspace all chart token usage and cost; Talaria does not.
-- **No MCP server registry.** No browse/add/preset flow for MCP servers — a
-  notable gap, since Scarf, Hermes Desktop, and the built-in dashboard all have
-  one.
 - **No memory editor.** Talaria edits Soul and Personalities but not
   `MEMORY.md` / `USER.md`.
 - **No activity feed, credential pools, webhooks, quick commands, or Hermes
@@ -157,8 +179,12 @@ Several are tracked in `docs/roadmap.md` as deliberately deferred:
 Pick **Talaria** if you want a focused, native-Mac (and soon iOS) client with a
 strict, forward-compatible boundary to Hermes and clean SSH remoting. Pick
 **[Scarf][scarf]** if you want the broadest native-Mac feature set today and
-don't mind it reading Hermes' database directly. Pick **[Hermes
-Desktop][hermes-desktop]** for an official, cross-OS (Windows/Linux included)
-app. Pick the **[built-in dashboard][hermes-dashboard]** or
+don't mind it reading Hermes' database directly. Pick the **official [Hermes
+Desktop][hermes-desktop]** — Nous Research's own first-party app — if you want
+the cross-OS (Windows/Linux included) GUI with voice, image generation, and 300+
+Portal models, and don't need Mac-native polish or SSH remoting. (The unrelated
+third-party **[Hermes Desktop by @fathah][hermes-desktop-fathah]** is a different
+Electron app of the same name, with full-text session search, a memory editor,
+and a 3D "Hermes Office" view.) Pick the **[built-in dashboard][hermes-dashboard]** or
 **[hermes-workspace][hermes-workspace]** if a browser/PWA that runs anywhere
 matters more than native feel.
