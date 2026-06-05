@@ -540,6 +540,67 @@ public struct DashboardEnvVar: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// Resolved metadata for the currently configured model (`GET /api/model/info`).
+/// `auto*` is the auto-detected context length, `config*` the user override (0
+/// when unset), `effective*` the one actually used. `capabilities` is `{}` when
+/// the server can't resolve model metadata, so every field below is optional.
+public struct DashboardModelInfo: Codable, Equatable, Sendable {
+    public let model: String
+    public let provider: String
+    public let autoContextLength: Int?
+    public let configContextLength: Int?
+    public let effectiveContextLength: Int?
+    public let capabilities: DashboardModelCapabilities?
+
+    enum CodingKeys: String, CodingKey {
+        case model, provider, capabilities
+        case autoContextLength = "auto_context_length"
+        case configContextLength = "config_context_length"
+        case effectiveContextLength = "effective_context_length"
+    }
+}
+
+/// Per-model capability flags from `GET /api/model/info`. All optional — the
+/// server emits `{}` when models.dev metadata is unavailable.
+public struct DashboardModelCapabilities: Codable, Equatable, Sendable {
+    public let supportsTools: Bool?
+    public let supportsVision: Bool?
+    public let supportsReasoning: Bool?
+    public let contextWindow: Int?
+    public let maxOutputTokens: Int?
+    public let modelFamily: String?
+
+    enum CodingKeys: String, CodingKey {
+        case supportsTools = "supports_tools"
+        case supportsVision = "supports_vision"
+        case supportsReasoning = "supports_reasoning"
+        case contextWindow = "context_window"
+        case maxOutputTokens = "max_output_tokens"
+        case modelFamily = "model_family"
+    }
+}
+
+/// One configurable toolset row from `GET /api/tools/toolsets`. `enabled` is
+/// whether it's on for the dashboard (`cli`) platform; `configured` is whether
+/// its required credentials/keys are present; `available` tracks `enabled` on
+/// the current server. `tools` is the sorted list of tool ids it contributes.
+public struct DashboardToolset: Codable, Equatable, Sendable {
+    public let name: String
+    public let label: String
+    public let description: String?
+    public let enabled: Bool
+    public let available: Bool?
+    public let configured: Bool?
+    public let tools: [String]
+}
+
+/// Result of toggling a toolset (`PUT /api/tools/toolsets/{name}`).
+public struct DashboardToolsetToggleResult: Codable, Equatable, Sendable {
+    public let ok: Bool
+    public let name: String
+    public let enabled: Bool
+}
+
 public struct DashboardClient: Sendable {
     public let baseURL: URL
     private let token: @Sendable () -> String?
@@ -769,6 +830,38 @@ public struct DashboardClient: Sendable {
         let model: String
     }
 
+    /// Resolved metadata (context length, capabilities) for the currently
+    /// configured main model. The desktop reads this for its model badge.
+    public func getModelInfo() async throws -> DashboardModelInfo {
+        try await get(path: "/api/model/info")
+    }
+
+    // MARK: - Tools / toolsets
+
+    /// The configurable toolsets and their enabled/configured state. Backs the
+    /// tools picker, and supersedes the `hermes tools list` CLI fallback.
+    public func getToolsets() async throws -> [DashboardToolset] {
+        try await get(path: "/api/tools/toolsets")
+    }
+
+    /// Enable or disable a toolset for the dashboard (`cli`) platform. Persists
+    /// to `platform_toolsets.cli` the same way the CLI `hermes tools` picker
+    /// does, so GUI and CLI stay in lockstep — superseding the
+    /// `hermes tools enable/disable` CLI fallback. Returns 400 for unknown keys.
+    @discardableResult
+    public func setToolset(name: String, enabled: Bool) async throws -> DashboardToolsetToggleResult {
+        let encodedName = name.addingPercentEncoding(withAllowedCharacters: Self.queryComponentAllowed) ?? name
+        return try await sendDecoding(
+            method: "PUT",
+            path: "/api/tools/toolsets/\(encodedName)",
+            body: ToolsetToggleBody(enabled: enabled)
+        )
+    }
+
+    private struct ToolsetToggleBody: Encodable {
+        let enabled: Bool
+    }
+
     // MARK: - Config
 
     /// Profile-agnostic field schema driving the structured editor. Public
@@ -785,6 +878,13 @@ public struct DashboardClient: Sendable {
     /// form and the non-destructive merge both operate on this object).
     public func getConfig() async throws -> JSONValue {
         try await get(path: "/api/config")
+    }
+
+    /// The built-in default config (`GET /api/config/defaults`), returned
+    /// verbatim as a `JSONValue` so arbitrary keys round-trip — the desktop
+    /// uses it to show "(default)" hints and reset fields.
+    public func getConfigDefaults() async throws -> JSONValue {
+        try await get(path: "/api/config/defaults")
     }
 
     /// Writes the whole config atomically. The dashboard's `ConfigUpdate` model
