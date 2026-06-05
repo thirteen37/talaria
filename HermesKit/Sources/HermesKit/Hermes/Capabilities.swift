@@ -33,6 +33,13 @@ public enum HermesCapability: String, CaseIterable, Codable, Sendable {
     /// so they carry a later pin than the base dashboard. Below it the MCP
     /// screen shows a `capabilityBanner` warning rather than breaking.
     case requiresMCPAPI
+    /// `hermes dashboard`'s `/api/ws` JSON-RPC chat gateway — the WebSocket
+    /// endpoint that drives live chat the same way Hermes Desktop does, letting
+    /// Talaria run chat through the dashboard instead of a separate `hermes acp`
+    /// subprocess. Ships in the same `web_server.py` as the dashboard (it drives
+    /// the `tui_gateway.dispatch` surface), so it shares the dashboard pin. Below
+    /// it, a window falls back to the ACP chat backend. See `docs/gateway-chat.md`.
+    case gatewayChat
     /// `hermes skills install/update/uninstall` — the Skills Hub *mutation*
     /// affordances (search is plain public HTTP and is **not** gated by this).
     /// These go through the CLI-fallback admin runner (no dashboard route
@@ -101,6 +108,11 @@ public struct CapabilityTable: Sendable {
         // `pyproject.toml` version 0.15.1). Not yet in a tagged calver release at
         // time of writing, so the pin is the semver from that commit's pyproject.
         .requiresMCPAPI: HermesVersion(major: 0, minor: 15, patch: 1),
+        // `/api/ws` chat gateway is part of the dashboard server (`web_server.py`,
+        // driving `tui_gateway.dispatch`), present in the same builds as the
+        // dashboard. Shares the dashboard's introducing pin; below it a window
+        // stays on the ACP chat backend.
+        .gatewayChat: HermesVersion(major: 0, minor: 14, patch: 0),
         // `hermes skills install/update/uninstall` — verified non-interactive
         // against an installed Hermes v0.14.0 (`--yes` on install/update;
         // uninstall lacks `--yes` and is driven via stdin). The install/search

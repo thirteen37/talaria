@@ -15,19 +15,30 @@ extension ServerWindowHarness {
         // `-p <name>` is a global flag placed between the binary and the `acp`
         // subcommand; it collapses to nothing for the default profile.
         let acpArgs = [hermesPath] + HermesProfiles.cliFlag(hermesProfileName) + ["acp"]
-        let manager = SessionManager {
-            let extraEnv = await resolver.extraEnv()
-            var environment = extraEnv
-            if let hermesHome {
-                environment["HERMES_HOME"] = hermesHome
-            }
-            let transport = LocalProcessTransport(
-                executableURL: URL(fileURLWithPath: "/usr/bin/env"),
-                arguments: acpArgs,
-                environment: environment
+        let manager: SessionManager
+        if preferGatewayChat() {
+            // WebSocket chat over the window's shared dashboard.
+            manager = SessionManager(
+                backendFactory: GatewayChatBackend.makeFactory(
+                    profile: profile,
+                    hermesProfileName: hermesProfileName
+                )
             )
-            try transport.start()
-            return transport
+        } else {
+            manager = SessionManager {
+                let extraEnv = await resolver.extraEnv()
+                var environment = extraEnv
+                if let hermesHome {
+                    environment["HERMES_HOME"] = hermesHome
+                }
+                let transport = LocalProcessTransport(
+                    executableURL: URL(fileURLWithPath: "/usr/bin/env"),
+                    arguments: acpArgs,
+                    environment: environment
+                )
+                try transport.start()
+                return transport
+            }
         }
         // Mirror the session transport's binary + env so admin commands launch
         // the same hermes the chat session does. Without `profile.hermesPath`
@@ -91,7 +102,7 @@ extension ServerWindowHarness {
         hermesProfileName: String = HermesProfiles.defaultProfileName
     ) -> ServerWindowHarness {
         let useNIO = preferNIOSSHTransport()
-        let manager: SessionManager
+        var manager: SessionManager
         // Transport-appropriate remote-file reader for surfaces that read
         // files off the host (Profiles' config comparison). NIO `cat` with the
         // keychain/host-key wiring when NIO is active; nil on the system-ssh
@@ -140,6 +151,18 @@ extension ServerWindowHarness {
             }
             // nil → HermesConfigReader falls back to SFTPSubprocessTransfer.
             snapshotTransfer = nil
+        }
+
+        // WebSocket chat rides the dashboard's loopback `ssh -L` forward, which
+        // only exists on the system-ssh path. The NIO path has no local socket,
+        // so it stays on ACP until `NIOSSHGatewayWebSocket` lands (Phase 3).
+        if preferGatewayChat(), !useNIO {
+            manager = SessionManager(
+                backendFactory: GatewayChatBackend.makeFactory(
+                    profile: profile,
+                    hermesProfileName: hermesProfileName
+                )
+            )
         }
 
         // Scope outermost so Tools/Doctor run under the window's Hermes profile;
@@ -199,6 +222,14 @@ extension ServerWindowHarness {
     /// system-ssh as the default until the flag is flipped.
     static func preferNIOSSHTransport() -> Bool {
         UserDefaults.standard.bool(forKey: useNIOSSHTransportDefaultsKey)
+    }
+
+    /// True if live chat should run over the dashboard `/api/ws` gateway instead
+    /// of the ACP subprocess. Default off; flipped via the `useGatewayChat`
+    /// default. The connected-version gate (`HermesCapability.gatewayChat`) is
+    /// enforced separately by the window once the live version is known.
+    static func preferGatewayChat() -> Bool {
+        UserDefaults.standard.bool(forKey: useGatewayChatDefaultsKey)
     }
 
     /// Builds the trust store the NIO transport consults during the host-key

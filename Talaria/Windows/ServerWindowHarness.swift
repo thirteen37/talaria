@@ -145,6 +145,14 @@ final class ServerWindowHarness {
     /// release and delete system-ssh one release after that.
     static let useNIOSSHTransportDefaultsKey = "HermesKit.useNIOSSHTransport"
 
+    /// Opt-in: drive live chat over the dashboard `/api/ws` JSON-RPC gateway
+    /// (the same path Hermes Desktop uses) instead of spawning a separate
+    /// `hermes acp` subprocess. Default off while the WebSocket path reaches
+    /// parity; gated additionally on the connected Hermes version
+    /// (`HermesCapability.gatewayChat`). macOS only for now — the iOS NIO-SSH
+    /// path needs `NIOSSHGatewayWebSocket` (Phase 3). See `docs/gateway-chat.md`.
+    static let useGatewayChatDefaultsKey = "HermesKit.useGatewayChat"
+
     /// Forces a fresh dashboard connection from *any* state — the manual
     /// reconnect. It covers both the first-connect retry (a brand-new host not
     /// yet trusted when the harness booted fails the one-shot `startDashboard`
