@@ -14,6 +14,9 @@ historical one:
 
 - Dedicated **Models** screen: main + auxiliary model assignment, plus custom
   OpenAI-compatible endpoints surfaced from `hermes model` (`custom_providers`).
+- **Usage / Analytics** screen: read-only token, cost, and session analytics over
+  `GET /api/analytics/usage` (+ `/api/analytics/models`), with a 7/30/90-day range
+  picker, totals, a per-day token/cost trend, and a by-model breakdown.
 - **Plugins** install / enable / disable / update via the dashboard.
 - **Gateway** process control (start / stop / restart / install / uninstall via CLI).
 - **Hermes profile** management (clone / rename / delete).
@@ -31,7 +34,7 @@ historical one:
 - Theme and skin switching.
 - Mouse-mode toggles and terminal-style banner section pickers.
 - Subagent observability tree exposed through `/agents`.
-- Activity feed, insights, token analytics, and usage charts.
+- Activity feed and live insights stream (the TUI-gated `/api/events` WebSocket).
 - `/compress` focus sheet and transcript compaction UI.
 - JSONL export, lineage visualization, and branch/fork UI.
 - Custom quick commands and command palette extensions beyond MVP slash completion.

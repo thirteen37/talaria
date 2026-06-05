@@ -73,6 +73,7 @@ window consumers, and tears the child down when the last consumer releases it.
 | Cron | `GET` / `POST` on `/api/cron/jobs`, `PUT` / `DELETE` on `/api/cron/jobs/{id}`, plus `/pause`, `/resume`, and `/trigger` |
 | Kanban | `/api/plugins/kanban/*` — boards, tasks (full CRUD + bulk), links, comments, run logs, diagnostics, stats, assignees |
 | Models | `GET /api/model/options`, `GET /api/model/auxiliary`, `POST /api/model/set` (main + auxiliary slots) |
+| Usage / Analytics | `GET /api/analytics/usage`, `GET /api/analytics/models` (read-only token/cost/session analytics; gated by `requiresDashboard`, not a separate constant — both routes ship in the same `0.14.0` `web_server.py`) |
 | Logs | `GET /api/logs` with `file`, `lines`, `level`, `component`, and `search` query parameters |
 | Profiles | `GET` / `POST` on `/api/profiles`, `PATCH` / `DELETE` on `/api/profiles/{name}` |
 | Config editor | `GET /api/config/schema`, `GET /api/config`, `PUT /api/config` |

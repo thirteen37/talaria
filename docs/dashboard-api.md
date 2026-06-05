@@ -140,6 +140,21 @@ bodies are JSON; the "Body" column lists the wrapping the dashboard's Pydantic m
 | GET    | `/api/model/auxiliary`  | —                                    | `DashboardModelAssignments`. Unset slots read as `provider:"auto"`. |
 | POST   | `/api/model/set`        | `{scope, task?, provider, model}`    | `scope` = `main`/`auxiliary`. For `main`, `task` is **omitted**. For `auxiliary`: a slot name targets one task, `""` = all slots, `"__reset__"` = reset all to auto. |
 
+### Usage analytics (gated on `requiresDashboard` ≥ `0.14.0`)
+
+Read-only token/cost/session analytics, backing the **Usage** screen. Both ship
+in the same `0.14.0` `web_server.py` as the dashboard itself, so they share the
+`requiresDashboard` gate — there is no separate analytics capability constant.
+Every token/cost/count field is built from SQL `SUM`/`COUNT` aggregates, so on an
+empty-history server (or a `days` window with no sessions) the `SUM` fields are
+`null` while `COUNT` and `COALESCE(...,0)` cost fields are `0`. Talaria decodes
+every numeric field as optional and coalesces to `0`.
+
+| Method | Path                    | Body | Returns / notes |
+| ------ | ----------------------- | ---- | --------------- |
+| GET    | `/api/analytics/usage`  | —    | `DashboardUsageAnalytics`. Query `days` (default `30`). `{daily: [{day, input_tokens, output_tokens, cache_read_tokens, reasoning_tokens, estimated_cost, actual_cost, sessions, api_calls}], by_model: [{model, input_tokens, output_tokens, estimated_cost, sessions, api_calls}], totals: {total_input, total_output, total_cache_read, total_reasoning, total_estimated_cost, total_actual_cost, total_sessions, total_api_calls}, period_days, skills}`. `skills` (insights summary + top skills) is returned but not decoded. |
+| GET    | `/api/analytics/models` | —    | `DashboardModelAnalytics`. Query `days` (default `30`). Richer per-model rows than `usage`'s `by_model`: `{models: [{model, provider, input_tokens, output_tokens, cache_read_tokens, reasoning_tokens, estimated_cost, actual_cost, sessions, api_calls, tool_calls, last_used_at, avg_tokens_per_session, capabilities: {supports_tools, supports_vision, supports_reasoning, context_window, max_output_tokens, model_family}}], totals: {distinct_models, …}, period_days}`. Optional enrichment for a future Models tab. |
+
 ### Config
 
 | Method | Path                  | Body              | Returns / notes |
