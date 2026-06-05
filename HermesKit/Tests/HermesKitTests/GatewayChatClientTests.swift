@@ -169,6 +169,24 @@ struct GatewayChatClientTests {
     }
 
     @Test
+    func messageCompleteErrorStatusFailsPrompt() async throws {
+        // A turn that completes with status:"error" and no preceding error event
+        // must surface as a failure, not a clean end_turn.
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+        let promptTask = Task { try await client.prompt(sessionId: sid, content: "x") }
+        let submitFrame = try await fake.waitForSent(at: sentBefore)
+        fake.pushInbound(responseFrame(id: idOf(submitFrame), result: ["status": .string("streaming")]))
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: sid, payload: [
+            "status": .string("error"), "text": .string("provider 500")
+        ]))
+
+        await #expect(throws: GatewayChatError.self) {
+            _ = try await promptTask.value
+        }
+    }
+
+    @Test
     func cancelSendsInterrupt() async throws {
         let (client, fake, sid) = try await makeReadySession()
         let sentBefore = fake.sent.count

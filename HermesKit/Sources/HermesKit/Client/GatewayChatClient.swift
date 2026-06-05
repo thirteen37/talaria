@@ -220,7 +220,7 @@ public actor GatewayChatClient: ChatBackend {
             if let usage = usageUpdate(from: p["usage"]) {
                 emit(.usageUpdate(usage))
             }
-            resolveTurn(status: Self.string(p["status"]) ?? "complete")
+            resolveTurn(status: Self.string(p["status"]) ?? "complete", errorText: Self.string(p["text"]))
         case "approval.request":
             emitApproval(p)
         case "clarify.request":
@@ -261,9 +261,16 @@ public actor GatewayChatClient: ChatBackend {
         return UsageUpdate(size: size, used: used, cost: u["cost"])
     }
 
-    private func resolveTurn(status: String) {
+    private func resolveTurn(status: String, errorText: String?) {
         guard let cont = turnContinuation else { return }
         turnContinuation = nil
+        // A turn that completes with `status:"error"` is a failure even if no
+        // separate `error` event preceded it — fail the prompt rather than
+        // resolving it as a clean end-of-turn (which would swallow the error).
+        if status == "error" {
+            cont.resume(throwing: GatewayChatError.server(errorText ?? "Hermes reported an error"))
+            return
+        }
         let stopReason: StopReason = status == "interrupted" ? .cancelled : .endTurn
         cont.resume(returning: PromptResponse(stopReason: stopReason))
     }
@@ -353,7 +360,8 @@ public actor GatewayChatClient: ChatBackend {
         guard let sid = boundSessionId else { return }
         permissionCounter += 1
         let requestId = Self.string(p["request_id"]) ?? ""
-        let prompt = Self.string(p["prompt"]) ?? (method == "sudo.respond" ? "Password required" : "Secret required")
+        // sudo.request carries the label in `text`; secret.request in `prompt`.
+        let prompt = Self.string(p["prompt"]) ?? Self.string(p["text"]) ?? (method == "sudo.respond" ? "Password required" : "Secret required")
         let toolCall = ToolCallUpdate(toolCallId: "secret-\(permissionCounter)", title: prompt, status: .pending)
         let options = [PermissionOption(optionId: "", name: "Cancel", kind: .rejectOnce)]
         let request = RequestPermissionRequest(sessionId: sid, toolCall: toolCall, options: options)
