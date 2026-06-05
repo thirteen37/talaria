@@ -49,6 +49,13 @@ final class ServerWindowHarness {
     /// sidebar surfaces `dashboardError` if acquisition failed.
     var dashboardClient: DashboardClient?
     var dashboardError: String?
+    /// True while the spawning dashboard is compiling its web UI (first
+    /// `hermes dashboard` after a Hermes update). Drives the window-wide
+    /// "Building web UI…" banner so the long wait reads as progress rather than
+    /// a stuck "connecting…". Set by the supervisor's build callback during
+    /// ``acquireDashboard()``; cleared once the client is live, on failure, and
+    /// on ``reconnectDashboard()``.
+    var isBuildingWebUI = false
     var dashboardTask: Task<Void, Never>?
     var dashboardStarted = false
     var dashboardReleased = false
@@ -138,18 +145,39 @@ final class ServerWindowHarness {
     /// release and delete system-ssh one release after that.
     static let useNIOSSHTransportDefaultsKey = "HermesKit.useNIOSSHTransport"
 
-    /// Re-attempts a failed dashboard acquisition in place. The first attempt is
-    /// one-shot (`startDashboard`); a brand-new host that wasn't trusted when the
-    /// harness booted (macOS `~/.ssh/known_hosts`, iPad TOFU) fails it and, before
-    /// this, stayed broken until app relaunch. The supervisor resets to a clean
-    /// state after a failed acquire, so re-running `acquireDashboard()` spawns
-    /// fresh. Manual (not auto-retry): against a still-untrusted host on macOS an
-    /// auto-loop would spin forever, so the user taps Retry after trusting it.
-    func retryDashboard() {
-        guard dashboardClient == nil, !dashboardReleased else { return }
+    /// Forces a fresh dashboard connection from *any* state — the manual
+    /// reconnect. It covers both the first-connect retry (a brand-new host not
+    /// yet trusted when the harness booted fails the one-shot `startDashboard`
+    /// and, before this, stayed broken until app relaunch) **and** a live
+    /// dashboard that has since wedged (transient network failure, dropped
+    /// `ssh -L` forward, crashed/restarted remote) — where the client is still
+    /// non-nil but every call errors and a refcounted release wouldn't kill the
+    /// process. It unconditionally tears the current supervisor's process down
+    /// (`forceReleaseDashboardSupervisor`) before re-acquiring, so the dashboard
+    /// is genuinely rebuilt. Manual, not an auto-loop: against a still-untrusted
+    /// host on macOS an auto-retry would spin forever, so the user taps Reconnect
+    /// once the cause is cleared. No-op once the window has released its
+    /// dashboard.
+    func reconnectDashboard() {
+        guard !dashboardReleased else { return }
         dashboardTask?.cancel()
         dashboardError = nil
-        dashboardTask = Task { [weak self] in await self?.acquireDashboard() }
+        isBuildingWebUI = false
+        let previous = dashboardSupervisor
+        dashboardSupervisor = nil
+        dashboardClient = nil
+        store.dashboardClient = nil
+        dashboardTask = Task { [weak self] in
+            if let previous { await self?.forceReleaseDashboardSupervisor(previous) }
+            await self?.acquireDashboard()
+        }
+    }
+
+    /// Flips on the "Building web UI…" banner. Invoked from the supervisor's
+    /// build callback (off-actor), so it hops here to mutate harness state.
+    func markWebUIBuilding() {
+        guard dashboardClient == nil, !dashboardReleased else { return }
+        isBuildingWebUI = true
     }
 
     /// Refreshes ``liveHermesVersion`` from the connected dashboard's

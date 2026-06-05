@@ -17,6 +17,10 @@ Live chat stays on ACP over newline-delimited JSON-RPC. Non-chat surfaces are ba
 
 Each window acquires a dashboard endpoint for its `ServerProfile` through `DashboardSupervisor`. The supervisor starts `hermes dashboard`, polls `/api/status`, caches the session token scraped from the dashboard SPA, reference-counts consumers, and terminates the child when the last window releases it.
 
+A live dashboard can wedge without the refcount knowing — a dropped `ssh -L` forward, a transient network failure, or a crashed/restarted remote — leaving the client non-nil but every call failing. `DashboardSupervisor.forceShutdown()` tears the child down unconditionally (ignoring the refcount); the macOS coordinator's `forceRelease` also evicts the supervisor from its cache. The window's `reconnectDashboard()` chains a force-shutdown into a fresh acquire, so a single user action ("Reconnect", available in the sidebar/banner and the window toolbar) rebuilds a genuinely new process and client from any state. Windows sharing the profile recover on their own next acquire/reconnect.
+
+Reachability is build-aware. The first `hermes dashboard` after a Hermes update compiles the web UI before it starts listening — over an `ssh -L` forward this routinely outlasts the base window — so the supervisor watches the spawned process's output: once it sees `Building web UI…` it extends the reachability deadline from the base timeout (20s) to a build cap (180s) and fires a callback the window surfaces as a "Building web UI…" banner. If the dashboard still never answers, the thrown `notReachable` carries the last probe error (e.g. `URLError -1005`, or ssh's `channel … connect failed: Connection refused`), and the full probe/stderr/spawn-command detail is logged under the `com.talaria.hermeskit` `dashboard` os_log category (visible in the System log console) — so a "didn't come online" failure says *why* rather than timing out silently.
+
 The full route table Talaria depends on — auth header, error model, the SPA catch-all trap, and per-route bodies/shapes — is documented in `docs/dashboard-api.md`.
 
 Dashboard-backed surfaces today:

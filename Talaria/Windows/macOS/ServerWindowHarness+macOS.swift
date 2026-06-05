@@ -219,19 +219,29 @@ extension ServerWindowHarness {
     /// Acquires the dashboard endpoint for this profile, publishing the
     /// resulting `DashboardClient` so views can observe it.
     func acquireDashboard() async {
+        // Capture the supervisor *before* awaiting acquire (mirroring iOS) so a
+        // reconnect or teardown firing during a long in-flight acquire (notably
+        // the "Building web UI…" wait, where the toolbar Reconnect button is
+        // reachable) can force-release the exact instance. Assigning only after
+        // the await would leave `dashboardSupervisor` nil mid-acquire, so a
+        // reconnect would skip the release and the coalesced re-acquire would
+        // strand a refcount — leaking the `hermes dashboard` + ssh forward.
+        let supervisor = DashboardCoordinator.shared.ensureSupervisor(
+            for: profile,
+            hermesProfileName: hermesProfileName
+        )
+        dashboardSupervisor = supervisor
+        isBuildingWebUI = false
         do {
-            let (endpoint, supervisor) = try await DashboardCoordinator.shared.acquire(
-                profile: profile,
-                hermesProfileName: hermesProfileName
+            let endpoint = try await supervisor.acquire(
+                onWebUIBuildDetected: { [weak self] in await self?.markWebUIBuilding() }
             )
-            // Store before the cancellation check so `tearDown()` can release
-            // the acquired refcount even if we bail out right after.
-            dashboardSupervisor = supervisor
             try Task.checkCancellation()
             guard !dashboardReleased else { return }
             dashboardClient = endpoint.session.client()
             store.dashboardClient = dashboardClient
             dashboardError = nil
+            isBuildingWebUI = false
             // Capture the live version now the dashboard is reachable, so
             // capability gating uses it over the profile's cached probe value.
             await refreshLiveVersion()
@@ -239,8 +249,17 @@ extension ServerWindowHarness {
             guard !Task.isCancelled, !dashboardReleased else { return }
             dashboardClient = nil
             store.dashboardClient = nil
+            isBuildingWebUI = false
             dashboardError = error.localizedDescription
         }
+    }
+
+    /// Force-tears-down the supervisor `reconnectDashboard()` is replacing, so
+    /// the subsequent re-acquire builds a fresh `hermes dashboard`. macOS routes
+    /// through the shared coordinator, which also evicts it from the per-profile
+    /// cache.
+    func forceReleaseDashboardSupervisor(_ supervisor: DashboardSupervisor) async {
+        await DashboardCoordinator.shared.forceRelease(supervisor)
     }
 
     /// Acquires a dashboard scoped to a *named* Hermes profile, separate from

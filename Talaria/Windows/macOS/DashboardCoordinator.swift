@@ -28,13 +28,44 @@ final class DashboardCoordinator {
     /// pass it back to ``release(_:)`` rather than re-looking-up by key — the
     /// cached supervisor can be swapped out from under them by a profile edit,
     /// so key-only release would target the wrong instance.
+    /// Returns the cached-or-fresh supervisor for `profile` *without* acquiring
+    /// it, so a caller can store the instance before awaiting `acquire()` — and
+    /// thus force-release the exact supervisor if a reconnect/teardown fires
+    /// mid-acquire. Mirrors the iOS harness, which owns its supervisor up front.
+    /// (Acquiring inline and assigning only after the await leaves a window where
+    /// a reconnect can't see the in-flight supervisor and leaks its refcount.)
+    func ensureSupervisor(
+        for profile: ServerProfile,
+        hermesProfileName: String = HermesProfiles.defaultProfileName
+    ) -> DashboardSupervisor {
+        ensure(profile: profile, hermesProfileName: hermesProfileName)
+    }
+
     func acquire(
         profile: ServerProfile,
-        hermesProfileName: String = HermesProfiles.defaultProfileName
+        hermesProfileName: String = HermesProfiles.defaultProfileName,
+        onWebUIBuildDetected: (@Sendable () async -> Void)? = nil
     ) async throws -> (DashboardEndpoint, DashboardSupervisor) {
         let supervisor = ensure(profile: profile, hermesProfileName: hermesProfileName)
-        let endpoint = try await supervisor.acquire()
+        let endpoint = try await supervisor.acquire(onWebUIBuildDetected: onWebUIBuildDetected)
         return (endpoint, supervisor)
+    }
+
+    /// Tears down `supervisor`'s dashboard unconditionally (ignoring refcount)
+    /// and evicts it, so the next ``acquire(profile:hermesProfileName:)`` for
+    /// that profile builds a fresh process. The reconnect path: used when a live
+    /// dashboard is wedged (dropped ssh forward, crashed/restarted remote) and a
+    /// refcounted ``release(_:)`` wouldn't kill a still-shared process. Windows
+    /// sharing the profile recover on their own next acquire/reconnect.
+    func forceRelease(_ supervisor: DashboardSupervisor) async {
+        await supervisor.forceShutdown()
+        let key = DashboardKey(
+            profileId: supervisor.profile.id,
+            hermesProfile: supervisor.hermesProfileName ?? HermesProfiles.defaultProfileName
+        )
+        if supervisors[key] === supervisor {
+            supervisors[key] = nil
+        }
     }
 
     func release(_ supervisor: DashboardSupervisor) async {
