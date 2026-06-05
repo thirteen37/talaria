@@ -105,13 +105,17 @@ extension ServerWindowHarness {
     func acquireDashboard() async {
         let supervisor = makeIOSDashboardSupervisor(hermesProfileName: hermesProfileName)
         dashboardSupervisor = supervisor
+        isBuildingWebUI = false
         do {
-            let endpoint = try await supervisor.acquire()
+            let endpoint = try await supervisor.acquire(
+                onWebUIBuildDetected: { [weak self] in await self?.markWebUIBuilding() }
+            )
             try Task.checkCancellation()
             guard !dashboardReleased else { return }
             dashboardClient = endpoint.session.client()
             store.dashboardClient = dashboardClient
             dashboardError = nil
+            isBuildingWebUI = false
             // Capture the live version now the dashboard is reachable, so
             // capability gating uses it over the profile's cached probe value.
             await refreshLiveVersion()
@@ -119,8 +123,16 @@ extension ServerWindowHarness {
             guard !Task.isCancelled, !dashboardReleased else { return }
             dashboardClient = nil
             store.dashboardClient = nil
+            isBuildingWebUI = false
             dashboardError = error.localizedDescription
         }
+    }
+
+    /// Force-tears-down the supervisor `reconnectDashboard()` is replacing, so
+    /// the subsequent re-acquire builds a fresh dashboard. iOS owns its
+    /// supervisor directly (no coordinator), so it shuts it down in place.
+    func forceReleaseDashboardSupervisor(_ supervisor: DashboardSupervisor) async {
+        await supervisor.forceShutdown()
     }
 
     /// Acquires a dashboard scoped to a *named* Hermes profile, separate from

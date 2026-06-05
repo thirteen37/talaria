@@ -21,10 +21,14 @@ public struct SystemDashboardProcessLauncher: DashboardProcessLauncher {
 
         let stderrPipe = Pipe()
         process.standardError = stderrPipe
-        // We don't read stdout — the dashboard logs uvicorn boot lines there
-        // but they're noise. Discard via /dev/null so the OS pipe buffer
-        // doesn't fill and block the child.
-        process.standardOutput = FileHandle.nullDevice
+        // Merge the child's stdout into the same captured stream as stderr.
+        // Hermes prints its "Building web UI…" progress (the first
+        // `hermes dashboard` after an update compiles the web bundle, which can
+        // take far longer than the base reachability window) to stdout, and the
+        // supervisor scans the captured output to wait patiently through a
+        // build. Draining it here also keeps the OS pipe buffer from filling and
+        // blocking the child — the reason it was previously sent to /dev/null.
+        process.standardOutput = stderrPipe
 
         // Heartbeat pipe: the watchdog (`spec` wraps the dashboard in one) blocks
         // reading this on stdin and only ever sees EOF when the app's write end

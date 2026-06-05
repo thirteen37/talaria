@@ -332,8 +332,9 @@ enum DashboardHTTPWire {
 // MARK: - Channel handlers
 
 /// Long-lived `exec` handler for the remote `hermes dashboard`. Issues the
-/// command on activation, streams stderr to the supervisor (which scrapes it
-/// for the missing-`[web]`-extra hint), and records the exit code so the
+/// command on activation, streams the child's combined stdout+stderr to the
+/// supervisor (which scrapes it for the missing-`[web]`-extra hint and the
+/// "Building web UI…" build marker), and records the exit code so the
 /// supervisor's reachability loop can detect an early crash.
 final class DashboardExecHandler: ChannelDuplexHandler {
     typealias InboundIn = SSHChannelData
@@ -376,11 +377,16 @@ final class DashboardExecHandler: ChannelDuplexHandler {
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let envelope = unwrapInboundIn(data)
         guard case let .byteBuffer(bytes) = envelope.data else { return }
-        if envelope.type == .stdErr {
+        // Merge stdout (.channel) and stderr (.stdErr) into one stream. Hermes
+        // prints its "Building web UI…" progress (first `hermes dashboard` after
+        // an update) to stdout, and the supervisor scans the captured output to
+        // wait through the build and surface the banner — so dropping stdout
+        // here would leave the slow-remote-build case broken on iOS/iPad.
+        // Mirrors the macOS launcher, which routes the child's stdout into the
+        // same pipe as stderr.
+        if envelope.type == .channel || envelope.type == .stdErr {
             stderr.yield(String(decoding: bytes.readableBytesView, as: UTF8.self))
         }
-        // stdout (.channel) is uvicorn boot noise — discarded, like the macOS
-        // launcher routes it to /dev/null.
     }
 
     func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {

@@ -290,14 +290,40 @@ struct PhoneServerWindow: View {
                 }
             }
 
+            if harness.isBuildingWebUI {
+                Section {
+                    HStack(alignment: .top, spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Building web UI…")
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                            // Dimmed primary, not .secondary: secondary text can
+                            // vanish over material on-device (iOS vibrancy bug).
+                            Text("Hermes is compiling its dashboard after an update. This can take a minute.")
+                                .font(.caption2)
+                                .foregroundStyle(.primary)
+                                .opacity(0.6)
+                        }
+                    }
+                }
+            }
+
             if let dashboardError = harness.dashboardError {
                 Section {
                     HStack(alignment: .top, spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.red)
-                        Text(dashboardError)
-                            .font(.caption)
-                            .foregroundStyle(.primary)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(dashboardError)
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                            Button("Reconnect") { harness.reconnectDashboard() }
+                                .buttonStyle(.borderless)
+                                .controlSize(.small)
+                                .help("Reconnect the Hermes dashboard")
+                        }
                     }
                 }
             }
@@ -330,6 +356,15 @@ struct PhoneServerWindow: View {
                 }
                 .accessibilityLabel("Logs")
                 .help("View logs")
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    harness.reconnectDashboard()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .accessibilityLabel("Reconnect dashboard")
+                .help("Reconnect the Hermes dashboard")
             }
         }
         // Settings is reached via Browse → Settings: the row dismisses Browse,

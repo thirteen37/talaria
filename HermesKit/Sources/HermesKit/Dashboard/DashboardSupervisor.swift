@@ -4,7 +4,14 @@ public enum DashboardSupervisorError: Error, Equatable, Sendable, LocalizedError
     /// Process spawned but never began serving — `/api/status` didn't respond
     /// with 2xx within the timeout. Most often a Hermes the dashboard
     /// can't start (bad config, port in use, missing dependencies).
-    case notReachable
+    ///
+    /// `lastProbeError` is the reason the final reachability probe failed
+    /// (e.g. `The network connection was lost. (URLError -1005)` for a remote
+    /// `ssh -L` forward whose remote port is dead, or a non-2xx status). It's
+    /// nil only if the deadline elapsed before any probe ran. Carrying it makes
+    /// the difference between "couldn't reach the forward" and "reached it, got
+    /// a 500" visible in the banner instead of a content-free timeout.
+    case notReachable(lastProbeError: String?)
     /// Process exited before `/api/status` became reachable. `stderr` carries
     /// whatever tail we managed to capture; UI surfaces it verbatim because
     /// the actionable fix is almost always reading the message.
@@ -18,8 +25,10 @@ public enum DashboardSupervisorError: Error, Equatable, Sendable, LocalizedError
 
     public var errorDescription: String? {
         switch self {
-        case .notReachable:
-            return "Dashboard didn't come online before the reachability timeout."
+        case let .notReachable(lastProbeError):
+            let base = "Dashboard didn't come online before the reachability timeout."
+            guard let lastProbeError, !lastProbeError.isEmpty else { return base }
+            return "\(base) Last probe: \(lastProbeError)"
         case let .exitedBeforeReady(code, stderr):
             let trimmed = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty
@@ -53,6 +62,12 @@ public actor DashboardSupervisor {
     private let portAllocator: @Sendable () throws -> Int
     private let reachabilityTimeout: TimeInterval
     private let reachabilityPollInterval: TimeInterval
+    /// Extended deadline used once the captured output shows Hermes is building
+    /// its web UI (first `hermes dashboard` after an update). Compiling the web
+    /// bundle — especially on a remote host reached over `ssh -L` — routinely
+    /// outlasts `reachabilityTimeout`, so we wait up to this cap rather than
+    /// declaring the dashboard dead mid-build.
+    private let buildReachabilityTimeout: TimeInterval
 
     private var refcount: Int = 0
     private var pendingRefcount: Int = 0
@@ -84,8 +99,9 @@ public actor DashboardSupervisor {
         launcher: any DashboardProcessLauncher,
         http: any DashboardHTTP,
         portAllocator: @escaping @Sendable () throws -> Int,
-        reachabilityTimeout: TimeInterval = 10,
-        reachabilityPollInterval: TimeInterval = 0.2
+        reachabilityTimeout: TimeInterval = 20,
+        reachabilityPollInterval: TimeInterval = 0.2,
+        buildReachabilityTimeout: TimeInterval = 180
     ) {
         self.profile = profile
         self.hermesProfileName = hermesProfileName
@@ -94,9 +110,18 @@ public actor DashboardSupervisor {
         self.portAllocator = portAllocator
         self.reachabilityTimeout = reachabilityTimeout
         self.reachabilityPollInterval = reachabilityPollInterval
+        self.buildReachabilityTimeout = max(buildReachabilityTimeout, reachabilityTimeout)
     }
 
-    public func acquire() async throws -> DashboardEndpoint {
+    /// - Parameter onWebUIBuildDetected: fired once (on this actor) the first
+    ///   time the spawning dashboard's output shows it's compiling its web UI,
+    ///   so a consumer can surface a "Building web UI…" banner during the
+    ///   (possibly long) wait. Only the acquirer that triggers the spawn wires
+    ///   its callback; coalesced acquirers don't, matching how the spawn itself
+    ///   is shared. Ignored when the dashboard is already running.
+    public func acquire(
+        onWebUIBuildDetected: (@Sendable () async -> Void)? = nil
+    ) async throws -> DashboardEndpoint {
         if let current {
             refcount += 1
             return current.endpoint
@@ -109,7 +134,7 @@ public actor DashboardSupervisor {
             return try await finishPendingAcquire(pending)
         }
         let task = Task<ActiveProcess, Error> { [self] in
-            try await self.spawnAndReady()
+            try await self.spawnAndReady(onWebUIBuildDetected: onWebUIBuildDetected)
         }
         pendingGeneration += 1
         let pending = PendingAcquire(generation: pendingGeneration, task: task)
@@ -199,11 +224,44 @@ public actor DashboardSupervisor {
         }
     }
 
+    /// Unconditionally tears down the running dashboard, ignoring the refcount —
+    /// the reconnect path for a wedged process (dropped `ssh -L` forward, crashed
+    /// or restarted remote) that a normal refcounted ``release()`` wouldn't kill.
+    /// Afterwards the supervisor is fully released, so the coordinator evicts it
+    /// and the next ``acquire()`` builds a fresh process; callers reconnect by
+    /// re-acquiring.
+    public func forceShutdown() async {
+        // Abandon any in-flight spawn so a concurrent acquirer can't install a
+        // process we're tearing down. The cancelled task's `finishPendingAcquire`
+        // terminates whatever it spawned once it unwinds.
+        if let pending = pendingAcquire {
+            pending.task.cancel()
+            pendingAcquire = nil
+        }
+        pendingRefcount = 0
+        refcount = 0
+        guard let active = current else { return }
+        // Clear `current` before the suspending `terminate()` so a concurrent
+        // acquirer sees "nothing running" and spawns fresh rather than being
+        // handed the dying endpoint.
+        current = nil
+        currentGeneration = nil
+        await active.process.terminate()
+    }
+
     // MARK: - Spawn
 
-    private func spawnAndReady() async throws -> ActiveProcess {
+    private func spawnAndReady(
+        onWebUIBuildDetected: (@Sendable () async -> Void)? = nil
+    ) async throws -> ActiveProcess {
         let port = try portAllocator()
         let spec = buildSpec(port: port)
+        // The exact command — invaluable for diagnosing remote spawns (right
+        // port forwarded? watchdog wrapper intact?). Arguments carry host/user/
+        // identity-file *path* but never key material, so this is log-safe.
+        HermesLog.dashboard.debug(
+            "Spawning dashboard for \(self.profile.name, privacy: .public) on port \(port, privacy: .public): \(spec.executable.path, privacy: .public) \(spec.arguments.joined(separator: " "), privacy: .public)"
+        )
         let process = try await launcher.launch(spec: spec)
         let stderrBuffer = DashboardStderrBuffer()
         let stderrTap = Task.detached { [stderrBuffer] in
@@ -220,7 +278,8 @@ public actor DashboardSupervisor {
                 process: process,
                 stderr: stderrBuffer,
                 stderrTap: stderrTap,
-                baseURL: baseURL
+                baseURL: baseURL,
+                onWebUIBuildDetected: onWebUIBuildDetected
             )
             // Warm the session token so the first authenticated call from a
             // consumer doesn't pay an extra round-trip.
@@ -261,16 +320,41 @@ public actor DashboardSupervisor {
         process: any DashboardProcess,
         stderr: DashboardStderrBuffer,
         stderrTap: Task<Void, Never>,
-        baseURL: URL
+        baseURL: URL,
+        onWebUIBuildDetected: (@Sendable () async -> Void)? = nil
     ) async throws {
-        let deadline = Date().addingTimeInterval(reachabilityTimeout)
-        while Date() < deadline {
+        let start = Date()
+        let baseDeadline = start.addingTimeInterval(reachabilityTimeout)
+        let buildDeadline = start.addingTimeInterval(buildReachabilityTimeout)
+        var lastProbeError: String?
+        var loggedBuildWait = false
+        while true {
             try Task.checkCancellation()
             if let code = await process.exitCodeIfAvailable() {
                 try await Self.throwEarlyExit(code: code, stderr: stderr, stderrTap: stderrTap)
             }
-            if try await Self.probeReachability(baseURL: baseURL, http: http) {
+            switch await Self.probeReachability(baseURL: baseURL, http: http) {
+            case .reachable:
                 return
+            case let .failed(reason):
+                lastProbeError = reason
+                HermesLog.dashboard.debug(
+                    "Dashboard probe \(baseURL.absoluteString, privacy: .public)/api/status not ready: \(reason, privacy: .public)"
+                )
+            }
+            // While the server is compiling its web UI (first launch after an
+            // update), wait past the base window up to the build cap rather than
+            // giving up on a dashboard that's simply still building.
+            let building = await stderr.sawWebUIBuild
+            if building, !loggedBuildWait {
+                loggedBuildWait = true
+                HermesLog.dashboard.info(
+                    "Dashboard \(self.profile.name, privacy: .public) is building its web UI; extending the reachability window to \(self.buildReachabilityTimeout, privacy: .public)s."
+                )
+                await onWebUIBuildDetected?()
+            }
+            if Date() >= (building ? buildDeadline : baseDeadline) {
+                break
             }
             try? await Task.sleep(nanoseconds: UInt64(reachabilityPollInterval * 1_000_000_000))
         }
@@ -278,7 +362,22 @@ public actor DashboardSupervisor {
         if let code = await process.exitCodeIfAvailable() {
             try await Self.throwEarlyExit(code: code, stderr: stderr, stderrTap: stderrTap)
         }
-        throw DashboardSupervisorError.notReachable
+        // Still running but never served. Snapshot whatever the process has
+        // written so far — we can't await `stderrTap` here, it only ends when
+        // the process exits, which by definition hasn't happened on this path.
+        let building = await stderr.sawWebUIBuild
+        let capturedStderr = await stderr.snapshot()
+        HermesLog.dashboard.error(
+            """
+            Dashboard \(self.profile.name, privacy: .public) (\(String(describing: self.profile.kind), privacy: .public)) \
+            didn't come online at \(baseURL.absoluteString, privacy: .public) after \
+            \(building ? self.buildReachabilityTimeout : self.reachabilityTimeout, privacy: .public)s \
+            (web-UI build detected: \(building, privacy: .public)). \
+            Last probe: \(lastProbeError ?? "none", privacy: .public). \
+            Process output so far: \(capturedStderr.isEmpty ? "<empty>" : capturedStderr, privacy: .public)
+            """
+        )
+        throw DashboardSupervisorError.notReachable(lastProbeError: lastProbeError)
     }
 
     private static func throwEarlyExit(
@@ -298,27 +397,58 @@ public actor DashboardSupervisor {
         throw DashboardSupervisorError.exitedBeforeReady(exitCode: code, stderr: captured)
     }
 
+    private enum ReachabilityOutcome {
+        case reachable
+        case failed(reason: String)
+    }
+
     private static func probeReachability(
         baseURL: URL,
         http: any DashboardHTTP
-    ) async throws -> Bool {
+    ) async -> ReachabilityOutcome {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/status"))
         request.httpMethod = "GET"
         do {
             let (_, response) = try await http.data(for: request)
-            if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
-                return true
+            guard let http = response as? HTTPURLResponse else {
+                // Non-HTTP response is unexpected, but the transport answered —
+                // treat as reachable rather than spinning out the whole window.
+                return .reachable
             }
+            if (200..<300).contains(http.statusCode) {
+                return .reachable
+            }
+            return .failed(reason: "HTTP \(http.statusCode)")
         } catch {
-            // Connection refused while the server is still starting up.
+            return .failed(reason: Self.describeProbeError(error))
         }
-        return false
+    }
+
+    /// Log-safe one-liner for a probe failure. For `URLError` (the common case
+    /// over loopback or an `ssh -L` forward) it appends the raw code — `-1005`
+    /// (connection lost), `-1004` (can't connect / refused) — the single most
+    /// diagnostic bit for telling "forward up but dashboard dead" apart from
+    /// "still booting". No credential material flows through here.
+    private static func describeProbeError(_ error: any Error) -> String {
+        if let urlError = error as? URLError {
+            return "\(urlError.localizedDescription) (URLError \(urlError.code.rawValue))"
+        }
+        return error.localizedDescription
     }
 
     private static func stderrIndicatesMissingWebExtra(_ stderr: String) -> Bool {
         let lower = stderr.lowercased()
         return lower.contains("modulenotfounderror") &&
             (lower.contains("fastapi") || lower.contains("uvicorn") || lower.contains("starlette"))
+    }
+
+    /// True when a captured output line looks like Hermes compiling its web UI
+    /// (`Building web UI…`), emitted on the first `hermes dashboard` after an
+    /// update. It's the signal that a not-yet-listening dashboard is simply
+    /// still building, so the supervisor extends the reachability window instead
+    /// of declaring it dead.
+    static func indicatesWebUIBuild(_ line: String) -> Bool {
+        line.lowercased().contains("building web ui")
     }
 }
 
@@ -358,7 +488,28 @@ actor DashboardStderrBuffer {
     private var lines: [String] = []
     private let maxLines: Int = 64
 
+    /// Latches once the captured output shows the web-UI build is underway. The
+    /// supervisor polls this to decide whether to keep waiting past the base
+    /// reachability window. Sticky because the build marker scrolls out of the
+    /// bounded line buffer long before the (slow) build finishes.
+    private(set) var sawWebUIBuild = false
+
+    /// Bounded rolling tail of recent output, matched for the build marker. An
+    /// SSH/pipe read can split `Building web UI…` across two chunks; matching
+    /// each chunk in isolation would miss that, so we match the concatenated
+    /// tail instead. Capped so a long-running, non-building dashboard doesn't
+    /// grow it unbounded; cleared once the build latches.
+    private var buildMatchTail = ""
+    private let buildMatchTailLimit = 256
+
     func append(_ line: String) {
+        if !sawWebUIBuild {
+            buildMatchTail = String((buildMatchTail + line).suffix(buildMatchTailLimit))
+            if DashboardSupervisor.indicatesWebUIBuild(buildMatchTail) {
+                sawWebUIBuild = true
+                buildMatchTail = ""
+            }
+        }
         lines.append(line)
         if lines.count > maxLines {
             lines.removeFirst(lines.count - maxLines)

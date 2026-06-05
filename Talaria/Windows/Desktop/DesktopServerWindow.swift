@@ -285,6 +285,27 @@ struct DesktopServerWindow: View {
                 }
             }
 
+            // The dashboard is up but Hermes is compiling its web UI (first
+            // launch after an update). Surfaces would otherwise sit on a
+            // hintless "connecting…" placeholder for the length of the build.
+            if harness.isBuildingWebUI {
+                Section {
+                    HStack(alignment: .top, spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Building web UI…")
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                            Text("Hermes is compiling its dashboard after an update. This can take a minute.")
+                                .font(.caption2)
+                                .foregroundStyle(.primary)
+                                .opacity(0.6)
+                        }
+                    }
+                }
+            }
+
             // Surface a failed dashboard spawn window-wide. Without this the
             // dashboard surfaces sit on a perpetual "connecting…" placeholder
             // with no hint as to why.
@@ -297,7 +318,7 @@ struct DesktopServerWindow: View {
                             Text(dashboardError)
                                 .font(.caption)
                                 .foregroundStyle(.primary)
-                            Button("Retry") { harness.retryDashboard() }
+                            Button("Reconnect") { harness.reconnectDashboard() }
                                 .buttonStyle(.borderless)
                                 .controlSize(.mini)
                                 .help("Reconnect the dashboard")
@@ -316,6 +337,17 @@ struct DesktopServerWindow: View {
         // iPad surfaces a gear to open the editor (no Settings scene there);
         // no-op on macOS.
         .platformSettingsToolbarItem { showingSettings = true }
+        // Always-available reconnect: a live dashboard can wedge (dropped ssh
+        // forward, crashed/restarted remote) while still reporting "connected",
+        // and the error-banner Retry only shows on a *failed* acquire.
+        .toolbar {
+            ToolbarItem {
+                Button { harness.reconnectDashboard() } label: {
+                    Label("Reconnect Dashboard", systemImage: "arrow.clockwise")
+                }
+                .help("Reconnect the Hermes dashboard")
+            }
+        }
         .navigationSplitViewColumnWidth(min: 220, ideal: 240)
     }
 

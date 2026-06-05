@@ -9,4 +9,9 @@ public enum HermesLog {
     public static let transport = Logger(subsystem: "com.talaria.hermeskit", category: "transport")
     public static let session = Logger(subsystem: "com.talaria.hermeskit", category: "session")
     public static let snapshot = Logger(subsystem: "com.talaria.hermeskit", category: "snapshot")
+    /// Dashboard supervisor lifecycle: spawn command, reachability probes, and
+    /// why a dashboard failed to come online. The probe/timeout detail here is
+    /// what makes a "Dashboard didn't come online" failure diagnosable — the
+    /// banner only carries a one-line summary; the full stderr/command land here.
+    public static let dashboard = Logger(subsystem: "com.talaria.hermeskit", category: "dashboard")
 }
