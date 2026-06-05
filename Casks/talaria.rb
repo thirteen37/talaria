@@ -1,6 +1,6 @@
 cask "talaria" do
   version "1.0"
-  sha256 "REPLACE_AFTER_FIRST_RELEASE" # shasum -a 256 build/Talaria-1.0.dmg
+  sha256 "9466cd0e38723996bd482497bafdd79cfbe492b8678da0e3f6a0200e002067f2"
 
   url "https://github.com/thirteen37/talaria/releases/download/v#{version}/Talaria-#{version}.dmg"
   name "Talaria"

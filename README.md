@@ -38,8 +38,6 @@ Or install with Homebrew (no tap required):
 brew install --cask https://raw.githubusercontent.com/thirteen37/talaria/main/Casks/talaria.rb
 ```
 
-(Usable once v1.0 is published and the cask `sha256` is filled in.)
-
 Talaria drives [Hermes Agent](https://github.com/NousResearch/hermes-agent). Install `hermes` separately, include the dashboard web extra (`pip install -U 'hermes-agent[web]'`), and point Talaria at it via the local profile.
 
 ## Current Status
