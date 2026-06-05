@@ -1,43 +1,14 @@
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0"
-     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
-     xmlns:dc="http://purl.org/dc/elements/1.1/">
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>Talaria</title>
-        <link>https://thirteen37.github.io/talaria/appcast.xml</link>
-        <description>Talaria release feed</description>
-        <language>en</language>
-        <!--
-            Each <item> below describes a published release.
-            scripts/release.sh appends a new <item> via Sparkle's
-            generate_appcast (recommended) or manual sign_update output.
-
-            Required per item:
-              - sparkle:version            -> CFBundleVersion (integer build)
-              - sparkle:shortVersionString -> MARKETING_VERSION (semver string)
-              - sparkle:minimumSystemVersion
-              - enclosure url, length, type
-              - enclosure sparkle:edSignature (ed25519, from sign_update)
-        -->
-        <!-- EXAMPLE (delete this comment block when first real release lands):
         <item>
-            <title>Version 1.0</title>
-            <description><![CDATA[
-                <h2>Talaria 1.0</h2>
-                <ul>
-                    <li>Initial public release.</li>
-                </ul>
-            ]]></description>
-            <pubDate>Mon, 01 Jun 2026 12:00:00 +0000</pubDate>
-            <sparkle:version>1</sparkle:version>
+            <title>1.0</title>
+            <pubDate>Fri, 05 Jun 2026 03:37:13 +0000</pubDate>
+            <sparkle:version>20260605.0331</sparkle:version>
             <sparkle:shortVersionString>1.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <enclosure
-                url="https://github.com/thirteen37/talaria/releases/download/v1.0/Talaria-1.0.dmg"
-                length="0"
-                type="application/octet-stream"
-                sparkle:edSignature="REPLACE_WITH_ED25519_SIGNATURE_FROM_sign_update" />
+            <enclosure url="https://github.com/thirteen37/talaria/releases/download/v1.0/Talaria-1.0.dmg" length="11475196" type="application/octet-stream" sparkle:edSignature="rMgDwMQT8AoRZmdI3sILLtVGD6R3nNgwSRlUznigFvf68O0r+HMERVrhPrtC/o8uE0zneIbtIIr9N6gdBSeHAA=="/>
         </item>
-        -->
     </channel>
 </rss>
