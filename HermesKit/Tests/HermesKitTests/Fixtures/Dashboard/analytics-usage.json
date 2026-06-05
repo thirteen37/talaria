@@ -1,0 +1,64 @@
+{
+  "daily": [
+    {
+      "day": "2026-05-30",
+      "input_tokens": 120000,
+      "output_tokens": 8000,
+      "cache_read_tokens": 40000,
+      "reasoning_tokens": 2000,
+      "estimated_cost": 1.23,
+      "actual_cost": 1.1,
+      "sessions": 4,
+      "api_calls": 37
+    },
+    {
+      "day": "2026-05-31",
+      "input_tokens": 50000,
+      "output_tokens": 3000,
+      "cache_read_tokens": 10000,
+      "reasoning_tokens": null,
+      "estimated_cost": 0.5,
+      "actual_cost": 0.0,
+      "sessions": 2,
+      "api_calls": 12
+    }
+  ],
+  "by_model": [
+    {
+      "model": "claude-opus-4-8",
+      "input_tokens": 150000,
+      "output_tokens": 10000,
+      "estimated_cost": 1.6,
+      "sessions": 5,
+      "api_calls": 44
+    },
+    {
+      "model": "claude-haiku-4-5",
+      "input_tokens": 20000,
+      "output_tokens": 1000,
+      "estimated_cost": 0.13,
+      "sessions": 1,
+      "api_calls": 5
+    }
+  ],
+  "totals": {
+    "total_input": 170000,
+    "total_output": 11000,
+    "total_cache_read": 50000,
+    "total_reasoning": 2000,
+    "total_estimated_cost": 1.73,
+    "total_actual_cost": 1.1,
+    "total_sessions": 6,
+    "total_api_calls": 49
+  },
+  "period_days": 30,
+  "skills": {
+    "summary": {
+      "total_skill_loads": 3,
+      "total_skill_edits": 0,
+      "total_skill_actions": 3,
+      "distinct_skills_used": 2
+    },
+    "top_skills": []
+  }
+}

@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Collapses the three "operate / inspect the running Hermes" surfaces —
-/// Doctor, Updates, and Logs — behind a single **System** sidebar/Browse entry.
-/// A thin `TabbedDestinationView` wrapper that forwards the inputs
-/// `BrowseDetailView` already has on hand to the three existing views unchanged.
+/// Collapses the "operate / inspect the running Hermes" surfaces —
+/// Doctor, Updates, Logs, and Usage — behind a single **System** sidebar/Browse
+/// entry. A thin `TabbedDestinationView` wrapper that forwards the inputs
+/// `BrowseDetailView` already has on hand to the existing views unchanged.
 /// Each child keeps its own `.navigationTitle`, so the detail title tracks the
 /// active tab.
 struct SystemTabsView: View {
@@ -24,6 +24,9 @@ struct SystemTabsView: View {
             },
             DestinationTab(id: "logs", title: "Logs", systemImage: "doc.text") {
                 LogsView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
+            },
+            DestinationTab(id: "usage", title: "Usage", systemImage: "chart.bar.xaxis") {
+                UsageView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
             },
         ])
     }
