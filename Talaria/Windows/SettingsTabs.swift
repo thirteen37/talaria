@@ -72,6 +72,7 @@ struct SettingsTabs: View {
             .navigationTitle("Settings")
         #endif
     }
+
 }
 
 private extension View {

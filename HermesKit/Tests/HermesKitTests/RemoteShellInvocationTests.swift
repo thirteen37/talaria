@@ -194,37 +194,4 @@ struct RemoteShellInvocationTests {
         #expect(custom.hasPrefix("mise exec -- "))
         #expect(custom.contains("${HERMES_HOME:-$HOME/.hermes}"))
     }
-
-    #if os(macOS)
-    /// Locks in that the NIO-SSH transport (via `buildHermesRemoteCommand`)
-    /// sends the **same** wrapped command the system-ssh transport (via
-    /// `SSHTransport.makeArguments`) appends as its final argv. Without
-    /// this guard, a tweak to either path could silently start producing
-    /// divergent remote command lines across transports.
-    @Test
-    func systemSSHAndBuilderProduceIdenticalRemoteCommand() {
-        let profile = ServerProfile(
-            name: "Box",
-            kind: .ssh,
-            host: "example.com",
-            user: "me",
-            port: 2222,
-            identityFile: "~/.ssh/id_ed25519",
-            hermesPath: "/opt/bin/hermes",
-            hermesHome: "/tmp/hermes",
-            remoteShellMode: .bashLogin
-        )
-        let arguments = SSHTransport.makeArguments(
-            host: profile.host ?? "",
-            user: profile.user,
-            port: profile.port,
-            identityFile: profile.identityFile,
-            hermesPath: profile.hermesPath,
-            hermesHome: profile.hermesHome,
-            remoteShellMode: profile.remoteShellMode,
-            remoteShellPrefix: profile.remoteShellPrefix
-        )
-        #expect(arguments.last == buildHermesRemoteCommand(profile: profile))
-    }
-    #endif
 }

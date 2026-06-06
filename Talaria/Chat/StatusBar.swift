@@ -5,6 +5,7 @@ struct StatusBar: View {
     var hasError: Bool
     var isSending: Bool
     var turnStartDate: Date?
+    var model: String?
     var gitBranch: String?
     var contextUsed: Int?
     var contextSize: Int?
@@ -23,6 +24,11 @@ struct StatusBar: View {
             }
 
             Spacer(minLength: 8)
+
+            if let model, !model.isEmpty {
+                Label(model, systemImage: "cpu")
+                    .foregroundStyle(.secondary)
+            }
 
             if let contextText {
                 Label(contextText, systemImage: "gauge.with.dots.needle.33percent")

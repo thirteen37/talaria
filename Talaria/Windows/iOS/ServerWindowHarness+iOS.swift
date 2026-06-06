@@ -13,7 +13,8 @@ extension ServerWindowHarness {
         profile: ServerProfile,
         hermesProfileName: String = HermesProfiles.defaultProfileName
     ) -> ServerWindowHarness {
-        let manager = SessionManager { throw TransportError.unsupportedPlatform }
+        // iOS can't run local hermes; this stub never opens a real session.
+        let manager = SessionManager(backendFactory: { throw GatewayChatError.sessionNotReady })
         return ServerWindowHarness(
             store: SessionsStore(manager: manager, adminRunner: nil),
             profile: profile,
@@ -31,17 +32,12 @@ extension ServerWindowHarness {
         let confirmer: HostKeyConfirmer = { host, port, fingerprint in
             await hostKeyCoordinator.confirm(host: host, port: port, fingerprint: fingerprint)
         }
-        let manager = SessionManager {
-            let transport = try NIOSSHTransport(
-                profile: profile,
-                credentialProvider: credentialProvider,
-                hostKeyStore: hostKeyStore,
-                hostKeyConfirmer: confirmer,
-                hermesProfileName: hermesProfileName
-            )
-            try await transport.start()
-            return transport
-        }
+        // Live chat tunnels `/api/ws` over the window's live NIO-SSH dashboard
+        // connection (filled into the box by `acquireDashboard()`).
+        let tunnelBox = GatewayChatTunnelBox()
+        let manager = SessionManager(
+            backendFactory: GatewayChatBackend.makeFactory(tunnel: { tunnelBox.get() })
+        )
         let snapshotTransfer = NIOSSHCatTransfer(
             profile: profile,
             credentialProvider: credentialProvider,
@@ -72,13 +68,15 @@ extension ServerWindowHarness {
             profileId: profile.id,
             notifier: ChatNotifier.shared
         )
-        return ServerWindowHarness(
+        let harness = ServerWindowHarness(
             store: store,
             profile: profile,
             hermesProfileName: hermesProfileName,
             snapshotTransfer: snapshotTransfer,
             hostKeyCoordinator: hostKeyCoordinator
         )
+        harness.chatTunnelBox = tunnelBox
+        return harness
     }
 
     /// Only the pinned (TOFU) store exists on iOS — there's no `~/.ssh/known_hosts`.
@@ -103,7 +101,7 @@ extension ServerWindowHarness {
     /// Acquires the dashboard endpoint for this profile, publishing the
     /// resulting `DashboardClient` so views can observe it.
     func acquireDashboard() async {
-        let supervisor = makeIOSDashboardSupervisor(hermesProfileName: hermesProfileName)
+        let (supervisor, connection) = makeIOSDashboardSupervisor(hermesProfileName: hermesProfileName)
         dashboardSupervisor = supervisor
         isBuildingWebUI = false
         do {
@@ -116,6 +114,15 @@ extension ServerWindowHarness {
             store.dashboardClient = dashboardClient
             dashboardError = nil
             isBuildingWebUI = false
+            // Hand the live SSH connection + remote port to the chat factory so a
+            // gateway-chat session can tunnel `/api/ws` over it.
+            if let port = endpoint.baseURL.port {
+                chatTunnelBox?.set(GatewayChatTunnel(
+                    connection: connection,
+                    remotePort: port,
+                    session: endpoint.session
+                ))
+            }
             // Capture the live version now the dashboard is reachable, so
             // capability gating uses it over the profile's cached probe value.
             await refreshLiveVersion()
@@ -132,6 +139,11 @@ extension ServerWindowHarness {
     /// the subsequent re-acquire builds a fresh dashboard. iOS owns its
     /// supervisor directly (no coordinator), so it shuts it down in place.
     func forceReleaseDashboardSupervisor(_ supervisor: DashboardSupervisor) async {
+        // The chat tunnel rides this connection; drop it so a new session doesn't
+        // open WS over the connection we're about to tear down (re-acquire refills
+        // the box). A stale-tunnel open would just throw `sessionNotReady`
+        // anyway, but clearing the box avoids the wasted attempt.
+        chatTunnelBox?.set(nil)
         await supervisor.forceShutdown()
     }
 
@@ -143,7 +155,9 @@ extension ServerWindowHarness {
     func acquireScopedDashboardClient(
         hermesProfileName: String
     ) async throws -> (DashboardSupervisor, DashboardClient) {
-        let supervisor = makeIOSDashboardSupervisor(hermesProfileName: hermesProfileName)
+        // Scoped (config-editor) dashboards aren't the chat tunnel, so the
+        // connection is unused here.
+        let (supervisor, _) = makeIOSDashboardSupervisor(hermesProfileName: hermesProfileName)
         let endpoint = try await supervisor.acquire()
         return (supervisor, endpoint.session.client())
     }
@@ -184,9 +198,12 @@ extension ServerWindowHarness {
     /// `direct-tcpip` channel. Reuses the window's host-key trust coordinator
     /// and the shared pinned host-key store so the dashboard connection doesn't
     /// re-prompt for a key the chat transport already trusted.
+    /// Returns the supervisor and the underlying SSH connection — the connection
+    /// is also what the gateway chat tunnel rides (``acquireDashboard()`` stashes
+    /// it for the default window dashboard).
     private func makeIOSDashboardSupervisor(
         hermesProfileName: String = HermesProfiles.defaultProfileName
-    ) -> DashboardSupervisor {
+    ) -> (DashboardSupervisor, NIOSSHDashboardConnection) {
         var confirmer: HostKeyConfirmer?
         if let coordinator = hostKeyCoordinator {
             confirmer = { host, port, fingerprint in
@@ -201,7 +218,7 @@ extension ServerWindowHarness {
         )
         let profile = profile
         let isDefault = hermesProfileName == HermesProfiles.defaultProfileName
-        return DashboardSupervisor(
+        let supervisor = DashboardSupervisor(
             profile: profile,
             hermesProfileName: isDefault ? nil : hermesProfileName,
             launcher: NIOSSHDashboardProcessLauncher(connection: connection),
@@ -216,5 +233,6 @@ extension ServerWindowHarness {
                 return Int.random(in: 40000...60000)
             }
         )
+        return (supervisor, connection)
     }
 }

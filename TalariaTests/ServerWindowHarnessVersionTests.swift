@@ -58,7 +58,7 @@ struct ServerWindowHarnessVersionTests {
     // MARK: - Helpers
 
     private func makeHarness(cachedVersion: HermesVersion?) -> ServerWindowHarness {
-        let manager = SessionManager { MockACPTransport() }
+        let manager = SessionManager(backendFactory: { MockChatBackend() })
         let store = SessionsStore(manager: manager, adminRunner: nil)
         let profile = ServerProfile(name: "Test", kind: .ssh, host: "test.local", version: cachedVersion)
         return ServerWindowHarness(store: store, profile: profile)

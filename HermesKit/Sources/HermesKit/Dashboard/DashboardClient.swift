@@ -84,6 +84,17 @@ public struct DashboardStatus: Codable, Equatable, Sendable {
     }
 }
 
+/// Response from `POST /api/auth/ws-ticket` — a single-use WebSocket-auth ticket.
+public struct DashboardWSTicket: Codable, Equatable, Sendable {
+    public let ticket: String
+    public let ttlSeconds: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case ticket
+        case ttlSeconds = "ttl_seconds"
+    }
+}
+
 public struct DashboardSessionSummary: Codable, Equatable, Sendable {
     public let id: String
     public let title: String?
@@ -590,28 +601,73 @@ public struct DashboardEnvVar: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-/// One toolset from `GET /api/tools/toolsets`. The dashboard reports only a
-/// single **global** enabled flag per toolset (per-platform enable/disable stays
-/// on the CLI), so this model keeps just the fields Talaria needs: the toolset
-/// `name` (matches the CLI `tools list` id / matrix row) and `tools`, the
-/// toolset's individual function names — the bridge for linking a tool's config
-/// env vars to it. Extra response fields (enabled/available/configured/…) are
-/// ignored on decode.
+/// Resolved metadata for the currently configured model (`GET /api/model/info`).
+/// `auto*` is the auto-detected context length, `config*` the user override (0
+/// when unset), `effective*` the one actually used. `capabilities` is `{}` when
+/// the server can't resolve model metadata, so every field is optional. Reuses
+/// the shared `DashboardModelCapabilities` (defined in `AnalyticsModels.swift`).
+public struct DashboardModelInfo: Codable, Equatable, Sendable {
+    public let model: String
+    public let provider: String
+    public let autoContextLength: Int?
+    public let configContextLength: Int?
+    public let effectiveContextLength: Int?
+    public let capabilities: DashboardModelCapabilities?
+
+    enum CodingKeys: String, CodingKey {
+        case model, provider, capabilities
+        case autoContextLength = "auto_context_length"
+        case configContextLength = "config_context_length"
+        case effectiveContextLength = "effective_context_length"
+    }
+}
+
+/// One toolset from `GET /api/tools/toolsets`. `name` matches the CLI
+/// `tools list` id / matrix row; `tools` is the toolset's individual function
+/// names (e.g. `["web_extract", "web_search"]`) — the bridge for linking a
+/// tool's config env vars (a var's `tools` array references function names, not
+/// the toolset id). `enabled`/`available`/`configured` carry the dashboard's
+/// global toolset state and decode as nil when the server omits them
+/// (per-platform enable/disable stays on the CLI).
 public struct DashboardToolset: Codable, Equatable, Sendable, Identifiable {
     public let name: String
     public let label: String?
-    /// Individual function names in the toolset, e.g. `["web_extract", "web_search"]`.
+    public let description: String?
+    public let enabled: Bool?
+    public let available: Bool?
+    public let configured: Bool?
     public let tools: [String]
 
     public var id: String { name }
 
-    enum CodingKeys: String, CodingKey { case name, label, tools }
+    enum CodingKeys: String, CodingKey {
+        case name, label, description, enabled, available, configured, tools
+    }
 
-    public init(name: String, label: String?, tools: [String]) {
+    public init(
+        name: String,
+        label: String? = nil,
+        description: String? = nil,
+        enabled: Bool? = nil,
+        available: Bool? = nil,
+        configured: Bool? = nil,
+        tools: [String]
+    ) {
         self.name = name
         self.label = label
+        self.description = description
+        self.enabled = enabled
+        self.available = available
+        self.configured = configured
         self.tools = tools
     }
+}
+
+/// Result of toggling a toolset (`PUT /api/tools/toolsets/{name}`).
+public struct DashboardToolsetToggleResult: Codable, Equatable, Sendable {
+    public let ok: Bool
+    public let name: String
+    public let enabled: Bool
 }
 
 public struct DashboardClient: Sendable {
@@ -639,6 +695,16 @@ public struct DashboardClient: Sendable {
 
     public func getStatus() async throws -> DashboardStatus {
         try await get(path: "/api/status")
+    }
+
+    /// Mints a single-use, short-TTL ticket for authenticating a WebSocket
+    /// upgrade (`POST /api/auth/ws-ticket`). Required by **gated** dashboards,
+    /// which reject the legacy `?token=` on `/api/ws`. On a loopback dashboard
+    /// the route is unauthenticated/absent and this throws — callers fall back
+    /// to the session token.
+    public func mintWSTicket() async throws -> String {
+        let response: DashboardWSTicket = try await sendDecoding(method: "POST", path: "/api/auth/ws-ticket")
+        return response.ticket
     }
 
     public func listSessions(limit: Int? = nil, offset: Int? = nil) async throws -> DashboardSessionsResponse {
@@ -843,6 +909,38 @@ public struct DashboardClient: Sendable {
         let model: String
     }
 
+    /// Resolved metadata (context length, capabilities) for the currently
+    /// configured main model. The desktop reads this for its model badge.
+    public func getModelInfo() async throws -> DashboardModelInfo {
+        try await get(path: "/api/model/info")
+    }
+
+    // MARK: - Tools / toolsets
+
+    /// The configurable toolsets and their enabled/configured state. Backs the
+    /// tools picker, and supersedes the `hermes tools list` CLI fallback.
+    public func getToolsets() async throws -> [DashboardToolset] {
+        try await get(path: "/api/tools/toolsets")
+    }
+
+    /// Enable or disable a toolset for the dashboard (`cli`) platform. Persists
+    /// to `platform_toolsets.cli` the same way the CLI `hermes tools` picker
+    /// does, so GUI and CLI stay in lockstep — superseding the
+    /// `hermes tools enable/disable` CLI fallback. Returns 400 for unknown keys.
+    @discardableResult
+    public func setToolset(name: String, enabled: Bool) async throws -> DashboardToolsetToggleResult {
+        let encodedName = name.addingPercentEncoding(withAllowedCharacters: Self.queryComponentAllowed) ?? name
+        return try await sendDecoding(
+            method: "PUT",
+            path: "/api/tools/toolsets/\(encodedName)",
+            body: ToolsetToggleBody(enabled: enabled)
+        )
+    }
+
+    private struct ToolsetToggleBody: Encodable {
+        let enabled: Bool
+    }
+
     // MARK: - Config
 
     /// Profile-agnostic field schema driving the structured editor. Public
@@ -859,6 +957,13 @@ public struct DashboardClient: Sendable {
     /// form and the non-destructive merge both operate on this object).
     public func getConfig() async throws -> JSONValue {
         try await get(path: "/api/config")
+    }
+
+    /// The built-in default config (`GET /api/config/defaults`), returned
+    /// verbatim as a `JSONValue` so arbitrary keys round-trip — the desktop
+    /// uses it to show "(default)" hints and reset fields.
+    public func getConfigDefaults() async throws -> JSONValue {
+        try await get(path: "/api/config/defaults")
     }
 
     /// Writes the whole config atomically. The dashboard's `ConfigUpdate` model
@@ -1039,18 +1144,6 @@ public struct DashboardClient: Sendable {
             method: "POST", path: "/api/env/reveal", body: EnvVarRevealBody(key: key)
         )
         return response.value
-    }
-
-    // MARK: - Toolsets
-
-    /// Lists toolsets (`GET /api/tools/toolsets`) with their individual function
-    /// names. The dashboard reports only a global enabled flag here (per-platform
-    /// enable/disable stays on the CLI), but the `tools` function list is the
-    /// bridge for mapping a tool's config env vars: a tool var's own `tools`
-    /// array references function names (e.g. `web_search`), not the toolset id
-    /// (`web`), so it's matched to a toolset by intersecting against this list.
-    public func getToolsets() async throws -> [DashboardToolset] {
-        try await get(path: "/api/tools/toolsets")
     }
 
     /// UI grouping order for the env categories Hermes returns. Kept in step

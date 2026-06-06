@@ -16,7 +16,7 @@ struct SessionsStoreReadOnlyTests {
             )
         ])
         let store = SessionsStore(
-            manager: SessionManager(transportFactory: { try await transportFactory.makeTransport() }),
+            manager: SessionManager(backendFactory: { await transportFactory.makeBackend() }),
             dashboardClient: DashboardClient(
                 baseURL: URL(string: "http://127.0.0.1:9119")!,
                 token: { "tok" },
@@ -46,7 +46,7 @@ struct SessionsStoreReadOnlyTests {
             )
         ])
         let store = SessionsStore(
-            manager: SessionManager(transportFactory: { try await transportFactory.makeTransport() }),
+            manager: SessionManager(backendFactory: { await transportFactory.makeBackend() }),
             dashboardClient: DashboardClient(
                 baseURL: URL(string: "http://127.0.0.1:9119")!,
                 token: { "tok" },
@@ -68,7 +68,7 @@ struct SessionsStoreReadOnlyTests {
     func acpSessionUsesLiveACPPath() async throws {
         let transportFactory = CountingTransportFactory()
         let store = SessionsStore(
-            manager: SessionManager(transportFactory: { try await transportFactory.makeTransport() }),
+            manager: SessionManager(backendFactory: { await transportFactory.makeBackend() }),
             defaultCwd: "/tmp"
         )
 
@@ -83,8 +83,8 @@ struct SessionsStoreReadOnlyTests {
     @Test
     func acpSessionCapturesHermesEmittedTitle() async throws {
         let store = SessionsStore(
-            manager: SessionManager(transportFactory: {
-                TitleEmittingTransport(sessionId: "acp-1", titles: ["Renamed by Hermes"])
+            manager: SessionManager(backendFactory: {
+                TitleEmittingBackend(sessionId: "acp-1", titles: ["Renamed by Hermes"])
             }),
             defaultCwd: "/tmp"
         )
@@ -100,10 +100,10 @@ struct SessionsStoreReadOnlyTests {
     @Test
     func emptyTitleNotificationDoesNotBlankExistingTitle() async throws {
         let store = SessionsStore(
-            manager: SessionManager(transportFactory: {
+            manager: SessionManager(backendFactory: {
                 // Emit a real title first, then a whitespace-only one; the guard
                 // must keep the first title rather than blanking it.
-                TitleEmittingTransport(sessionId: "acp-1", titles: ["Renamed by Hermes", "   "])
+                TitleEmittingBackend(sessionId: "acp-1", titles: ["Renamed by Hermes", "   "])
             }),
             defaultCwd: "/tmp"
         )
@@ -151,9 +151,9 @@ struct SessionsStoreReadOnlyTests {
 private actor CountingTransportFactory {
     private(set) var count = 0
 
-    func makeTransport() async throws -> any Transport {
+    func makeBackend() -> any ChatBackend {
         count += 1
-        return LoadSessionTransport()
+        return MockChatBackend()
     }
 }
 
@@ -195,130 +195,45 @@ private final class StubDashboardHTTP: DashboardHTTP, @unchecked Sendable {
     }
 }
 
-private actor LoadSessionTransport: Transport {
-    nonisolated let inbound: AsyncThrowingStream<Data, Error>
-    private nonisolated let continuation: AsyncThrowingStream<Data, Error>.Continuation
-    private var closed = false
-
-    init() {
-        var captured: AsyncThrowingStream<Data, Error>.Continuation?
-        self.inbound = AsyncThrowingStream { captured = $0 }
-        self.continuation = captured!
-    }
-
-    func send(_ data: Data) async throws {
-        guard !closed else { throw TransportError.stdinClosed }
-        guard let message = try? JSONDecoder().decode(IncomingMessage.self, from: data) else {
-            return
-        }
-        switch message.method {
-        case ACPMethod.initialize:
-            respond(
-                id: message.id,
-                result: InitializeResponse(
-                    protocolVersion: 1,
-                    agentInfo: Implementation(name: "TestHermes", version: "0.0.0")
-                )
-            )
-        case ACPMethod.sessionLoad:
-            respond(id: message.id, result: LoadSessionResponse())
-        default:
-            if let id = message.id {
-                respond(id: id, result: JSONValue.null)
-            }
-        }
-    }
-
-    func close() async {
-        closed = true
-        continuation.finish()
-    }
-
-    private func respond<R: Codable & Sendable>(id: JSONRPCID?, result: R) {
-        guard let id, let data = try? JSONRPCFramer.encode(JSONRPCResponse(id: id, result: result)) else {
-            return
-        }
-        continuation.yield(data)
-    }
-
-    private struct IncomingMessage: Decodable {
-        let id: JSONRPCID?
-        let method: String?
-    }
-}
-
-/// Like `LoadSessionTransport`, but after answering `session/load` it emits one
-/// `session/update` notification per configured title — mirroring how Hermes
-/// pushes an auto-generated session title to the client mid-chat.
-private actor TitleEmittingTransport: Transport {
-    nonisolated let inbound: AsyncThrowingStream<Data, Error>
-    private nonisolated let continuation: AsyncThrowingStream<Data, Error>.Continuation
+/// A ``ChatBackend`` that, on `loadSession`, emits one session-info notification
+/// per configured title — mirroring how Hermes pushes an auto-generated session
+/// title to the client mid-chat. The updates are buffered until the manager's
+/// pump subscribes (the replay path), so the store still sees them.
+private final class TitleEmittingBackend: ChatBackend, @unchecked Sendable {
+    nonisolated let notifications: AsyncThrowingStream<HermesNotification, Error>
+    private let continuation: AsyncThrowingStream<HermesNotification, Error>.Continuation
     private let sessionId: SessionId
     private let titles: [String?]
-    private var closed = false
 
     init(sessionId: SessionId, titles: [String?]) {
         self.sessionId = sessionId
         self.titles = titles
-        var captured: AsyncThrowingStream<Data, Error>.Continuation?
-        self.inbound = AsyncThrowingStream { captured = $0 }
+        var captured: AsyncThrowingStream<HermesNotification, Error>.Continuation?
+        self.notifications = AsyncThrowingStream { captured = $0 }
         self.continuation = captured!
     }
 
-    func send(_ data: Data) async throws {
-        guard !closed else { throw TransportError.stdinClosed }
-        guard let message = try? JSONDecoder().decode(IncomingMessage.self, from: data) else {
-            return
-        }
-        switch message.method {
-        case ACPMethod.initialize:
-            respond(
-                id: message.id,
-                result: InitializeResponse(
-                    protocolVersion: 1,
-                    agentInfo: Implementation(name: "TestHermes", version: "0.0.0")
-                )
-            )
-        case ACPMethod.sessionLoad:
-            respond(id: message.id, result: LoadSessionResponse())
-            for title in titles {
-                emitTitle(title)
-            }
-        default:
-            if let id = message.id {
-                respond(id: id, result: JSONValue.null)
-            }
-        }
+    func start(clientInfo: Implementation) async throws {}
+
+    func newSession(cwd: String, mcpServers: [McpServer]) async throws -> NewSessionResponse {
+        NewSessionResponse(sessionId: sessionId)
     }
 
-    func close() async {
-        closed = true
-        continuation.finish()
-    }
-
-    private func emitTitle(_ title: String?) {
-        let notification = JSONRPCNotification(
-            method: ACPMethod.sessionUpdate,
-            params: SessionNotification(
-                sessionId: sessionId,
+    func loadSession(sessionId: SessionId, cwd: String, mcpServers: [McpServer]) async throws -> LoadSessionResponse {
+        for title in titles {
+            continuation.yield(.sessionUpdate(SessionNotification(
+                sessionId: self.sessionId,
                 update: .sessionInfoUpdate(SessionInfoUpdate(title: title))
-            )
-        )
-        guard let data = try? JSONRPCFramer.encode(notification) else {
-            return
+            )))
         }
-        continuation.yield(data)
+        return LoadSessionResponse()
     }
 
-    private func respond<R: Codable & Sendable>(id: JSONRPCID?, result: R) {
-        guard let id, let data = try? JSONRPCFramer.encode(JSONRPCResponse(id: id, result: result)) else {
-            return
-        }
-        continuation.yield(data)
+    func prompt(sessionId: SessionId, content: [ContentBlock]) async throws -> PromptResponse {
+        PromptResponse(stopReason: .endTurn)
     }
 
-    private struct IncomingMessage: Decodable {
-        let id: JSONRPCID?
-        let method: String?
-    }
+    func cancel(sessionId: SessionId) async throws {}
+    func respond(id: JSONRPCID, error: JSONRPCError) async throws {}
+    func close() async { continuation.finish() }
 }

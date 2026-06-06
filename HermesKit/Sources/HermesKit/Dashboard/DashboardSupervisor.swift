@@ -267,6 +267,13 @@ public actor DashboardSupervisor {
         let stderrTap = Task.detached { [stderrBuffer] in
             for await line in process.stderr {
                 await stderrBuffer.append(line)
+                // Mirror to the log so the dashboard's own output — including
+                // uvicorn's WebSocket access/rejection lines for `/api/ws` — is
+                // visible in the in-app console, not just on early-exit failures.
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    HermesLog.dashboard.info("[dashboard] \(trimmed, privacy: .public)")
+                }
             }
         }
 

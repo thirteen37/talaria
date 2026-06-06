@@ -6,7 +6,11 @@ public enum SessionManagerError: Error, Equatable, Sendable {
 }
 
 public actor SessionManager {
-    public typealias TransportFactory = @Sendable () async throws -> any Transport
+    /// Produces a fresh, un-started ``ChatBackend`` per session (a
+    /// ``GatewayChatClient`` over the dashboard `/api/ws` gateway).
+    /// `SessionManager` calls ``ChatBackend/start(clientInfo:)`` on it before
+    /// creating/loading a session.
+    public typealias ChatBackendFactory = @Sendable () async throws -> any ChatBackend
 
     public struct ClientInfo: Sendable {
         public var name: String
@@ -27,7 +31,7 @@ public actor SessionManager {
     }
 
     private struct ActiveSession {
-        let client: HermesClient
+        let client: any ChatBackend
         let cwd: String
         var subscribers: [UUID: AsyncStream<HermesNotification>.Continuation] = [:]
         var pumpTask: Task<Void, Never>?
@@ -46,16 +50,18 @@ public actor SessionManager {
     /// trade-off is the head of a very long transcript may scroll off.
     private static let replayCap = 10_000
 
-    private let transportFactory: TransportFactory
+    private let backendFactory: ChatBackendFactory
     private let clientInfo: ClientInfo
     private var sessions: [SessionId: ActiveSession] = [:]
 
+    /// Each session boots whatever ``ChatBackend`` the factory returns (a
+    /// ``GatewayChatClient`` over a ``GatewayWebSocket``).
     public init(
         clientInfo: ClientInfo = ClientInfo(),
-        transportFactory: @escaping TransportFactory
+        backendFactory: @escaping ChatBackendFactory
     ) {
-        self.transportFactory = transportFactory
         self.clientInfo = clientInfo
+        self.backendFactory = backendFactory
     }
 
     public func openNew(cwd: String, mcpServers: [McpServer] = []) async throws -> SessionState {
@@ -107,7 +113,7 @@ public actor SessionManager {
         return SessionState(id: id, cwd: cwd)
     }
 
-    public func client(for id: SessionId) -> HermesClient? {
+    public func client(for id: SessionId) -> (any ChatBackend)? {
         sessions[id]?.client
     }
 
@@ -151,25 +157,24 @@ public actor SessionManager {
         }
     }
 
-    private func bootClient() async throws -> HermesClient {
-        HermesLog.session.info("bootClient: starting transport")
-        let transport = try await transportFactory()
-        let client = HermesClient(transport: transport)
+    private func bootClient() async throws -> any ChatBackend {
+        HermesLog.session.info("bootClient: creating backend")
+        let client = try await backendFactory()
         do {
-            HermesLog.session.info("bootClient: sending ACP initialize")
-            _ = try await client.initialize(
+            HermesLog.session.info("bootClient: starting backend")
+            try await client.start(
                 clientInfo: Implementation(name: clientInfo.name, version: clientInfo.version)
             )
-            HermesLog.session.info("bootClient: ACP initialize ok")
+            HermesLog.session.info("bootClient: backend started")
             return client
         } catch {
-            HermesLog.session.error("bootClient: initialize failed: \(String(describing: error), privacy: .public)")
+            HermesLog.session.error("bootClient: start failed: \(String(describing: error), privacy: .public)")
             await client.close()
             throw error
         }
     }
 
-    private func register(client: HermesClient, sessionId: SessionId, cwd: String) {
+    private func register(client: any ChatBackend, sessionId: SessionId, cwd: String) {
         var active = ActiveSession(client: client, cwd: cwd)
         active.pumpTask = Task { [weak self] in
             await self?.pump(sessionId: sessionId, notifications: client.notifications)

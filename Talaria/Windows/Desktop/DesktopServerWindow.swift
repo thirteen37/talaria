@@ -208,7 +208,7 @@ struct DesktopServerWindow: View {
     /// In-place Hermes-profile swap. Mirrors `switchProfile`: tears the harness
     /// down (dropping open chats, consistent with a server switch) before
     /// swapping `activeHermesProfile`, which re-fires `.task` to rebuild the
-    /// whole window — dashboard, ACP chat, and admin runner — under `-p <name>`.
+    /// whole window — dashboard, chat, and admin runner — under `-p <name>`.
     private func switchHermesProfile(to name: String) {
         guard name != activeHermesProfile else { return }
         harness?.tearDown()

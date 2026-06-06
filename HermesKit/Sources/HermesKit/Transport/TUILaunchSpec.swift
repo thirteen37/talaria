@@ -1,7 +1,8 @@
 import Foundation
 
 /// Everything an embedded terminal emulator needs to spawn a Hermes TUI as a
-/// local PTY process. Unlike the ACP path (`Transport`/`Client`), a TUI
+/// local PTY process. Unlike the live gateway chat path (`GatewayChatClient`
+/// over the dashboard `/api/ws` gateway), a TUI
 /// "session" bypasses the protocol stack entirely: the app hands this spec to
 /// SwiftTerm's `LocalProcessTerminalView`, which forks the process under a PTY
 /// and renders its raw terminal output.

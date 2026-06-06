@@ -209,7 +209,7 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
         hostKeyStore: HostKeyStore,
         hostKeyConfirmer: HostKeyConfirmer? = nil,
         passphrase: String? = nil,
-        group: EventLoopGroup = NIOSSHTransport.sharedGroup
+        group: EventLoopGroup = SSHEventLoopGroup.shared
     ) {
         self.profile = profile
         self.credentialProvider = credentialProvider
@@ -285,7 +285,7 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
         let hostKeyDelegate = NIOSSHHostKeyVerifier(store: hostKeyStore, host: host, port: port, confirmUnknown: hostKeyConfirmer)
 
         let bootstrap = ClientBootstrap(group: group)
-            // Match the ACP transport's connect bound so a stalled SYN
+            // Match the dashboard connection's connect bound so a stalled SYN
             // doesn't pin the UI for ~75s on macOS's default TCP backoff.
             .connectTimeout(.seconds(15))
             // Build the (non-Sendable) `SSHClientConfiguration` and install the
@@ -309,7 +309,12 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
         do {
             return try await bootstrap.connect(host: host, port: port).get()
         } catch {
-            throw NIOSSHTransport.mapConnectError(error, host: host, port: port)
+            // Typed host-key / auth errors raised by our delegates would
+            // otherwise escape unwrapped and be reclassified as a generic
+            // `.ioFailed` by RemoteSnapshot.runFetch. Funnel them through
+            // the same translator the dashboard transport uses so both
+            // surface identical typed errors for the same conditions.
+            throw NIOSSHConnectError.map(error, host: host, port: port)
         }
     }
 
@@ -422,8 +427,8 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
 
 /// Per-fetch child-channel handler. Drives the `cat` exec, streams
 /// stdout to the file (off the event loop, so the shared single-threaded
-/// `NIOSSHTransport.sharedGroup` doesn't stall the ACP transport during
-/// multi-MB transfers), accumulates stderr, captures the exit code, and
+/// `SSHEventLoopGroup.shared` doesn't stall the live dashboard/chat channels
+/// during multi-MB transfers), accumulates stderr, captures the exit code, and
 /// fulfills `complete` on channel close.
 ///
 /// Writes are serialized through a dedicated `DispatchQueue` so out-of-
@@ -536,7 +541,7 @@ final class NIOSSHCatHandler: ChannelDuplexHandler, @unchecked Sendable {
         // caller must never see "succeeded" while bytes are still queued.
         // `writeQueue.sync` would block the SSH event loop (single-thread
         // shared ELG), freezing every other channel on it including the
-        // live ACP transport. Instead, post an `.async` to the *serial*
+        // live dashboard and chat channels. Instead, post an `.async` to the *serial*
         // write queue: it can only run after every prior write has
         // finished, then we hop back to the loop to fulfill the promise.
         //

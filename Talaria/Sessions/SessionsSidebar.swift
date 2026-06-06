@@ -101,7 +101,7 @@ struct SessionsSidebar: View {
                     .disabled(store.isOpening)
 
                     // Launch a chat as the real Hermes TUI inside an embedded
-                    // terminal instead of the native ACP view (macOS only; the
+                    // terminal instead of the native chat view (macOS only; the
                     // store injects no spec factory where unsupported).
                     if store.supportsTUI {
                         Button {
@@ -143,8 +143,8 @@ struct SessionsSidebar: View {
                         Text(rowTitle(for: session))
                             .lineLimit(1)
                         // Distinguish embedded-terminal (TUI) tabs from native
-                        // ACP chats; the status dot stays neutral for them
-                        // (there's no ACP status stream).
+                        // chat tabs; the status dot stays neutral for them
+                        // (there's no gateway status stream).
                         if session.kind == .tui {
                             Image(systemName: "terminal")
                                 .imageScale(.small)

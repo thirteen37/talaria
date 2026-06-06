@@ -4,7 +4,7 @@ This document preserves the larger product surface from the Scarf parity researc
 
 ## MVP Boundary
 
-Talaria v1 is a native macOS front-end for Hermes using ACP for live chat and `hermes dashboard` for sessions, logs, skills, cron jobs, and updates. A small set of operations remain on CLI fallbacks until Hermes exposes dashboard routes for them: session rename, tools enable/disable, doctor reports, and gateway lifecycle. Local subprocess and SSH-backed servers are both in scope. Anything below marked "Deferred" is intentionally out of v1 unless it becomes necessary to make the MVP coherent.
+Talaria v1 is a native macOS front-end for Hermes using the dashboard `/api/ws` gateway for live chat and `hermes dashboard` for sessions, logs, skills, cron jobs, and updates. A small set of operations remain on CLI fallbacks until Hermes exposes dashboard routes for them: session rename, tools enable/disable, doctor reports, and gateway lifecycle. Local subprocess and SSH-backed servers are both in scope. Anything below marked "Deferred" is intentionally out of v1 unless it becomes necessary to make the MVP coherent.
 
 ## Shipped Since The MVP Boundary
 
@@ -68,7 +68,7 @@ historical one:
 ## Deferred Packaging And Distribution
 
 - Mac App Store distribution.
-- iOS companion app. ACP has a pure-Swift transport seam, but dashboard mode still needs NIO-backed port forwarding, Keychain-backed identity, and an iOS UI target.
+- iOS companion app. The pure-Swift NIO-SSH transport seam carries both the dashboard HTTP and the live-chat `/api/ws` gateway over `direct-tcpip`; a full companion app still needs Keychain-backed identity and broader iOS UI parity.
 - Relay transport for sshd-less environments (containers without sshd). Plain iOS no longer needs a relay.
 - Import/export tooling for full application state.
 

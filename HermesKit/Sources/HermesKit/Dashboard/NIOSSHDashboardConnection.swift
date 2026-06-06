@@ -54,7 +54,7 @@ public final class NIOSSHDashboardConnection: @unchecked Sendable {
         hostKeyStore: HostKeyStore,
         hostKeyConfirmer: HostKeyConfirmer? = nil,
         requestTimeout: TimeAmount = .seconds(30),
-        group: EventLoopGroup = NIOSSHTransport.sharedGroup
+        group: EventLoopGroup = SSHEventLoopGroup.shared
     ) {
         self.profile = profile
         self.credentialProvider = credentialProvider
@@ -216,6 +216,40 @@ public final class NIOSSHDashboardConnection: @unchecked Sendable {
             _ = try? await child.close(mode: .all).get()
             throw error
         }
+    }
+
+    /// Opens a **persistent** `direct-tcpip` channel to `127.0.0.1:<targetPort>`
+    /// and runs `configure` to install the caller's handlers. Unlike
+    /// ``httpRequest(_:targetPort:)``, the channel is *not* auto-closed after one
+    /// round trip — the caller owns its lifetime. Used for the long-lived
+    /// `/api/ws` gateway WebSocket tunnel (``NIOSSHGatewayWebSocket``).
+    public func openDirectTCPIPChannel(
+        targetPort: Int,
+        configure: @escaping @Sendable (Channel) -> EventLoopFuture<Void>
+    ) async throws -> Channel {
+        guard let connection = currentConnection() else {
+            throw SSHTransportError.other("dashboard SSH connection is not open")
+        }
+        let childPromise = connection.eventLoop.makePromise(of: Channel.self)
+        // Same event-loop hop rationale as `httpRequest`: `createChannel` opens
+        // the child synchronously when the connection is live, and that path
+        // asserts it runs on the connection's loop.
+        connection.eventLoop.execute {
+            do {
+                let direct = SSHChannelType.DirectTCPIP(
+                    targetHost: "127.0.0.1",
+                    targetPort: targetPort,
+                    originatorAddress: try SocketAddress(ipAddress: "127.0.0.1", port: 0)
+                )
+                let sshHandler = try connection.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
+                sshHandler.createChannel(childPromise, channelType: .directTCPIP(direct)) { child, _ in
+                    configure(child)
+                }
+            } catch {
+                childPromise.fail(error)
+            }
+        }
+        return try await childPromise.futureResult.get()
     }
 
     // MARK: - Locked channel state

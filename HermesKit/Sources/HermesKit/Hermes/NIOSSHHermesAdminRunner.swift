@@ -20,7 +20,7 @@ public struct NIOSSHHermesAdminRunner: HermesAdminRunning {
         hostKeyStore: HostKeyStore,
         hostKeyConfirmer: HostKeyConfirmer? = nil,
         passphrase: String? = nil,
-        group: EventLoopGroup = NIOSSHTransport.sharedGroup,
+        group: EventLoopGroup = SSHEventLoopGroup.shared,
         timeout: TimeAmount = .seconds(30)
     ) {
         self.profile = profile

@@ -6,7 +6,7 @@ import SwiftUI
 // macOS-only embedded-terminal surface for `.tui` session tabs. Renders the
 // real `hermes chat --tui` (local) or `ssh -tt … hermes chat --tui` (remote)
 // inside SwiftTerm's `LocalProcessTerminalView`, as an alternative to the
-// native ACP `ChatView`. iOS has no PTY/local-process path, so its seam returns
+// native gateway-chat `ChatView`. iOS has no PTY/local-process path, so its seam returns
 // an unavailable placeholder (never reached — TUI tabs can't be created there).
 
 /// Owns a single live Hermes TUI terminal: the SwiftTerm view plus its PTY
