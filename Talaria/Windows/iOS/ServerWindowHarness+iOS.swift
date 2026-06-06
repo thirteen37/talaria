@@ -13,7 +13,8 @@ extension ServerWindowHarness {
         profile: ServerProfile,
         hermesProfileName: String = HermesProfiles.defaultProfileName
     ) -> ServerWindowHarness {
-        let manager = SessionManager(transportFactory: { throw TransportError.unsupportedPlatform })
+        // iOS can't run local hermes; this stub never opens a real session.
+        let manager = SessionManager(backendFactory: { throw GatewayChatError.sessionNotReady })
         return ServerWindowHarness(
             store: SessionsStore(manager: manager, adminRunner: nil),
             profile: profile,
@@ -31,31 +32,11 @@ extension ServerWindowHarness {
         let confirmer: HostKeyConfirmer = { host, port, fingerprint in
             await hostKeyCoordinator.confirm(host: host, port: port, fingerprint: fingerprint)
         }
-        // The ACP backend — a HermesClient over a remote `hermes acp` — and the
-        // fallback when WS isn't used/available.
-        let acpFactory: SessionManager.ChatBackendFactory = {
-            let transport = try NIOSSHTransport(
-                profile: profile,
-                credentialProvider: credentialProvider,
-                hostKeyStore: hostKeyStore,
-                hostKeyConfirmer: confirmer,
-                hermesProfileName: hermesProfileName
-            )
-            try await transport.start()
-            return HermesClient(transport: transport)
-        }
-        // WS chat tunnels `/api/ws` over the window's live NIO-SSH dashboard
-        // connection (filled into the box by `acquireDashboard()`); gated on the
-        // flag + version, falling back to ACP otherwise.
-        let versionBox = LiveVersionBox()
+        // Live chat tunnels `/api/ws` over the window's live NIO-SSH dashboard
+        // connection (filled into the box by `acquireDashboard()`).
         let tunnelBox = GatewayChatTunnelBox()
         let manager = SessionManager(
-            backendFactory: GatewayChatBackend.makeSelectingFactory(
-                isEnabled: { preferGatewayChat() },
-                liveVersion: { versionBox.get() },
-                tunnel: { tunnelBox.get() },
-                acpFactory: acpFactory
-            )
+            backendFactory: GatewayChatBackend.makeFactory(tunnel: { tunnelBox.get() })
         )
         let snapshotTransfer = NIOSSHCatTransfer(
             profile: profile,
@@ -94,7 +75,6 @@ extension ServerWindowHarness {
             snapshotTransfer: snapshotTransfer,
             hostKeyCoordinator: hostKeyCoordinator
         )
-        harness.chatVersionBox = versionBox
         harness.chatTunnelBox = tunnelBox
         return harness
     }

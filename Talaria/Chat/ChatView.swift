@@ -40,8 +40,7 @@ struct ChatView: View {
                 turnStartDate: viewModel.turnStartDate,
                 gitBranch: viewModel.gitBranch,
                 contextUsed: viewModel.contextUsed,
-                contextSize: viewModel.contextSize,
-                backendBadge: viewModel.backendKind?.badge
+                contextSize: viewModel.contextSize
             )
 
             if viewModel.isReadOnly {
@@ -111,9 +110,6 @@ final class LocalChatViewModel {
     var turnStartDate: Date?
     var contextUsed: Int?
     var contextSize: Int?
-    /// Which transport this session is actually running on (ACP vs WS gateway),
-    /// surfaced as a small badge in the status bar for parity testing.
-    var backendKind: ChatBackendKind?
     let isReadOnly: Bool
 
     private weak var manager: SessionManager?
@@ -155,9 +151,6 @@ final class LocalChatViewModel {
         }
         statusText = "Session cwd: \(cwd)"
         loadGitBranch()
-        // The backend is booted by the time the session is registered, so this
-        // reflects the actual transport chosen (incl. any WS→ACP fallback).
-        backendKind = await manager.backendKind(for: sessionId)
 
         let stream = await manager.notifications(for: sessionId)
         notificationTask = Task { [weak self] in
@@ -470,15 +463,8 @@ final class LocalChatViewModel {
     }
 
     private func errorMessage(for error: Error) -> String {
-        if case TransportError.processDidNotStart = error {
-            return "Hermes could not be launched. Install Hermes or make sure `hermes` is on PATH."
-        }
-        if case TransportError.stdinClosed = error {
-            return "Hermes exited before accepting the request. Install Hermes or run `hermes acp` from a shell to inspect the error."
-        }
-        if case let TransportError.writeFailed(message) = error {
-            return "Hermes write failed: \(message)"
-        }
-        return error.localizedDescription
+        // GatewayChatError / GatewayWebSocketError are LocalizedError, so their
+        // descriptions surface here automatically.
+        error.localizedDescription
     }
 }

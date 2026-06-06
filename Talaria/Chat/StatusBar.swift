@@ -8,9 +8,6 @@ struct StatusBar: View {
     var gitBranch: String?
     var contextUsed: Int?
     var contextSize: Int?
-    /// "ACP" or "WS" — which live-chat transport this session uses. Hidden when
-    /// nil (read-only sessions, or before the backend has booted).
-    var backendBadge: String?
 
     @State private var now = Date()
     @State private var timer: Timer?
@@ -35,19 +32,6 @@ struct StatusBar: View {
             if let gitBranch {
                 Label(gitBranch, systemImage: "arrow.triangle.branch")
                     .foregroundStyle(.secondary)
-            }
-
-            if let backendBadge {
-                Text(backendBadge)
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(.quaternary, in: Capsule())
-                    .foregroundStyle(.secondary)
-                    .help(backendBadge == "WS"
-                        ? "Live chat is running over the dashboard /api/ws gateway"
-                        : "Live chat is running over the ACP subprocess")
-                    .accessibilityLabel("Chat backend \(backendBadge)")
             }
         }
         .font(.footnote)

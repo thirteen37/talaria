@@ -69,34 +69,4 @@ enum GatewayChatBackend {
         }
     }
 
-    /// Builds a backend factory that picks the WS gateway when the user opted in
-    /// (`isEnabled`) **and** the connected Hermes advertises `/api/ws`
-    /// (`HermesCapability.gatewayChat`), otherwise builds the ACP backend.
-    /// The decision is made per session at open time (reading `liveVersion`), so
-    /// flipping the flag against an older Hermes — or before the version is known
-    /// — safely stays on ACP. A WS open that fails also falls back to ACP, so a
-    /// dashboard hiccup never blocks chat.
-    static func makeSelectingFactory(
-        profile: ServerProfile,
-        hermesProfileName: String,
-        isEnabled: @escaping @Sendable () -> Bool,
-        liveVersion: @escaping @Sendable () -> HermesVersion?,
-        capabilities: CapabilityTable = CapabilityTable(),
-        acpFactory: @escaping SessionManager.ChatBackendFactory
-    ) -> SessionManager.ChatBackendFactory {
-        let wsFactory = makeFactory(profile: profile, hermesProfileName: hermesProfileName)
-        return {
-            let supported = liveVersion().map { capabilities.has(.gatewayChat, in: $0) } ?? false
-            guard isEnabled(), supported else {
-                return try await acpFactory()
-            }
-            do {
-                return try await wsFactory()
-            } catch {
-                // WS couldn't open (dashboard unreachable, etc.) — fall back so
-                // chat still works on the ACP path.
-                return try await acpFactory()
-            }
-        }
-    }
 }

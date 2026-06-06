@@ -54,7 +54,7 @@ public final class NIOSSHDashboardConnection: @unchecked Sendable {
         hostKeyStore: HostKeyStore,
         hostKeyConfirmer: HostKeyConfirmer? = nil,
         requestTimeout: TimeAmount = .seconds(30),
-        group: EventLoopGroup = NIOSSHTransport.sharedGroup
+        group: EventLoopGroup = SSHEventLoopGroup.shared
     ) {
         self.profile = profile
         self.credentialProvider = credentialProvider

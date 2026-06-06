@@ -85,7 +85,7 @@ enum NIOSSHConnectionFactory {
         do {
             return try await bootstrap.connect(host: host, port: port).get()
         } catch {
-            throw NIOSSHTransport.mapConnectError(error, host: host, port: port)
+            throw NIOSSHConnectError.map(error, host: host, port: port)
         }
     }
 }
@@ -107,7 +107,7 @@ public struct NIOSSHCommandRunner: RemoteCommandRunning {
         hostKeyStore: HostKeyStore,
         hostKeyConfirmer: HostKeyConfirmer? = nil,
         passphrase: String? = nil,
-        group: EventLoopGroup = NIOSSHTransport.sharedGroup
+        group: EventLoopGroup = SSHEventLoopGroup.shared
     ) {
         self.profile = profile
         self.credentialProvider = credentialProvider

@@ -71,12 +71,6 @@ final class ServerWindowHarness {
     /// for capability gating — see ``effectiveHermesVersion``.
     var liveHermesVersion: HermesVersion?
 
-    /// Shared with the chat backend factory so it can gate WS-vs-ACP selection on
-    /// the live version at session-open time (the factory is built before the
-    /// dashboard — and thus the version — is known). `refreshLiveVersion()` pushes
-    /// the resolved version here. nil on windows that don't use gateway chat.
-    var chatVersionBox: LiveVersionBox?
-
     /// iOS only: the live NIO-SSH dashboard tunnel the gateway chat factory rides
     /// for `/api/ws` (iOS has no loopback socket). Filled by `acquireDashboard()`
     /// once the dashboard connects; nil on macOS (which uses `DashboardCoordinator`)
@@ -112,7 +106,7 @@ final class ServerWindowHarness {
     /// Builds a harness backed by an in-process ``MockACPTransport`` for UI
     /// tests — no SSH, no admin runner, no snapshot.
     static func makeMock() -> ServerWindowHarness {
-        let manager = SessionManager { MockACPTransport() }
+        let manager = SessionManager(backendFactory: { MockChatBackend() })
         let store = SessionsStore(manager: manager, adminRunner: nil)
         let profile = ServerProfile(name: "Mock Server", kind: .ssh, host: "mock.local")
         return ServerWindowHarness(store: store, profile: profile)
@@ -157,30 +151,6 @@ final class ServerWindowHarness {
     /// release and delete system-ssh one release after that.
     static let useNIOSSHTransportDefaultsKey = "HermesKit.useNIOSSHTransport"
 
-    /// Opt-in: drive live chat over the dashboard `/api/ws` JSON-RPC gateway
-    /// (the same path Hermes Desktop uses) instead of spawning a separate
-    /// `hermes acp` subprocess. Default off while the WebSocket path reaches
-    /// parity; gated additionally on the connected Hermes version
-    /// (`HermesCapability.gatewayChat`). macOS only for now — the iOS NIO-SSH
-    /// path needs `NIOSSHGatewayWebSocket` (Phase 3). See `docs/gateway-chat.md`.
-    ///
-    /// `nonisolated` so the per-session backend factory (`@Sendable`) and
-    /// `preferGatewayChat()` can read it off the main actor.
-    nonisolated static let useGatewayChatDefaultsKey = "HermesKit.useGatewayChat"
-
-    /// User opt-in for driving live chat over the dashboard `/api/ws` gateway
-    /// instead of the ACP subprocess (the `useGatewayChat` default, toggled in
-    /// Settings → Developer). The actual per-session choice also requires the
-    /// connected Hermes to advertise `HermesCapability.gatewayChat` — the
-    /// platform `GatewayChatBackend.makeSelectingFactory` falls back to ACP
-    /// otherwise — so flipping this against an older server is safe.
-    ///
-    /// `nonisolated` so the per-session backend factory (a `@Sendable` closure)
-    /// can read it; it only touches `UserDefaults`, which is thread-safe.
-    nonisolated static func preferGatewayChat() -> Bool {
-        UserDefaults.standard.bool(forKey: useGatewayChatDefaultsKey)
-    }
-
     /// Forces a fresh dashboard connection from *any* state — the manual
     /// reconnect. It covers both the first-connect retry (a brand-new host not
     /// yet trusted when the harness booted fails the one-shot `startDashboard`
@@ -224,8 +194,6 @@ final class ServerWindowHarness {
         guard let dashboardClient else { return }
         if let status = try? await dashboardClient.getStatus() {
             liveHermesVersion = HermesVersion(status.version)
-            // Let the chat backend factory see the version for WS-vs-ACP gating.
-            chatVersionBox?.set(liveHermesVersion)
         }
     }
 

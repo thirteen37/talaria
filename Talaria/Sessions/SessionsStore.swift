@@ -240,9 +240,9 @@ final class SessionsStore {
                     if await isPaused() { continue }
                     remaining -= tick
                 }
-                throw TransportError.processDidNotStart(
+                throw GatewayChatError.server(
                     "Connected, but the server didn't complete the Hermes handshake within \(Int(seconds))s. "
-                    + "Check that `hermes acp` runs on the server for this profile's shell."
+                    + "Check that the dashboard is reachable for this profile."
                 )
             }
             defer { group.cancelAll() }

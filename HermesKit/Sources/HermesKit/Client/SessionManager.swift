@@ -6,11 +6,10 @@ public enum SessionManagerError: Error, Equatable, Sendable {
 }
 
 public actor SessionManager {
-    public typealias TransportFactory = @Sendable () async throws -> any Transport
-    /// Produces a fresh, un-started ``ChatBackend`` per session. `SessionManager`
-    /// calls ``ChatBackend/start(clientInfo:)`` on it before creating/loading a
-    /// session. ACP wraps a ``Transport`` into a ``HermesClient``; the WebSocket
-    /// path returns a ``GatewayChatClient``.
+    /// Produces a fresh, un-started ``ChatBackend`` per session (a
+    /// ``GatewayChatClient`` over the dashboard `/api/ws` gateway).
+    /// `SessionManager` calls ``ChatBackend/start(clientInfo:)`` on it before
+    /// creating/loading a session.
     public typealias ChatBackendFactory = @Sendable () async throws -> any ChatBackend
 
     public struct ClientInfo: Sendable {
@@ -55,18 +54,8 @@ public actor SessionManager {
     private let clientInfo: ClientInfo
     private var sessions: [SessionId: ActiveSession] = [:]
 
-    /// ACP backend: each session boots a ``HermesClient`` over a fresh
-    /// ``Transport`` from `transportFactory`.
-    public init(
-        clientInfo: ClientInfo = ClientInfo(),
-        transportFactory: @escaping TransportFactory
-    ) {
-        self.clientInfo = clientInfo
-        self.backendFactory = { HermesClient(transport: try await transportFactory()) }
-    }
-
-    /// Generic backend: each session boots whatever ``ChatBackend`` the factory
-    /// returns (e.g. a ``GatewayChatClient`` over a ``GatewayWebSocket``).
+    /// Each session boots whatever ``ChatBackend`` the factory returns (a
+    /// ``GatewayChatClient`` over a ``GatewayWebSocket``).
     public init(
         clientInfo: ClientInfo = ClientInfo(),
         backendFactory: @escaping ChatBackendFactory
@@ -126,13 +115,6 @@ public actor SessionManager {
 
     public func client(for id: SessionId) -> (any ChatBackend)? {
         sessions[id]?.client
-    }
-
-    /// Which concrete backend a live session is using — for the chat UI's
-    /// "ACP / WS" indicator and parity testing. `nil` if the session isn't open.
-    public func backendKind(for id: SessionId) -> ChatBackendKind? {
-        guard let client = sessions[id]?.client else { return nil }
-        return client is GatewayChatClient ? .gateway : .acp
     }
 
     public func cwd(for id: SessionId) -> String? {

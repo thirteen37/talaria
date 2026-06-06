@@ -201,42 +201,28 @@ Talaria does not implement voice in v1.
   `voice.transcript` / `voice.status` events (`server.py:7469`) when the server-side mic loop is
   active, which Talaria would consume if/when voice ships.
 
-## Implementation status
+## Implementation status — WebSocket is the only chat path
 
-- **HermesKit core (Phase 2):** `ChatBackend` seam, `GatewayChatClient` (event→`HermesNotification`
-  mapping, turn lifecycle, approval round-trip), `GatewayWebSocket` + `URLSessionGatewayWebSocket`,
-  `SessionManager` backend factory, `HermesCapability.gatewayChat` gate. Unit-tested.
-- **macOS wiring (Phase 2):** `GatewayChatBackend` builds a WS backend on the window's shared,
-  refcounted dashboard; `ServerWindowHarness.makeLocal`/`makeRemote` select WS vs ACP behind the
-  default-off `useGatewayChat` flag (remote: system-ssh `-L` path only — NIO stays ACP).
-- **iOS transport (Phase 3):** `NIOSSHGatewayWebSocket` runs the RFC 6455 handshake
-  (`GatewayWebSocketHandshake`, unit-tested incl. the RFC 6455 accept vector) + swift-nio frame
-  codecs over a persistent `direct-tcpip` channel (`NIOSSHDashboardConnection.openDirectTCPIPChannel`).
-  Compile-verified on iOS.
+Live chat is WebSocket-only; the ACP subprocess + byte-`Transport` stack has been removed
+(`HermesClient`, `LocalProcessTransport`, `SSHTransport`, `NIOSSHTransport`, the `Transport` protocol,
+the `useGatewayChat` flag, the version gate, and the ACP/WS badge are all gone).
 
-## Selection, gating & visibility
-
-- **Opt-in flag:** `useGatewayChat` (UserDefaults `HermesKit.useGatewayChat`), toggled in
-  **Settings → Developer**. Default off.
-- **Version gate + fallback:** the per-session backend factory
-  (`GatewayChatBackend.makeSelectingFactory`, macOS + iOS) uses WS only when the flag is on **and**
-  the connected Hermes advertises `HermesCapability.gatewayChat` (read at open time via
-  `LiveVersionBox`, filled by the harness from `/api/status`). Any WS open failure also falls back to
-  ACP, so flipping the flag never breaks chat.
-- **Indicator:** the chat status bar shows an **ACP** / **WS** badge for the active session
-  (`SessionManager.backendKind(for:)` → the concrete client type).
+- **HermesKit:** `GatewayChatClient` (event→`HermesNotification` mapping, turn lifecycle, approval
+  round-trip) is the sole chat client, behind the thin `ChatBackend` seam (kept only as the test/mock
+  point). `GatewayWebSocket` + `URLSessionGatewayWebSocket` (macOS) / `NIOSSHGatewayWebSocket` (iOS,
+  RFC 6455 via `GatewayWebSocketHandshake` + swift-nio frame codecs over a persistent `direct-tcpip`
+  channel). `SessionManager` boots one `GatewayChatClient` per session.
+- **macOS:** `GatewayChatBackend.makeFactory` opens the socket on the window's shared, refcounted
+  `hermes dashboard` (local + `ssh -L` remote both expose a loopback socket).
 - **iOS:** chat tunnels `/api/ws` over the window's live NIO-SSH dashboard connection
-  (`NIOSSHGatewayWebSocket` over the `GatewayChatTunnel` the harness fills in `acquireDashboard()`);
-  the NIO ACP transport is the fallback.
+  (`NIOSSHGatewayWebSocket` over the `GatewayChatTunnel` the harness fills in `acquireDashboard()`).
+  There is no fallback — a session opened before the dashboard is up errors and the user retries.
+
+Verified by unit tests (`GatewayChatClientTests`, `GatewayWebSocketHandshakeTests`, `SessionManagerTests`)
++ macOS/iOS app builds. The end-to-end SSH tunnel (iOS) still needs live on-device verification.
 
 ## Remaining work
 
-- **Live end-to-end parity (all paths):** run one chat turn (prompt → thinking → tool calls w/ diff →
-  result → completion), an approval, and a cancel against a running `hermes dashboard`; compare WS vs
-  ACP rendering, over loopback (macOS local), `ssh -L` (macOS remote), and NIO-SSH (iOS). Confirm the
-  dashboard child stays single (refcount) and no `hermes acp` spawns on the WS path.
-- **Phase 4 (remove ACP):** only after parity is green on all three paths. Not yet done.
 - **Text-input prompts:** free-text `clarify` / `sudo` / `secret` map to the option-only permission
   UI today (approval is full parity); a secure text-input affordance is needed for full capture.
-- **Socket multiplexing / `status.update` / `tool.generating` / subagent sidebar:** post-parity
-  enhancements, out of scope for v1.
+- **Socket multiplexing / `status.update` / `tool.generating` / subagent sidebar:** later enhancements.

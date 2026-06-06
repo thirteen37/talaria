@@ -139,7 +139,7 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
         hostKeyStore: HostKeyStore,
         hostKeyConfirmer: HostKeyConfirmer? = nil,
         passphrase: String? = nil,
-        group: EventLoopGroup = NIOSSHTransport.sharedGroup
+        group: EventLoopGroup = SSHEventLoopGroup.shared
     ) {
         self.profile = profile
         self.credentialProvider = credentialProvider
@@ -195,7 +195,7 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
             // `.ioFailed` by RemoteSnapshot.runFetch. Funnel them through
             // the same translator the ACP transport uses so both transports
             // surface identical typed errors for the same conditions.
-            throw NIOSSHTransport.mapConnectError(error, host: host, port: port)
+            throw NIOSSHConnectError.map(error, host: host, port: port)
         }
         // No `defer { connection.close().wait() }` — calling
         // EventLoopFuture.wait() from an async function blocks a

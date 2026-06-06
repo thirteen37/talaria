@@ -61,7 +61,7 @@ struct SessionsStoreTUITitleTests {
 
     private func makeStore(http: StubSessionsHTTP) -> SessionsStore {
         SessionsStore(
-            manager: SessionManager(transportFactory: { LoopbackTransport() }),
+            manager: SessionManager(backendFactory: { MockChatBackend() }),
             dashboardClient: DashboardClient(
                 baseURL: URL(string: "http://127.0.0.1:9119")!,
                 token: { "tok" },
@@ -133,25 +133,3 @@ private final class StubSessionsHTTP: DashboardHTTP, @unchecked Sendable {
     }
 }
 
-/// Minimal in-memory ACP transport so `SessionManager` construction is satisfied;
-/// the TUI path never drives it.
-private actor LoopbackTransport: Transport {
-    nonisolated let inbound: AsyncThrowingStream<Data, Error>
-    private nonisolated let continuation: AsyncThrowingStream<Data, Error>.Continuation
-    private var closed = false
-
-    init() {
-        var captured: AsyncThrowingStream<Data, Error>.Continuation?
-        self.inbound = AsyncThrowingStream { captured = $0 }
-        self.continuation = captured!
-    }
-
-    func send(_ data: Data) async throws {
-        guard !closed else { throw TransportError.stdinClosed }
-    }
-
-    func close() async {
-        closed = true
-        continuation.finish()
-    }
-}

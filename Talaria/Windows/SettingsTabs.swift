@@ -23,8 +23,6 @@ struct SettingsTabs: View {
                 .tabItem { Label("Sidebar Order", systemImage: "sidebar.left") }
             notificationsTab
                 .tabItem { Label("Notifications", systemImage: "bell") }
-            developerTab
-                .tabItem { Label("Developer", systemImage: "hammer") }
         }
     }
 
@@ -66,16 +64,6 @@ struct SettingsTabs: View {
         #endif
     }
 
-    @ViewBuilder
-    private var developerTab: some View {
-        #if os(iOS)
-        DeveloperSettingsView(onDismiss: onDismiss)
-        #else
-        DeveloperSettingsView(onDismiss: onDismiss)
-            .settingsTabFrame()
-            .navigationTitle("Settings")
-        #endif
-    }
 }
 
 private extension View {
