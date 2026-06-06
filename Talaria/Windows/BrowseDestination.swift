@@ -25,7 +25,7 @@ enum BrowseDestination: String, Hashable {
         case .gateway: return "Gateway & Messaging"
         case .hermesProfiles: return "Profiles"
         case .profiles: return "Config & Env"
-        case .personalities: return "Soul & Personalities"
+        case .personalities: return "Soul, Personalities & Memory"
         case .models: return "Models"
         case .system: return "System"
         }

@@ -78,7 +78,8 @@ window consumers, and tears the child down when the last consumer releases it.
 | Profiles | `GET` / `POST` on `/api/profiles`, `PATCH` / `DELETE` on `/api/profiles/{name}` |
 | Config editor | `GET /api/config/schema`, `GET /api/config`, `PUT /api/config` |
 | Soul & Personalities editor | Base `SOUL.md` via `GET`/`PUT /api/profiles/{profile}/soul` (profile-scoped; no top-level `/api/soul`); `agent.personalities` overlays via the config editor (`GET`/`PUT /api/config`) — both in one integrated split view |
-| Environment (.env) | `GET /api/env`, `PUT /api/env`, `DELETE /api/env`, `POST /api/env/reveal` |
+| Environment (.env) | `GET /api/env`, `PUT /api/env`, `DELETE /api/env`, `POST /api/env/reveal` (custom-var enumeration is a direct `.env` read — see **Direct File I/O**) |
+| Memory (provider status) | `GET /api/memory` — read-only active provider + sizes only. The `MEMORY.md` / `USER.md` **text** has no route; it is edited direct-disk (see **Direct File I/O**). The provider picker uses `PUT /api/memory/provider` (Plugins). |
 | MCP servers | `GET`/`POST /api/mcp/servers`, `POST /api/mcp/servers/{name}/test`, `PUT /api/mcp/servers/{name}/enabled`, `DELETE /api/mcp/servers/{name}`, `GET /api/mcp/catalog`, `POST /api/mcp/catalog/install` (gated on `requiresMCPAPI` ≥ `0.15.1`) |
 
 The default server window shares one dashboard per `ServerProfile`. Profile
@@ -109,6 +110,22 @@ the matching `-p <name>` context for fallback commands.
 Updates intentionally use the CLI path rather than the dashboard update action:
 `GET /api/status` reports only the installed version and release date, while
 `hermes update --check` can report source installs that are behind `origin/main`.
+
+## Direct File I/O
+
+A few surfaces touch Hermes files directly because no dashboard route exists for
+the data they need. All such access goes through the unified `HermesFileStore`
+(local `FileManager` for `.local` profiles; the SSH `RemoteSnapshotTransfer` —
+NIO `cat`, or system-`sftp` on macOS — for `.ssh`), resolving the same
+home-relative paths as the snapshot reader.
+
+| Surface | Direction | File(s) | Notes |
+| --- | --- | --- | --- |
+| Environment custom-var list | read | `.env` (path from `hermes config env-path`) | Enumerates user-named keys `GET /api/env` omits; redacted preview only. Mutations stay on the dashboard. |
+| Memory editor | read **and write** | `memories/MEMORY.md`, `memories/USER.md` (`profiles/<name>/…` for a named profile) | The one direct-**write** exception and the first non-dashboard remote write. Remote writes stream to a temp + atomic rename, reusing the read path's SSH auth + TOFU host-key trust (no new trust surface). `HermesMemoryStore` wraps `HermesFileStore`. The agent co-owns these files, so the editor re-reads before writing and confirms before overwriting an out-of-band change. |
+
+These are the only direct-file paths; Talaria still never touches Hermes SQLite
+files directly.
 
 ## Terminal (TUI) Sessions
 
