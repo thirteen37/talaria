@@ -565,6 +565,120 @@ struct ModelsHarnessEndpointTests {
         #expect(!http.recordedRequests.contains { $0.httpMethod == "DELETE" && $0.url?.path == "/api/env" })
     }
 
+    // MARK: - Auxiliary base_url cleanup
+
+    @Test
+    func changingAuxiliaryProviderClearsStaleBaseURL() async throws {
+        // The set route writes only provider/model, so a base_url left from an
+        // earlier `hermes model` run would linger and silently override the new
+        // provider's endpoint. The harness follows the set with a config edit
+        // that drops it — touching only the changed slot.
+        let http = StatusStubHTTP(responses: [
+            .init(path: "/api/model/set", body: Data(#"{"ok":true}"#.utf8)),               // POST set
+            .init(path: "/api/config", body: Data(#"""
+            {"auxiliary":{"title_generation":{"provider":"binky-litellm","model":"fast","base_url":"http://grendahl.local:49437/v1"},"vision":{"provider":"x","model":"y","base_url":"http://keep/v1"}}}
+            """#.utf8)),                                                                    // GET (clear)
+            .init(path: "/api/config", body: Data(#"{"ok":true}"#.utf8)),                   // PUT (clear)
+            .init(path: "/api/model/options", body: Data(#"{"providers":[]}"#.utf8)),
+            .init(path: "/api/model/auxiliary", body: Data(#"{"tasks":[],"main":{}}"#.utf8)),
+            .init(path: "/api/config", body: Data("{}".utf8)),                             // refresh GET
+        ])
+        let harness = ModelsHarness(client: makeClient(http))
+        harness.beginPick(.auxiliary(task: "title_generation"))
+
+        await harness.selectModel(provider: "binky-litellm", model: "fast")
+
+        let put = try #require(http.recordedRequests.first {
+            $0.httpMethod == "PUT" && $0.url?.path == "/api/config"
+        })
+        let body = try #require(put.httpBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let aux = try #require((json["config"] as? [String: Any])?["auxiliary"] as? [String: Any])
+        let title = try #require(aux["title_generation"] as? [String: Any])
+        #expect(title["base_url"] == nil)                          // cleared
+        #expect(title["provider"] as? String == "binky-litellm")   // provider/model survive
+        #expect(title["model"] as? String == "fast")
+        // Sibling slot's base_url untouched — only the changed slot is cleared.
+        let vision = try #require(aux["vision"] as? [String: Any])
+        #expect(vision["base_url"] as? String == "http://keep/v1")
+        #expect(harness.lastError == nil)
+    }
+
+    @Test
+    func changingAuxiliaryProviderSkipsConfigWriteWhenNoStaleBaseURL() async throws {
+        // Nothing to clear ⇒ no needless PUT (the clear transform returns an
+        // equal value and the harness compares before writing).
+        let http = StatusStubHTTP(responses: [
+            .init(path: "/api/model/set", body: Data(#"{"ok":true}"#.utf8)),
+            .init(path: "/api/config", body: Data(#"""
+            {"auxiliary":{"title_generation":{"provider":"binky-litellm","model":"fast"}}}
+            """#.utf8)),                                                                    // GET (clear) — no base_url
+            .init(path: "/api/model/options", body: Data(#"{"providers":[]}"#.utf8)),
+            .init(path: "/api/model/auxiliary", body: Data(#"{"tasks":[],"main":{}}"#.utf8)),
+            .init(path: "/api/config", body: Data("{}".utf8)),                             // refresh GET
+        ])
+        let harness = ModelsHarness(client: makeClient(http))
+        harness.beginPick(.auxiliary(task: "title_generation"))
+
+        await harness.selectModel(provider: "binky-litellm", model: "fast")
+
+        #expect(harness.lastError == nil)
+        #expect(!http.recordedRequests.contains {
+            $0.httpMethod == "PUT" && $0.url?.path == "/api/config"
+        })
+    }
+
+    @Test
+    func changingMainModelDoesNotEditConfig() async throws {
+        // The main model lives elsewhere; its change must never trigger an
+        // auxiliary base_url config edit.
+        let http = StatusStubHTTP(responses: [
+            .init(path: "/api/model/set", body: Data(#"{"ok":true}"#.utf8)),
+            .init(path: "/api/model/options", body: Data(#"{"providers":[]}"#.utf8)),
+            .init(path: "/api/model/auxiliary", body: Data(#"{"tasks":[],"main":{}}"#.utf8)),
+            .init(path: "/api/config", body: Data("{}".utf8)),                             // refresh GET only
+        ])
+        let harness = ModelsHarness(client: makeClient(http))
+        harness.beginPick(.main)
+
+        await harness.selectModel(provider: "openrouter", model: "anthropic/claude-opus-4.7")
+
+        #expect(harness.lastError == nil)
+        #expect(!http.recordedRequests.contains {
+            $0.httpMethod == "PUT" && $0.url?.path == "/api/config"
+        })
+    }
+
+    @Test
+    func resettingAllAuxiliaryClearsEveryStaleBaseURL() async throws {
+        let http = StatusStubHTTP(responses: [
+            .init(path: "/api/model/set", body: Data(#"{"ok":true}"#.utf8)),               // POST __reset__
+            .init(path: "/api/config", body: Data(#"""
+            {"auxiliary":{"title_generation":{"provider":"auto","model":"","base_url":"http://grendahl.local:49437/v1"},"vision":{"provider":"auto","model":"","base_url":"http://x/v1"}},"other":{"k":"v"}}
+            """#.utf8)),                                                                    // GET (clear)
+            .init(path: "/api/config", body: Data(#"{"ok":true}"#.utf8)),                   // PUT (clear)
+            .init(path: "/api/model/options", body: Data(#"{"providers":[]}"#.utf8)),
+            .init(path: "/api/model/auxiliary", body: Data(#"{"tasks":[],"main":{}}"#.utf8)),
+            .init(path: "/api/config", body: Data("{}".utf8)),                             // refresh GET
+        ])
+        let harness = ModelsHarness(client: makeClient(http))
+
+        await harness.resetAllAuxiliary()
+
+        let put = try #require(http.recordedRequests.first {
+            $0.httpMethod == "PUT" && $0.url?.path == "/api/config"
+        })
+        let body = try #require(put.httpBody)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        let config = try #require(json["config"] as? [String: Any])
+        let aux = try #require(config["auxiliary"] as? [String: Any])
+        #expect((aux["title_generation"] as? [String: Any])?["base_url"] == nil)
+        #expect((aux["vision"] as? [String: Any])?["base_url"] == nil)
+        // Unrelated top-level key preserved.
+        #expect((config["other"] as? [String: Any])?["k"] as? String == "v")
+        #expect(harness.lastError == nil)
+    }
+
     private func makeClient(_ http: StatusStubHTTP) -> DashboardClient {
         DashboardClient(
             baseURL: URL(string: "http://127.0.0.1:9119")!,

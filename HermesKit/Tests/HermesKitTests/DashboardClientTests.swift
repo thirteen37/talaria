@@ -306,6 +306,13 @@ struct DashboardClientTests {
         let compression = try #require(assignments.tasks.first { $0.task == "compression" })
         // provider:"auto" + empty model ⇒ inherits the main model.
         #expect(compression.isAuto == true)
+        // `base_url` round-trips through decoding for fidelity to the API
+        // contract — NOT for display. The UI deliberately ignores it (it's a
+        // decoupled, often-stale per-slot override, not the provider's endpoint;
+        // see `AuxiliaryModelDisplay` / `AuxiliaryModelConfig`).
+        let title = try #require(assignments.tasks.first { $0.task == "title_generation" })
+        #expect(title.isAuto == false)
+        #expect(title.baseURL == "http://grendahl.local:49437/v1")
     }
 
     @Test
