@@ -115,17 +115,25 @@ func platformTUIDetail(tabId: SessionId, spec: TUILaunchSpec?) -> some View {
 }
 
 /// Two-pane split for desktop surfaces. macOS uses a resizable `HSplitView`.
+///
+/// `showsSecondary` is a `Binding` purely so the iOS half can clear the call
+/// site's selection when the pushed iPhone detail is popped (see the iOS seam).
+/// macOS only ever *reads* it — there's no pop to write back — so the setter is
+/// never invoked here. `secondaryTitle` is likewise iPhone-only (the pushed
+/// page's title) and ignored on macOS, but kept in the signature so the shared
+/// call sites compile against both halves.
 struct PlatformSplit<Primary: View, Secondary: View>: View {
-    var showsSecondary: Bool = true
+    @Binding var showsSecondary: Bool
     @ViewBuilder var primary: () -> Primary
     @ViewBuilder var secondary: () -> Secondary
 
     init(
-        showsSecondary: Bool = true,
+        showsSecondary: Binding<Bool> = .constant(true),
+        secondaryTitle: String? = nil,
         @ViewBuilder primary: @escaping () -> Primary,
         @ViewBuilder secondary: @escaping () -> Secondary
     ) {
-        self.showsSecondary = showsSecondary
+        self._showsSecondary = showsSecondary
         self.primary = primary
         self.secondary = secondary
     }

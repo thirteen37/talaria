@@ -45,6 +45,14 @@ final class CronHarness {
 
     func cancelAdd() { draft = nil }
 
+    /// Clears both state vars that open the secondary pane (the add draft and the
+    /// selected job) — used by the iPhone push to deselect the table when the
+    /// pushed editor page is popped via Back.
+    func closeSecondary() {
+        draft = nil
+        selectionID = nil
+    }
+
     func commitAdd(prompt: String, schedule: String, name: String) async {
         do {
             _ = try await client.createCronJob(
@@ -152,9 +160,15 @@ struct CronView: View {
         // Reachable only from the desktop window's Browse sidebar (macOS +
         // iPad); the iPhone shell has no Browse. `PlatformSplit` is a resizable
         // `HSplitView` on macOS, an `HStack`+`Divider` on iPad — no `#if`.
-        PlatformSplit(showsSecondary: harness.draft != nil || harness.selectedJob != nil) {
+        PlatformSplit(
+            showsSecondary: Binding(
+                get: { harness.draft != nil || harness.selectedJob != nil },
+                set: { if !$0 { harness.closeSecondary() } }
+            ),
+            secondaryTitle: editorTitle(harness)
+        ) {
             jobsTable(harness: harness)
-                .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 360, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             editorPane(harness: harness)
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
@@ -236,6 +250,14 @@ struct CronView: View {
             .disabled(harness.selectionID == nil)
             .help("Run the selected cron job now")
         }
+    }
+
+    /// Title for the pushed iPhone editor page — "New cron job" for an add draft,
+    /// or the selected job's name. nil when neither opens it (the pane is hidden).
+    private func editorTitle(_ harness: CronHarness) -> String? {
+        if harness.draft != nil { return "New cron job" }
+        if let job = harness.selectedJob { return job.name ?? job.id }
+        return nil
     }
 
     // Rendered only while adding a draft or with a job selected —
