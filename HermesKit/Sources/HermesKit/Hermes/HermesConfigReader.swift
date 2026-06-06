@@ -49,69 +49,25 @@ public enum HermesConfigReader {
         profileName: String,
         transfer: RemoteSnapshotTransfer? = nil
     ) async throws -> String {
-        switch profile.kind {
-        case .local:
-            return try readLocal(profile: profile, profileName: profileName)
-        case .ssh:
-            return try await readRemote(profile: profile, profileName: profileName, transfer: transfer)
+        do {
+            return try await HermesFileStore.read(
+                profile: profile,
+                location: .profileRelative(tail: configRelativePath(profileName: profileName)),
+                transfer: transfer
+            )
+        } catch let error as HermesFileStoreError {
+            throw mapError(error)
         }
     }
 
-    private static func readLocal(profile: ServerProfile, profileName: String) throws -> String {
-        // Resolve home exactly like `HermesDBConfiguration.forProfile`.
-        let home = profile.hermesHome.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
-            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-                .appendingPathComponent(".hermes", isDirectory: true)
-        let url = home.appendingPathComponent(configRelativePath(profileName: profileName))
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            throw HermesConfigReaderError.notFound(path: url.path)
-        }
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw HermesConfigReaderError.readFailed(error.localizedDescription)
-        }
-    }
-
-    private static func readRemote(
-        profile: ServerProfile,
-        profileName: String,
-        transfer: RemoteSnapshotTransfer?
-    ) async throws -> String {
-        // An injected transfer works on any platform; the SFTP-subprocess
-        // default is macOS-only (iPadOS later injects a NIO transfer).
-        let active: RemoteSnapshotTransfer
-        if let transfer {
-            active = transfer
-        } else {
-            #if os(macOS)
-            active = SFTPSubprocessTransfer(profile: profile)
-            #else
-            throw HermesConfigReaderError.unsupportedPlatform
-            #endif
-        }
-
-        let remotePath = remoteConfigPath(hermesHome: profile.hermesHome, profileName: profileName)
-        let tmpURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("talaria-config-\(UUID().uuidString).yaml")
-        defer { try? FileManager.default.removeItem(at: tmpURL) }
-
-        do {
-            try await active.fetch(remotePath: remotePath, to: tmpURL)
-        } catch let error as SSHTransportError {
-            if case let .transferFailed(message) = error,
-               message.lowercased().contains("no such file") {
-                throw HermesConfigReaderError.notFound(path: remotePath)
-            }
-            throw HermesConfigReaderError.readFailed(error.message)
-        } catch {
-            throw HermesConfigReaderError.readFailed(error.localizedDescription)
-        }
-
-        do {
-            return try String(contentsOf: tmpURL, encoding: .utf8)
-        } catch {
-            throw HermesConfigReaderError.readFailed(error.localizedDescription)
+    private static func mapError(_ error: HermesFileStoreError) -> HermesConfigReaderError {
+        switch error {
+        case .notFound(let path):
+            return .notFound(path: path)
+        case .readFailed(let detail), .writeFailed(let detail):
+            return .readFailed(detail)
+        case .transferUnavailable:
+            return .unsupportedPlatform
         }
     }
 }
