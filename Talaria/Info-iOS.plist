@@ -20,6 +20,14 @@
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
+    <!-- Export-compliance self-classification. Set false to declare that the
+         app uses only exempt encryption (standard SSH/TLS for transport, no
+         proprietary crypto), which suppresses the per-upload TestFlight
+         compliance prompt and avoids the annual self-classification filing.
+         CONFIRM this is accurate for your distribution before submitting —
+         it is a legal declaration to Apple/BIS, not a build setting. -->
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <!-- Required for SSH connections to servers on the local network
