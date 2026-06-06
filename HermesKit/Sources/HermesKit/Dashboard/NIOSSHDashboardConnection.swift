@@ -88,35 +88,26 @@ public final class NIOSSHDashboardConnection: @unchecked Sendable {
             passphrase: nil,
             group: group
         )
-        storeConnection(connection)
+        storeConnection(connection.channel)
 
         let stderrContinuation = stderrContinuation
         let exitContinuation = exitContinuation
         let exitBox = exitBox
-        // Resolve the (non-Sendable, library) `NIOSSHHandler` and open the
-        // session child channel entirely on the event loop, so it never
-        // crosses an async boundary.
-        let child = try await connection.eventLoop.flatSubmit { () -> EventLoopFuture<Channel> in
-            let childPromise = connection.eventLoop.makePromise(of: Channel.self)
-            do {
-                let sshHandler = try connection.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
-                sshHandler.createChannel(childPromise, channelType: .session) { child, _ in
-                    child.eventLoop.makeCompletedFuture {
-                        try child.pipeline.syncOperations.addHandler(
-                            DashboardExecHandler(
-                                command: command,
-                                stderr: stderrContinuation,
-                                exit: exitContinuation,
-                                exitBox: exitBox
-                            )
-                        )
-                    }
-                }
-            } catch {
-                childPromise.fail(error)
+        // Open the dashboard's session child channel, failing fast if the login
+        // was rejected rather than stalling until the server's LoginGraceTime
+        // (the iOS "connection spinner never stops" bug).
+        let child = try await NIOSSHConnectionFactory.openChannel(on: connection) { child in
+            child.eventLoop.makeCompletedFuture {
+                try child.pipeline.syncOperations.addHandler(
+                    DashboardExecHandler(
+                        command: command,
+                        stderr: stderrContinuation,
+                        exit: exitContinuation,
+                        exitBox: exitBox
+                    )
+                )
             }
-            return childPromise.futureResult
-        }.get()
+        }
         storeExecChannel(child)
     }
 

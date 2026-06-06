@@ -221,14 +221,17 @@ struct DashboardSupervisorTests {
         let gate = Gate()
         let launcher = StubLauncher()
         launcher.launchGate = { await gate.wait() }
-        let http = StubHTTP(responses: [])  // never reachable
+        let http = StubHTTP(responses: [])  // never reachable (not-listening)
         let supervisor = DashboardSupervisor(
             profile: ServerProfile(name: "L", kind: .local, hermesPath: "/bin/hermes"),
             launcher: launcher,
             http: http,
             portAllocator: { 51919 },
             reachabilityTimeout: 0.1,
-            reachabilityPollInterval: 0.02
+            reachabilityPollInterval: 0.02,
+            // Not-listening waits the build cap; keep it tiny so acquire2's own
+            // spawn fails fast with notReachable rather than holding the test.
+            buildReachabilityTimeout: 0.1
         )
 
         let acquire1 = Task { try await supervisor.acquire() }
@@ -268,7 +271,9 @@ struct DashboardSupervisorTests {
     @Test
     func acquireFailsWhenStatusNeverBecomesReachable() async throws {
         let launcher = StubLauncher()
-        // No /api/status response — every probe returns the URLError default.
+        // No /api/status response — every probe returns the URLError default
+        // (not-listening), so the supervisor waits to the build cap; keep that
+        // cap tiny here so the never-listening path fails fast in the test.
         let http = StubHTTP(responses: [])
         let supervisor = DashboardSupervisor(
             profile: ServerProfile(name: "L", kind: .local, hermesPath: "/bin/hermes"),
@@ -276,7 +281,8 @@ struct DashboardSupervisorTests {
             http: http,
             portAllocator: { 51919 },
             reachabilityTimeout: 0.1,
-            reachabilityPollInterval: 0.02
+            reachabilityPollInterval: 0.02,
+            buildReachabilityTimeout: 0.15
         )
 
         do {
@@ -307,7 +313,10 @@ struct DashboardSupervisorTests {
             http: http,
             portAllocator: { 51919 },
             reachabilityTimeout: 0.1,
-            reachabilityPollInterval: 0.02
+            reachabilityPollInterval: 0.02,
+            // Forward up but never serving = not-listening; keep the build cap
+            // tiny so the test fails fast instead of waiting the full cap.
+            buildReachabilityTimeout: 0.15
         )
 
         do {
@@ -369,9 +378,10 @@ struct DashboardSupervisorTests {
     @Test
     func webUIBuildExtendsReachabilityWindowPastBaseTimeout() async throws {
         // The dashboard announces it's compiling the web UI, then only starts
-        // serving well after the (tiny) base window. Because the build marker
-        // was seen, the supervisor keeps probing up to the build cap and the
-        // acquire succeeds instead of failing with notReachable.
+        // serving well after the (tiny) base window. The not-listening probes
+        // keep the loop alive up to the build cap, and the marker drives the
+        // banner copy — together the acquire succeeds instead of failing with
+        // notReachable.
         let launcher = StubLauncher()
         launcher.onLaunch = { process in
             process.appendStderr("Building web UI...\n")
@@ -390,16 +400,23 @@ struct DashboardSupervisorTests {
         let endpoint = try await supervisor.acquire()
         #expect(endpoint.session.tokenSnapshot() == "T")
         // Status was refused for ~0.2s — comfortably past the 0.1s base window,
-        // proving the build marker is what kept the probe loop alive.
+        // proving the not-listening behavior kept the probe loop alive past it.
         #expect(http.statusProbeCount > 10)
     }
 
     @Test
-    func withoutBuildMarkerTheBaseTimeoutStillApplies() async throws {
-        // Same slow-to-serve dashboard, but no build marker: the base window
-        // governs and the acquire fails fast rather than waiting the build cap.
+    func aliveNotListeningPastBaseWindowConnectsWithoutMarker() async throws {
+        // The real remote-build bug: a non-PTY `hermes dashboard` compiling its
+        // web bundle never streams the `Building web UI…` marker, yet the port
+        // isn't listening yet (every probe is connection-refused) until well
+        // after the base window — then it binds and serves 200. The supervisor
+        // must keep waiting on *behavior* (alive + not-listening), not on the
+        // marker, so the acquire succeeds. Pre-fix this throws notReachable at
+        // the base window.
         let launcher = StubLauncher()
-        let http = EventuallyReachableHTTP(failStatusProbes: 10_000, token: "T")
+        // No onLaunch stderr — the marker never appears, exactly like a remote
+        // non-PTY build.
+        let http = EventuallyReachableHTTP(failStatusProbes: 10, token: "T")
         let supervisor = DashboardSupervisor(
             profile: ServerProfile(name: "L", kind: .local, hermesPath: "/bin/hermes"),
             launcher: launcher,
@@ -407,21 +424,52 @@ struct DashboardSupervisorTests {
             portAllocator: { 51919 },
             reachabilityTimeout: 0.1,
             reachabilityPollInterval: 0.02,
+            buildReachabilityTimeout: 5.0
+        )
+
+        let endpoint = try await supervisor.acquire()
+        #expect(endpoint.session.tokenSnapshot() == "T")
+        // Connection-refused for ~0.2s — comfortably past the 0.1s base window,
+        // proving the not-listening behavior (not a text marker) kept the probe
+        // loop alive.
+        #expect(http.statusProbeCount > 10)
+    }
+
+    @Test
+    func listeningButUnhealthyFailsFastAtBaseWindow() async throws {
+        // Once the endpoint is *listening* (answers with an HTTP response) but
+        // unhealthy (non-2xx), waiting the long build cap won't help — the build
+        // is already done, the server is just broken. The supervisor must fall
+        // back to the short base window and fail fast rather than holding the
+        // user for the full build cap.
+        let launcher = StubLauncher()
+        let http = AlwaysUnhealthyHTTP(statusCode: 500)
+        let supervisor = DashboardSupervisor(
+            profile: ServerProfile(name: "L", kind: .local, hermesPath: "/bin/hermes"),
+            launcher: launcher,
+            http: http,
+            portAllocator: { 51919 },
+            reachabilityTimeout: 0.1,
+            reachabilityPollInterval: 0.02,
+            // Large build cap: if the supervisor wrongly treated a listening-but
+            // -unhealthy endpoint as "still building" this test would hang ~30s.
             buildReachabilityTimeout: 30.0
         )
 
         do {
             _ = try await supervisor.acquire()
-            Issue.record("Expected notReachable within the base window")
-        } catch DashboardSupervisorError.notReachable {
-            // Expected — no build marker, so the 30s build cap never engaged.
+            Issue.record("Expected notReachable at the base window")
+        } catch let DashboardSupervisorError.notReachable(lastProbeError) {
+            // The non-2xx status rides along so the banner can say *why*.
+            #expect(lastProbeError?.contains("500") == true)
         }
     }
 
     @Test
-    func acquireFiresWebUIBuildCallbackWhileBuilding() async throws {
-        // The build callback is the seam the UI's "Building web UI…" banner
-        // hangs on — it must fire while the dashboard is still building, before
+    func acquireReportsBuildingWebUIPhaseWhenMarkerSeen() async throws {
+        // The progress callback is the seam the UI's "Building web UI…" banner
+        // hangs on — when the marker confirms a build it must report the
+        // `.buildingWebUI` phase (so the UI may assert the build), before
         // acquire() returns the live endpoint.
         let launcher = StubLauncher()
         launcher.onLaunch = { process in
@@ -438,9 +486,33 @@ struct DashboardSupervisorTests {
             buildReachabilityTimeout: 5.0
         )
 
-        let fired = Counter()
-        _ = try await supervisor.acquire(onWebUIBuildDetected: { fired.increment() })
-        #expect(fired.value >= 1)
+        let phases = PhaseRecorder()
+        _ = try await supervisor.acquire(onStartupProgress: { phases.record($0) })
+        #expect(phases.values.contains(.buildingWebUI))
+    }
+
+    @Test
+    func acquireReportsSlowToStartPhaseWithoutMarker() async throws {
+        // The remote, non-PTY case: the dashboard is alive but the marker never
+        // streams and the port isn't listening past the base window. The UI must
+        // get `.slowToStart` (not a definite `.buildingWebUI`) so its banner
+        // hedges instead of falsely asserting a build on a possibly-wedged spawn.
+        let launcher = StubLauncher()
+        let http = EventuallyReachableHTTP(failStatusProbes: 10, token: "T")
+        let supervisor = DashboardSupervisor(
+            profile: ServerProfile(name: "L", kind: .local, hermesPath: "/bin/hermes"),
+            launcher: launcher,
+            http: http,
+            portAllocator: { 51919 },
+            reachabilityTimeout: 0.1,
+            reachabilityPollInterval: 0.02,
+            buildReachabilityTimeout: 5.0
+        )
+
+        let phases = PhaseRecorder()
+        _ = try await supervisor.acquire(onStartupProgress: { phases.record($0) })
+        #expect(phases.values.contains(.slowToStart))
+        #expect(!phases.values.contains(.buildingWebUI))
     }
 
     @Test
@@ -472,6 +544,15 @@ struct DashboardSupervisorTests {
     }
 }
 
+/// Thread-safe recorder of the startup phases the supervisor reports through
+/// `onStartupProgress`, so a test can assert which phase(s) fired.
+final class PhaseRecorder: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "PhaseRecorder")
+    private var _values: [DashboardStartupPhase] = []
+    var values: [DashboardStartupPhase] { queue.sync { _values } }
+    func record(_ phase: DashboardStartupPhase) { queue.sync { _values.append(phase) } }
+}
+
 // MARK: - Test doubles
 
 /// Always throws the same error from `data(for:)` — models a dashboard whose
@@ -481,6 +562,23 @@ final class AlwaysFailingHTTP: DashboardHTTP, @unchecked Sendable {
     private let error: any Error
     init(error: any Error) { self.error = error }
     func data(for request: URLRequest) async throws -> (Data, URLResponse) { throw error }
+}
+
+/// Always answers with an `HTTPURLResponse` carrying a non-2xx status — models a
+/// dashboard that's *listening* (the port is bound, the transport completes the
+/// round-trip) but unhealthy. Distinct from `AlwaysFailingHTTP`, which never
+/// gets a response at all (the not-listening case).
+final class AlwaysUnhealthyHTTP: DashboardHTTP, @unchecked Sendable {
+    private let statusCode: Int
+    init(statusCode: Int) { self.statusCode = statusCode }
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        let url = request.url!
+        let response = HTTPURLResponse(
+            url: url, statusCode: statusCode, httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "application/json"]
+        )!
+        return (Data(), response)
+    }
 }
 
 /// Refuses `/api/status` for the first `failStatusProbes` probes, then serves a

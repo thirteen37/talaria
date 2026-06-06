@@ -285,19 +285,24 @@ struct DesktopServerWindow: View {
                 }
             }
 
-            // The dashboard is up but Hermes is compiling its web UI (first
-            // launch after an update). Surfaces would otherwise sit on a
-            // hintless "connecting…" placeholder for the length of the build.
-            if harness.isBuildingWebUI {
+            // The dashboard process is up but not yet serving. Surfaces would
+            // otherwise sit on a hintless "connecting…" placeholder for the
+            // length of the startup. `.buildingWebUI` is the confirmed-build
+            // case (marker seen); `.slowToStart` is alive-but-not-listening with
+            // no marker — likely still building, but unconfirmed, so the copy
+            // hedges rather than asserting a build.
+            if let phase = harness.startupPhase {
                 Section {
                     HStack(alignment: .top, spacing: 6) {
                         ProgressView()
                             .controlSize(.small)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Building web UI…")
+                            Text(phase == .buildingWebUI ? "Building web UI…" : "Starting server…")
                                 .font(.caption)
                                 .foregroundStyle(.primary)
-                            Text("Hermes is compiling its dashboard after an update. This can take a minute.")
+                            Text(phase == .buildingWebUI
+                                ? "Hermes is compiling its dashboard after an update. This can take a minute."
+                                : "The dashboard isn't responding yet. If Hermes was just updated it may still be compiling its web UI — this can take a minute.")
                                 .font(.caption2)
                                 .foregroundStyle(.primary)
                                 .opacity(0.6)

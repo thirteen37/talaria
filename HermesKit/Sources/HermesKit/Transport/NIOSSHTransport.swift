@@ -131,9 +131,13 @@ public final class NIOSSHTransport: Transport, @unchecked Sendable {
         // timeout. The delegate fires `onExhausted` on the event loop; we fail
         // this promise, which the channel-open await observes below.
         let authFailure = group.next().makePromise(of: Void.self)
-        // No "Authentication failed" prefix here — `SSHTransportError.authFailed`'s
-        // errorDescription already adds it, so a prefix would double up.
-        let authFailureMessage = "The server rejected the \(authKind). Check the username and \(authKind) for this server."
+        // Name *every* credential offered so a user with both a key and a
+        // password set knows to re-check both, not just the key (`authKind`
+        // above is only the log discriminator, which doesn't need that nuance).
+        let authFailureMessage = NIOSSHAuthDelegate.authRejectedMessage(
+            hasKey: privateKey != nil,
+            hasPassword: password != nil
+        )
         let authDelegate = NIOSSHAuthDelegate(
             username: user,
             privateKey: privateKey,

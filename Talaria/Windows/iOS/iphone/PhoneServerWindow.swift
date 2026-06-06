@@ -290,18 +290,20 @@ struct PhoneServerWindow: View {
                 }
             }
 
-            if harness.isBuildingWebUI {
+            if let phase = harness.startupPhase {
                 Section {
                     HStack(alignment: .top, spacing: 6) {
                         ProgressView()
                             .controlSize(.small)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Building web UI…")
+                            Text(phase == .buildingWebUI ? "Building web UI…" : "Starting server…")
                                 .font(.caption)
                                 .foregroundStyle(.primary)
                             // Dimmed primary, not .secondary: secondary text can
                             // vanish over material on-device (iOS vibrancy bug).
-                            Text("Hermes is compiling its dashboard after an update. This can take a minute.")
+                            Text(phase == .buildingWebUI
+                                ? "Hermes is compiling its dashboard after an update. This can take a minute."
+                                : "The dashboard isn't responding yet. If Hermes was just updated it may still be compiling its web UI — this can take a minute.")
                                 .font(.caption2)
                                 .foregroundStyle(.primary)
                                 .opacity(0.6)
