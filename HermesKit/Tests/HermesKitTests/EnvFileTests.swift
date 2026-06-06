@@ -242,6 +242,11 @@ private final class StubSnapshotTransfer: RemoteSnapshotTransfer, @unchecked Sen
         lock.withLock { _requestedPaths.append(remotePath) }
         try contents.write(to: to, atomically: true, encoding: .utf8)
     }
+
+    func upload(from localURL: URL, to remotePath: String) async throws {
+        // Not exercised by the env reader (read-only); present to satisfy the
+        // protocol now that it includes `upload`.
+    }
 }
 
 /// `RemoteSnapshotTransfer` that always fails the fetch with a fixed error —
@@ -249,4 +254,5 @@ private final class StubSnapshotTransfer: RemoteSnapshotTransfer, @unchecked Sen
 private struct StubThrowingTransfer: RemoteSnapshotTransfer {
     let error: SSHTransportError
     func fetch(remotePath: String, to: URL) async throws { throw error }
+    func upload(from localURL: URL, to remotePath: String) async throws { throw error }
 }

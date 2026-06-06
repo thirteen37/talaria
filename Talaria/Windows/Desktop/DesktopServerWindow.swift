@@ -247,6 +247,10 @@ struct DesktopServerWindow: View {
         // Track this window's foreground state (to gate notifications) and
         // consume a tapped-notification route addressed to this profile.
         .chatNotificationRouting(store: harness.store, profileId: harness.profile.id)
+        // Full-width banner strip across the top of the window: bridges
+        // session/dashboard errors + the web-UI progress note from the sidebar,
+        // and publishes the center so detail surfaces emit save successes here.
+        .bridgeWindowBanners(harness: harness)
     }
 
     @ViewBuilder
@@ -268,64 +272,9 @@ struct DesktopServerWindow: View {
                     }
                 }
 
-            if let error = harness.store.lastError {
-                Section {
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(error)
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                            Button("Dismiss") { harness.store.lastError = nil }
-                                .buttonStyle(.borderless)
-                                .controlSize(.mini)
-                        }
-                    }
-                }
-            }
-
-            // The dashboard is up but Hermes is compiling its web UI (first
-            // launch after an update). Surfaces would otherwise sit on a
-            // hintless "connecting…" placeholder for the length of the build.
-            if harness.isBuildingWebUI {
-                Section {
-                    HStack(alignment: .top, spacing: 6) {
-                        ProgressView()
-                            .controlSize(.small)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Building web UI…")
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                            Text("Hermes is compiling its dashboard after an update. This can take a minute.")
-                                .font(.caption2)
-                                .foregroundStyle(.primary)
-                                .opacity(0.6)
-                        }
-                    }
-                }
-            }
-
-            // Surface a failed dashboard spawn window-wide. Without this the
-            // dashboard surfaces sit on a perpetual "connecting…" placeholder
-            // with no hint as to why.
-            if let dashboardError = harness.dashboardError {
-                Section {
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(dashboardError)
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                            Button("Reconnect") { harness.reconnectDashboard() }
-                                .buttonStyle(.borderless)
-                                .controlSize(.mini)
-                                .help("Reconnect the dashboard")
-                        }
-                    }
-                }
-            }
+            // Connection / session errors and the "Building web UI…" progress
+            // note no longer render here — they're bridged to the full-width
+            // top-of-window strip (see `bridgeWindowBanners` in `content`).
 
             Section("Browse") {
                 browseRow(.sessions, store: harness.store)

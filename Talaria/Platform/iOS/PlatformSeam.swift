@@ -123,32 +123,63 @@ func platformTUIDetail(tabId: SessionId, spec: TUILaunchSpec?) -> some View {
     )
 }
 
-/// Two-pane split for desktop surfaces. iPad uses a plain `HStack` + `Divider`
-/// (no draggable splitter, which AppKit's `HSplitView` provides on macOS).
+/// Two-pane split for desktop surfaces.
+///
+/// - **iPad** keeps a plain `HStack` + `Divider` (no draggable splitter, which
+///   AppKit's `HSplitView` provides on macOS) — the two panes sit side by side.
+/// - **iPhone** is too narrow for a two-pane split, so the primary list fills
+///   the screen and the secondary is *pushed full-page* onto the surrounding
+///   navigation stack (the iPhone Browse sheet's `NavigationStack`, reached via
+///   `BrowseDetailView`). `showsSecondary` drives a
+///   `navigationDestination(isPresented:)`: a row tap flips the call site's
+///   selection → the getter returns `true` → the detail pushes; tapping **Back**
+///   makes SwiftUI write `false`, and the call site's setter clears its
+///   selection so the list deselects. `secondaryTitle` titles that pushed page.
 struct PlatformSplit<Primary: View, Secondary: View>: View {
-    var showsSecondary: Bool = true
+    @Binding var showsSecondary: Bool
+    private let secondaryTitle: String?
     @ViewBuilder var primary: () -> Primary
     @ViewBuilder var secondary: () -> Secondary
 
     init(
-        showsSecondary: Bool = true,
+        showsSecondary: Binding<Bool> = .constant(true),
+        secondaryTitle: String? = nil,
         @ViewBuilder primary: @escaping () -> Primary,
         @ViewBuilder secondary: @escaping () -> Secondary
     ) {
-        self.showsSecondary = showsSecondary
+        self._showsSecondary = showsSecondary
+        self.secondaryTitle = secondaryTitle
         self.primary = primary
         self.secondary = secondary
     }
 
     var body: some View {
-        HStack(spacing: 0) {
+        if Idiom.isPhone {
             primary()
-            if showsSecondary {
-                Divider()
-                secondary()
+                .navigationDestination(isPresented: $showsSecondary) { pushedSecondary }
+        } else {
+            HStack(spacing: 0) {
+                primary()
+                if showsSecondary {
+                    Divider()
+                    secondary()
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The pushed iPhone detail, with the call site's title applied inline so the
+    /// full page isn't blank-titled. Detail panes keep their own toolbar/Save.
+    @ViewBuilder
+    private var pushedSecondary: some View {
+        if let secondaryTitle {
+            secondary()
+                .navigationTitle(secondaryTitle)
+                .navigationBarTitleDisplayMode(.inline)
+        } else {
+            secondary()
+        }
     }
 }
 

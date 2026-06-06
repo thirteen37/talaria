@@ -2,6 +2,9 @@ import Foundation
 
 public struct ToolRow: Equatable, Sendable, Identifiable {
     public let name: String
+    /// Display text emitted after the tool name in `hermes tools list`.
+    /// Historically named `platform`, but for bullet-format Hermes output this
+    /// is the emoji + description label, not a gateway platform id.
     public let platform: String?
     public let enabled: Bool
 
@@ -11,6 +14,72 @@ public struct ToolRow: Equatable, Sendable, Identifiable {
         self.name = name
         self.platform = platform
         self.enabled = enabled
+    }
+}
+
+public struct ToolsMatrix: Equatable, Sendable {
+    public let platforms: [String]
+    public let rows: [Row]
+
+    public init(platforms: [String], rows: [Row]) {
+        self.platforms = platforms
+        self.rows = rows
+    }
+
+    public struct Row: Equatable, Sendable, Identifiable {
+        public let name: String
+        public let label: String?
+        public let enabledByPlatform: [String: Bool]
+
+        public var id: String { name }
+
+        public init(name: String, label: String?, enabledByPlatform: [String: Bool]) {
+            self.name = name
+            self.label = label
+            self.enabledByPlatform = enabledByPlatform
+        }
+    }
+
+    /// Returns a copy with only `platform`'s column replaced by a freshly listed
+    /// `rows`, leaving every other column untouched. Used after a single-cell
+    /// toggle so just the affected platform is re-listed — toggling a tool on one
+    /// platform can't change another's state, so a full fan-out re-list (one
+    /// `tools list` per column plus a `/api/status` call) is wasteful, especially
+    /// over remote SSH.
+    ///
+    /// Tools present in `rows` update their `enabledByPlatform[platform]`; tools
+    /// no longer reported for that platform have the key removed (unknown); tools
+    /// new to that platform are appended (with only this column known). Existing
+    /// row order is preserved so the UI doesn't reshuffle on a toggle.
+    public func replacingColumn(_ platform: String, with rows: [ToolRow]) -> ToolsMatrix {
+        var freshEnabled: [String: Bool] = [:]
+        var freshLabel: [String: String] = [:]
+        var freshOrder: [String] = []
+        for row in rows {
+            if freshEnabled[row.name] == nil { freshOrder.append(row.name) }
+            freshEnabled[row.name] = row.enabled
+            if freshLabel[row.name] == nil, let label = row.platform { freshLabel[row.name] = label }
+        }
+
+        var seen: Set<String> = []
+        var updated: [Row] = self.rows.map { row in
+            seen.insert(row.name)
+            var byPlatform = row.enabledByPlatform
+            byPlatform[platform] = freshEnabled[row.name]   // nil clears (unknown)
+            return Row(
+                name: row.name,
+                label: row.label ?? freshLabel[row.name],
+                enabledByPlatform: byPlatform
+            )
+        }
+        for name in freshOrder where !seen.contains(name) {
+            updated.append(Row(
+                name: name,
+                label: freshLabel[name],
+                enabledByPlatform: [platform: freshEnabled[name] ?? false]
+            ))
+        }
+        return ToolsMatrix(platforms: platforms, rows: updated)
     }
 }
 
@@ -30,20 +99,94 @@ public enum HermesToolsError: Error, Equatable, Sendable, LocalizedError {
 }
 
 public enum HermesTools {
-    public static func list(runner: HermesAdminRunning) async throws -> [ToolRow] {
-        let result = try await runner.run(HermesAdminCommand(arguments: ["tools", "list"]))
+    public static func list(runner: HermesAdminRunning, platform: String? = nil) async throws -> [ToolRow] {
+        let result = try await runner.run(HermesAdminCommand(arguments: ["tools", "list"] + platformArgs(platform)))
         try ensureSuccess(result)
         return parse(result.stdout)
     }
 
-    public static func enable(runner: HermesAdminRunning, name: String) async throws {
-        let result = try await runner.run(HermesAdminCommand(arguments: ["tools", "enable", "--", name]))
+    public static func enable(runner: HermesAdminRunning, name: String, platform: String? = nil) async throws {
+        let result = try await runner.run(
+            HermesAdminCommand(arguments: ["tools", "enable"] + platformArgs(platform) + ["--", name])
+        )
         try ensureSuccess(result)
     }
 
-    public static func disable(runner: HermesAdminRunning, name: String) async throws {
-        let result = try await runner.run(HermesAdminCommand(arguments: ["tools", "disable", "--", name]))
+    public static func disable(runner: HermesAdminRunning, name: String, platform: String? = nil) async throws {
+        let result = try await runner.run(
+            HermesAdminCommand(arguments: ["tools", "disable"] + platformArgs(platform) + ["--", name])
+        )
         try ensureSuccess(result)
+    }
+
+    public static func makeMatrix(platforms: [String], byPlatform: [String: [ToolRow]]) -> ToolsMatrix {
+        var rowOrder: [String] = []
+        var labels: [String: String] = [:]
+        var enabledByTool: [String: [String: Bool]] = [:]
+
+        for platform in platforms {
+            guard let rows = byPlatform[platform] else { continue }
+            for row in rows {
+                if enabledByTool[row.name] == nil {
+                    rowOrder.append(row.name)
+                    enabledByTool[row.name] = [:]
+                }
+                if labels[row.name] == nil, let label = row.platform {
+                    labels[row.name] = label
+                }
+                enabledByTool[row.name]?[platform] = row.enabled
+            }
+        }
+
+        let matrixRows = rowOrder.map { name in
+            ToolsMatrix.Row(
+                name: name,
+                label: labels[name],
+                enabledByPlatform: enabledByTool[name] ?? [:]
+            )
+        }
+        return ToolsMatrix(platforms: platforms, rows: matrixRows)
+    }
+
+    public static func loadMatrix(runner: HermesAdminRunning, platforms: [String]) async throws -> ToolsMatrix {
+        guard !platforms.isEmpty else {
+            return ToolsMatrix(platforms: [], rows: [])
+        }
+
+        var byPlatform: [String: [ToolRow]] = [:]
+        var firstFailure: Error?
+
+        await withTaskGroup(of: (String, Result<[ToolRow], Error>).self) { group in
+            for platform in platforms {
+                group.addTask {
+                    do {
+                        return (platform, .success(try await list(runner: runner, platform: platform)))
+                    } catch {
+                        return (platform, .failure(error))
+                    }
+                }
+            }
+
+            for await (platform, result) in group {
+                switch result {
+                case .success(let rows):
+                    byPlatform[platform] = rows
+                case .failure(let error):
+                    if firstFailure == nil {
+                        firstFailure = error
+                    }
+                }
+            }
+        }
+
+        if byPlatform.isEmpty, let firstFailure {
+            throw firstFailure
+        }
+        return makeMatrix(platforms: platforms, byPlatform: byPlatform)
+    }
+
+    private static func platformArgs(_ platform: String?) -> [String] {
+        platform.map { ["--platform", $0] } ?? []
     }
 
     /// Tolerant parser. Supported row shapes (per line):

@@ -440,6 +440,56 @@ public struct DashboardPluginsHub: Codable, Equatable, Sendable {
     public let providers: DashboardPluginProviders
 }
 
+/// One memory provider the host discovered (`GET /api/memory`).
+public struct MemoryProviderInfo: Codable, Equatable, Sendable, Identifiable {
+    public let name: String
+    public let description: String
+    /// Whether the provider has the credentials/config it needs to run.
+    public let configured: Bool
+
+    public var id: String { name }
+
+    public init(name: String, description: String, configured: Bool) {
+        self.name = name
+        self.description = description
+        self.configured = configured
+    }
+}
+
+/// Read-only memory status from `GET /api/memory`. `active` is the configured
+/// provider, empty string meaning the **built-in** file-backed memory; the raw
+/// `MEMORY.md` / `USER.md` text is not part of this payload (no route exists for
+/// it) — only their byte sizes.
+public struct MemoryStatus: Codable, Equatable, Sendable {
+    /// Active provider name; `""` = built-in (`MEMORY.md` / `USER.md`).
+    public let active: String
+    public let providers: [MemoryProviderInfo]
+    public let builtinFiles: BuiltinFiles
+
+    public var isBuiltIn: Bool { active.isEmpty }
+
+    public struct BuiltinFiles: Codable, Equatable, Sendable {
+        public let memory: Int
+        public let user: Int
+
+        public init(memory: Int, user: Int) {
+            self.memory = memory
+            self.user = user
+        }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case active, providers
+        case builtinFiles = "builtin_files"
+    }
+
+    public init(active: String, providers: [MemoryProviderInfo], builtinFiles: BuiltinFiles) {
+        self.active = active
+        self.providers = providers
+        self.builtinFiles = builtinFiles
+    }
+}
+
 /// Success payload from `POST /api/dashboard/agent-plugins/install`. The route
 /// returns `{ ok, plugin_name, warnings, missing_env, enabled }` on 200 and
 /// raises HTTP 400 (`{ detail }`) on failure — which the shared plumbing turns
@@ -572,18 +622,45 @@ public struct DashboardModelInfo: Codable, Equatable, Sendable {
     }
 }
 
-/// One configurable toolset row from `GET /api/tools/toolsets`. `enabled` is
-/// whether it's on for the dashboard (`cli`) platform; `configured` is whether
-/// its required credentials/keys are present; `available` tracks `enabled` on
-/// the current server. `tools` is the sorted list of tool ids it contributes.
-public struct DashboardToolset: Codable, Equatable, Sendable {
+/// One toolset from `GET /api/tools/toolsets`. `name` matches the CLI
+/// `tools list` id / matrix row; `tools` is the toolset's individual function
+/// names (e.g. `["web_extract", "web_search"]`) — the bridge for linking a
+/// tool's config env vars (a var's `tools` array references function names, not
+/// the toolset id). `enabled`/`available`/`configured` carry the dashboard's
+/// global toolset state and decode as nil when the server omits them
+/// (per-platform enable/disable stays on the CLI).
+public struct DashboardToolset: Codable, Equatable, Sendable, Identifiable {
     public let name: String
-    public let label: String
+    public let label: String?
     public let description: String?
-    public let enabled: Bool
+    public let enabled: Bool?
     public let available: Bool?
     public let configured: Bool?
     public let tools: [String]
+
+    public var id: String { name }
+
+    enum CodingKeys: String, CodingKey {
+        case name, label, description, enabled, available, configured, tools
+    }
+
+    public init(
+        name: String,
+        label: String? = nil,
+        description: String? = nil,
+        enabled: Bool? = nil,
+        available: Bool? = nil,
+        configured: Bool? = nil,
+        tools: [String]
+    ) {
+        self.name = name
+        self.label = label
+        self.description = description
+        self.enabled = enabled
+        self.available = available
+        self.configured = configured
+        self.tools = tools
+    }
 }
 
 /// Result of toggling a toolset (`PUT /api/tools/toolsets/{name}`).
@@ -944,6 +1021,19 @@ public struct DashboardClient: Sendable {
     /// selections (memory provider / context engine) and their options.
     public func getPluginsHub() async throws -> DashboardPluginsHub {
         try await get(path: "/api/dashboard/plugins/hub")
+    }
+
+    // MARK: - Memory
+
+    /// Active memory provider, the available providers, and the built-in file
+    /// sizes (`GET /api/memory`). Read-only status: there is **no** dashboard
+    /// route to read or write the raw `MEMORY.md` / `USER.md` text — the Memory
+    /// editor reads and writes those files directly on disk. This is used only
+    /// for the editor's read-only "Provider" line and the "external provider
+    /// active" warning, so callers degrade gracefully when it 404s on an older
+    /// Hermes.
+    public func getMemory() async throws -> MemoryStatus {
+        try await get(path: "/api/memory")
     }
 
     /// Installs a plugin from `owner/repo` or a full Git URL. `enable` activates

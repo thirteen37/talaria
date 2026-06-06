@@ -21,6 +21,7 @@ historical one:
 - **Gateway & Messaging** — one destination combining gateway process control (start / stop / restart / install / uninstall via CLI) with the per-platform messaging setup forms. The gateway status spans the top; below it the platform list is the primary pane and the selected platform's configuration opens in a side panel.
 - **Hermes profile** management (clone / rename / delete).
 - **Soul & Personalities** editor — the base `SOUL.md` and the `agent.personalities` overlays in one integrated split view.
+- **Memory** editor — direct read+write of the built-in `MEMORY.md` / `USER.md` files (local or remote SSH), a second tab alongside Soul & Personalities. Hermes exposes no dashboard route for their text, so this edits them on disk via the unified `HermesFileStore`; `GET /api/memory` supplies the read-only provider line. The first non-dashboard remote write.
 - **Environment** screen with `.env` CRUD.
 - **Messaging** setup (now folded into **Gateway & Messaging**): per-platform setup forms (Telegram, Discord, Slack, Mattermost, Matrix, iMessage/BlueBubbles, QQ, IRC) over the messaging env vars Hermes reports, with prefix-based auto-grouping for anything uncatalogued, live connection pills from `/api/status`, status-only rows for config.yaml-only platforms, and a gateway restart to apply changes. A pure presentation overlay — no new Hermes routes.
 - **Kanban** board (boards + tasks) with full CRUD, backed by the Hermes kanban plugin.
@@ -42,7 +43,6 @@ historical one:
 ## Deferred Configuration
 
 - MCP server registry with browse, add, edit, and curated preset flows.
-- Memory and user-profile editors for `MEMORY.md` and `USER.md` (the `SOUL.md` and personality editors already shipped).
 - Webhook management.
 - Credential pools and token rotation flows.
 - Export/import profile bundles.

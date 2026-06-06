@@ -37,6 +37,10 @@ final class GatewayHarness {
     /// env vars fused with the gateway status.
     var groups: [MessagingPlatformGroup] = []
     var lastError: String?
+    /// Top-of-window banner hub (window-scoped); optional so a missing host
+    /// degrades to no-op. Hard errors route here keyed by the surface id; a
+    /// successful credential save posts a transient confirmation.
+    var banners: BannerCenter?
     var isLoading: Bool = false
     /// The selected platform's `id` (drives the side panel).
     var selectionID: String?
@@ -128,8 +132,10 @@ final class GatewayHarness {
                 gatewayPlatforms: status?.gatewayPlatforms ?? [:]
             )
             lastError = nil
+            banners?.dismiss(key: "gateway")
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("gateway", error.localizedDescription)
         }
     }
 
@@ -141,8 +147,15 @@ final class GatewayHarness {
         do {
             try await client.setEnvVar(key: key, value: value)
             await refresh()
+            // Only confirm if the post-write reload also succeeded — otherwise
+            // refresh() has posted its own error and an unconditional success
+            // here would dismiss it, hiding a failed reload over stale data.
+            if lastError == nil {
+                banners?.surfaceSuccess("gateway", "Gateway setting saved")
+            }
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("gateway", error.localizedDescription)
         }
     }
 
@@ -154,6 +167,7 @@ final class GatewayHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("gateway", error.localizedDescription)
         }
     }
 
@@ -168,6 +182,7 @@ final class GatewayHarness {
             return value
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("gateway", error.localizedDescription)
             return nil
         }
     }
@@ -183,9 +198,11 @@ final class GatewayHarness {
         do {
             try await HermesGateway.restart(runner: runner)
             lastError = nil
+            banners?.dismiss(key: "gateway")
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("gateway", error.localizedDescription)
         }
     }
 
@@ -207,9 +224,11 @@ final class GatewayHarness {
         do {
             try await command(runner)
             lastError = nil
+            banners?.dismiss(key: "gateway")
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("gateway", error.localizedDescription)
         }
     }
 }
@@ -218,6 +237,8 @@ struct GatewayView: View {
     let client: DashboardClient?
     let runner: HermesAdminRunning?
     let hermesVersion: HermesVersion?
+
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
 
     @State private var harness: GatewayHarness?
     @State private var showUninstallConfirm = false
@@ -243,6 +264,7 @@ struct GatewayView: View {
             }
         }
         .navigationTitle("Gateway & Messaging")
+        .dismissesBanner("gateway", from: banners)
         // Keyed on client availability so the harness is built when the
         // dashboard finishes booting and `client` flips non-nil, not only on
         // first appear (matching Cron/Profiles).
@@ -250,6 +272,7 @@ struct GatewayView: View {
             guard let client else { harness = nil; return }
             if harness != nil { return }
             let h = GatewayHarness(client: client, runner: runner)
+            h.banners = banners
             harness = h
             await h.refresh()
         }
@@ -265,9 +288,15 @@ struct GatewayView: View {
         VStack(spacing: 0) {
             statusHeader(harness: harness)
             Divider()
-            PlatformSplit(showsSecondary: harness.selectedItem != nil) {
+            PlatformSplit(
+                showsSecondary: Binding(
+                    get: { harness.selectedItem != nil },
+                    set: { if !$0 { harness.selectionID = nil } }
+                ),
+                secondaryTitle: detailTitle(harness)
+            ) {
                 platformList(harness: harness)
-                    .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: Idiom.isPhone ? nil : 360, maxWidth: .infinity, maxHeight: .infinity)
             } secondary: {
                 detailPane(harness: harness)
                     .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
@@ -283,13 +312,15 @@ struct GatewayView: View {
         } message: {
             Text("The gateway background service will be removed. Messaging platforms stop until it is reinstalled. This cannot be undone.")
         }
+        // Hard errors route to the top-of-window strip; only the capability
+        // warning stays in-surface.
         .manageBanner(
-            harness.lastError ?? capabilityBanner(
+            capabilityBanner(
                 .requiresEnvAPI,
                 feature: "Gateway & Messaging via Hermes dashboard",
                 version: hermesVersion
             ),
-            severity: harness.lastError != nil ? .error : .warning
+            severity: .warning
         )
     }
 
@@ -391,6 +422,16 @@ struct GatewayView: View {
     }
 
     // MARK: - Detail pane (secondary)
+
+    /// Title for the pushed iPhone detail page — the selected platform's name.
+    /// nil when nothing is selected (the pane is hidden).
+    private func detailTitle(_ harness: GatewayHarness) -> String? {
+        switch harness.selectedItem {
+        case let .platform(group): return group.displayName
+        case let .statusOnly(row): return row.name
+        case nil: return nil
+        }
+    }
 
     // Rendered only while a platform is selected — `PlatformSplit`'s
     // `showsSecondary` gate hides this pane entirely otherwise, so there's no

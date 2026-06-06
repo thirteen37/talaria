@@ -121,61 +121,28 @@ public struct HermesEnvFileReader: EnvFileReading {
             .last { !$0.isEmpty }
         guard let path, !path.isEmpty else { throw EnvFileError.pathUnresolved }
 
-        let contents = isLocal ? try readLocal(path: path) : try await readRemote(path: path)
-        return EnvFile.parse(contents)
+        return EnvFile.parse(try await readContents(path: path))
     }
 
-    private func readLocal(path: String) throws -> String {
-        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-        guard FileManager.default.fileExists(atPath: url.path) else { return "" }
+    /// Reads the raw `.env` contents through the unified ``HermesFileStore``,
+    /// preserving the screen's two invariants: a missing file (fresh install,
+    /// local *or* remote) reads as "" rather than erroring, and a remote read
+    /// with no usable transfer surfaces ``EnvFileError/transferUnavailable``.
+    private func readContents(path: String) async throws -> String {
         do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw EnvFileError.readFailed(error.localizedDescription)
-        }
-    }
-
-    private func readRemote(path: String) async throws -> String {
-        // An injected transfer works on any platform (NIO on iOS / the macOS
-        // NIO opt-in); otherwise fall back to the macOS `sftp` subprocess for
-        // the system-`ssh` path — same resolution ``HermesConfigReader`` uses.
-        let active: RemoteSnapshotTransfer
-        if let snapshotTransfer {
-            active = snapshotTransfer
-        } else {
-            #if os(macOS)
-            guard let profile else { throw EnvFileError.transferUnavailable }
-            active = SFTPSubprocessTransfer(profile: profile)
-            #else
+            return try await HermesFileStore.read(
+                resolvedPath: path,
+                isLocal: isLocal,
+                transfer: snapshotTransfer,
+                profile: profile
+            )
+        } catch HermesFileStoreError.notFound {
+            return ""
+        } catch HermesFileStoreError.transferUnavailable {
             throw EnvFileError.transferUnavailable
-            #endif
-        }
-        let tmpURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("talaria-env-\(UUID().uuidString).env")
-        defer { try? FileManager.default.removeItem(at: tmpURL) }
-
-        do {
-            try await active.fetch(remotePath: path, to: tmpURL)
-        } catch let error as SSHTransportError {
-            // A missing remote `.env` is the "no custom vars yet" state, not a
-            // failure — match the local `readLocal` behavior (returns ""). The
-            // wording varies by transport: `cat`/OpenSSH-sftp say "No such file
-            // or directory"; some SFTP servers say "… not found." Accept both so
-            // a fresh-install host doesn't surface a persistent error banner.
-            if case let .transferFailed(message) = error {
-                let lowered = message.lowercased()
-                if lowered.contains("no such file") || lowered.contains("not found") {
-                    return ""
-                }
-            }
-            throw EnvFileError.readFailed(error.message)
-        } catch {
-            throw EnvFileError.readFailed(error.localizedDescription)
-        }
-
-        do {
-            return try String(contentsOf: tmpURL, encoding: .utf8)
-        } catch {
+        } catch let HermesFileStoreError.readFailed(detail) {
+            throw EnvFileError.readFailed(detail)
+        } catch let error as HermesFileStoreError {
             throw EnvFileError.readFailed(error.localizedDescription)
         }
     }

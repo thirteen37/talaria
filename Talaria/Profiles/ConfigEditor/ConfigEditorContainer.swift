@@ -16,6 +16,8 @@ struct ConfigEditorContainer: View {
     /// the window so the editor doesn't re-enumerate them.
     let profiles: [HermesProfileInfo]
 
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
+
     @State private var editor: ConfigEditorHarness?
     @State private var showingExporter = false
     @State private var showingImporter = false
@@ -39,9 +41,11 @@ struct ConfigEditorContainer: View {
             }
         }
         .navigationTitle("Configuration")
+        .dismissesBanner("config", from: banners)
         .task {
             guard editor == nil else { return }
             let harness = makeEditor()
+            harness.banners = banners
             editor = harness
             await harness.start()
         }
@@ -100,7 +104,9 @@ struct ConfigEditorContainer: View {
             }
         }
         .toolbar { toolbar(editor) }
-        .manageBanner(banner(editor), severity: editor.source.lastError != nil || editor.lastError != nil ? .error : .warning)
+        // Hard errors route to the top-of-window strip; only the dashboard
+        // unavailable warning stays in-surface.
+        .manageBanner(banner(editor), severity: .warning)
         .fileExporter(isPresented: $showingExporter,
                       document: exportDocument,
                       contentType: .hermesYAML,
@@ -205,8 +211,8 @@ struct ConfigEditorContainer: View {
     }
 
     private func banner(_ editor: ConfigEditorHarness) -> String? {
-        if let error = editor.source.lastError { return error }
-        if let error = editor.lastError { return error }
+        // Hard errors (source/profile-list) route to the top-of-window strip; the
+        // in-surface banner shows only the dashboard-unavailable warning.
         if editor.source.dashboardUnavailable {
             return "Dashboard unavailable — showing the on-disk config read-only. Save is disabled."
         }

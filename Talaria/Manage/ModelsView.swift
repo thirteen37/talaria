@@ -15,6 +15,11 @@ final class ModelsHarness {
     var assignments: DashboardModelAssignments?
     var isLoading: Bool = false
     var lastError: String?
+    /// Top-of-window banner hub (window-scoped). Hard errors route here keyed by
+    /// the surface id so they render full-width across the top; a successful
+    /// endpoint save posts a transient confirmation. Optional so a missing host
+    /// degrades to no-op.
+    var banners: BannerCenter?
     /// Non-nil while the provider/model picker pane is open.
     var pickerTarget: ModelPickerTarget?
     /// Slots with a write in flight, so their controls disable without
@@ -90,6 +95,11 @@ final class ModelsHarness {
             customEndpoints = CustomEndpoint.list(in: config)
         }
         lastError = firstError
+        if let firstError {
+            banners?.surfaceError("models", firstError)
+        } else {
+            banners?.dismiss(key: "models")
+        }
     }
 
     // MARK: - Picker lifecycle
@@ -128,31 +138,57 @@ final class ModelsHarness {
     // MARK: - Mutations
 
     /// Assigns the picked provider/model to the active target, then refreshes.
+    /// For an auxiliary slot, also clears any stale `auxiliary.<task>.base_url`
+    /// (see ``clearAuxiliaryBaseURL(task:using:)``) so the new provider's own
+    /// endpoint is what actually gets used.
     func selectModel(provider: String, model: String) async {
         guard let target = pickerTarget else { return }
-        await write(target: target) {
+        await write(target: target) { client in
             switch target {
             case .main:
-                try await $0.setModel(scope: .main, provider: provider, model: model)
+                try await client.setModel(scope: .main, provider: provider, model: model)
             case let .auxiliary(task):
-                try await $0.setModel(scope: .auxiliary, task: task, provider: provider, model: model)
+                try await client.setModel(scope: .auxiliary, task: task, provider: provider, model: model)
+                try await self.clearAuxiliaryBaseURL(task: task, using: client)
             }
         }
     }
 
     /// Resets a single auxiliary slot back to auto (provider `"auto"`, empty
     /// model). The set route writes those values verbatim, which is exactly
-    /// "inherit the main model".
+    /// "inherit the main model"; a follow-up config edit drops any stale
+    /// `base_url` the set route can't touch.
     func resetAuxiliary(task: String) async {
-        await write(target: .auxiliary(task: task)) {
-            try await $0.setModel(scope: .auxiliary, task: task, provider: "auto", model: "")
+        await write(target: .auxiliary(task: task)) { client in
+            try await client.setModel(scope: .auxiliary, task: task, provider: "auto", model: "")
+            try await self.clearAuxiliaryBaseURL(task: task, using: client)
         }
     }
 
-    /// Resets every auxiliary slot to auto via the `__reset__` sentinel.
+    /// Resets every auxiliary slot to auto via the `__reset__` sentinel, then
+    /// clears every slot's stale `base_url`.
     func resetAllAuxiliary() async {
-        await write(target: nil) {
-            try await $0.setModel(scope: .auxiliary, task: "__reset__", provider: "", model: "")
+        await write(target: nil) { client in
+            try await client.setModel(scope: .auxiliary, task: "__reset__", provider: "", model: "")
+            try await self.clearAuxiliaryBaseURL(task: nil, using: client)
+        }
+    }
+
+    /// Drops a stale `auxiliary.<task>.base_url` override left behind by a
+    /// provider change (`task == nil` clears every slot, for reset-all).
+    ///
+    /// `POST /api/model/set` only writes `provider`/`model`, so a `base_url`
+    /// stored earlier (e.g. by `hermes model`) survives a dashboard provider
+    /// change and then silently overrides the endpoint Hermes would resolve from
+    /// the new provider. There's no `set` route to clear it, so we patch the
+    /// config directly. Best-effort by design? No — a failure here surfaces, so
+    /// the user knows the slot may still be misrouted; the operation is
+    /// idempotent on retry. The PUT is skipped when nothing changed.
+    private func clearAuxiliaryBaseURL(task: String?, using client: DashboardClient) async throws {
+        let config = try await client.getConfig()
+        let updated = AuxiliaryModelConfig.clearingBaseURL(forTask: task, in: config)
+        if updated != config {
+            try await client.updateConfig(updated)
         }
     }
 
@@ -187,6 +223,7 @@ final class ModelsHarness {
             fresh = try await client.getConfig()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("models", error.localizedDescription)
             return false
         }
 
@@ -238,7 +275,9 @@ final class ModelsHarness {
                     && $0.baseURL == endpoint.baseURL
                     && $0.defaultModel == endpoint.defaultModel
             }) {
-                lastError = "An endpoint named “\(endpoint.name)” with that base URL already exists."
+                let message = "An endpoint named “\(endpoint.name)” with that base URL already exists."
+                lastError = message
+                banners?.surfaceError("models", message)
                 return false
             }
             draft = dictDraft(slug: CustomEndpoint.slug(forName: endpoint.name, existing: takenSlugs()))
@@ -254,7 +293,9 @@ final class ModelsHarness {
             // success while a just-written key var was left orphaned. Failing up
             // front keeps the sheet open with a real error and writes nothing.
             guard let entry = CustomEndpoint.listEntry(for: anchor, in: fresh) else {
-                lastError = "This endpoint no longer exists — it may have been removed in another window. Reopen the list and try again."
+                let message = "This endpoint no longer exists — it may have been removed in another window. Reopen the list and try again."
+                lastError = message
+                banners?.surfaceError("models", message)
                 return false
             }
             oldKeyEnv = Self.listEntryKeyEnv(entry)
@@ -273,7 +314,7 @@ final class ModelsHarness {
             (newKey?.isEmpty == false) ? .set : (draft.hasAPIKey ? .keep : .remove)
         let newVarName = CustomEndpoint.apiKeyEnvVarName(forSlug: draft.slug)
 
-        return await runEndpoint(slug: draft.slug) {
+        let saved = await runEndpoint(slug: draft.slug) {
             if let newKey, !newKey.isEmpty {
                 try await $0.setEnvVar(key: newVarName, value: newKey)
             }
@@ -295,6 +336,14 @@ final class ModelsHarness {
                 try? await $0.deleteEnvVar(key: oldVar)
             }
         }
+        // Only confirm when the write *and* its post-write reload succeeded
+        // (`runEndpoint` returns true even if its internal refresh failed). A
+        // failed reload leaves `lastError` set, so its error must stand rather
+        // than be replaced by a green success over stale data.
+        if saved, lastError == nil {
+            banners?.surfaceSuccess("models", "Endpoint saved")
+        }
+        return saved
     }
 
     /// Removes an endpoint from wherever it lives — `providers.<slug>` (dict) or
@@ -427,10 +476,12 @@ final class ModelsHarness {
         do {
             try await body(client)
             lastError = nil
+            banners?.dismiss(key: "models")
             await refresh()
             return true
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("models", error.localizedDescription)
             return false
         }
     }
@@ -443,10 +494,12 @@ final class ModelsHarness {
         do {
             try await body(client)
             lastError = nil
+            banners?.dismiss(key: "models")
             pickerTarget = nil
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("models", error.localizedDescription)
         }
     }
 
@@ -465,6 +518,10 @@ final class ModelsHarness {
 struct ModelsView: View {
     let client: DashboardClient?
     let hermesVersion: HermesVersion?
+
+    /// Window's top-of-window banner hub. Optional so a host that doesn't supply
+    /// one degrades to no-op (hard errors then simply don't render).
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
 
     @State private var harness: ModelsHarness?
     /// Drives the confirm dialog for the destructive "Reset auxiliary" action —
@@ -510,6 +567,7 @@ struct ModelsView: View {
             }
         }
         .navigationTitle("Models")
+        .dismissesBanner("models", from: banners)
         // Keyed on client availability so the harness is built when the
         // dashboard finishes booting and `client` flips non-nil (matching the
         // other dashboard surfaces).
@@ -517,6 +575,7 @@ struct ModelsView: View {
             guard let client else { harness = nil; return }
             if harness != nil { return }
             let h = ModelsHarness(client: client)
+            h.banners = banners
             harness = h
             await h.refresh()
         }
@@ -524,21 +583,28 @@ struct ModelsView: View {
 
     @ViewBuilder
     private func content(harness: ModelsHarness) -> some View {
-        PlatformSplit(showsSecondary: harness.pickerTarget != nil) {
+        PlatformSplit(
+            showsSecondary: Binding(
+                get: { harness.pickerTarget != nil },
+                set: { if !$0 { harness.cancelPick() } }
+            ),
+            secondaryTitle: harness.pickerTarget.map(pickerTitle)
+        ) {
             assignmentsForm(harness: harness)
-                .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 360, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             pickerPane(harness: harness)
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar { toolbar(harness: harness) }
+        // Hard errors route to the top-of-window strip; only the capability warning stays in-surface.
         .manageBanner(
-            harness.lastError ?? capabilityBanner(
+            capabilityBanner(
                 .requiresModelAPI,
                 feature: "Model management via Hermes dashboard",
                 version: hermesVersion
             ),
-            severity: harness.lastError != nil ? .error : .warning
+            severity: .warning
         )
         .alert("Reset all auxiliary models?", isPresented: $showResetConfirm) {
             Button("Reset", role: .destructive) {
@@ -675,11 +741,7 @@ struct ModelsView: View {
     }
 
     private func auxiliaryDisplay(_ slot: DashboardAuxiliaryModel) -> String {
-        if slot.isAuto { return "auto (use main model)" }
-        let model = slot.model ?? ""
-        let provider = slot.provider ?? ""
-        if model.isEmpty { return provider.isEmpty ? "auto (use main model)" : provider }
-        return provider.isEmpty ? model : "\(provider) · \(model)"
+        AuxiliaryModelDisplay.subtitle(for: slot)
     }
 
     // MARK: - Custom endpoint rows

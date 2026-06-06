@@ -1,0 +1,19 @@
+{
+  "active": "",
+  "providers": [
+    {
+      "name": "hindsight",
+      "description": "Hindsight long-term memory",
+      "configured": true
+    },
+    {
+      "name": "sqlite",
+      "description": "Built-in SQLite memory",
+      "configured": false
+    }
+  ],
+  "builtin_files": {
+    "memory": 1280,
+    "user": 512
+  }
+}

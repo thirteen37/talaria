@@ -45,7 +45,7 @@ struct BrowseDetailView: View {
         case .profiles:
             ConfigEnvironmentTabsView(harness: harness, hermesProfiles: hermesProfiles)
         case .personalities:
-            SoulAndPersonalitiesView(windowHarness: harness)
+            SoulPersonalitiesMemoryTabsView(harness: harness)
         case .models:
             ModelsView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)
         case .system:

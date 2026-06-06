@@ -9,6 +9,8 @@ struct KanbanView: View {
     let client: DashboardClient?
     let hermesVersion: HermesVersion?
 
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
+
     @State private var harness: KanbanHarness?
     @State private var showManageSheet = false
 
@@ -49,9 +51,14 @@ struct KanbanView: View {
             }
         }
         .navigationTitle("Kanban")
+        .dismissesBanner("kanban", from: banners)
         .task(id: client != nil) {
             guard let client else { harness = nil; return }
-            if harness == nil { harness = KanbanHarness(client: client) }
+            if harness == nil {
+                let h = KanbanHarness(client: client)
+                h.banners = banners
+                harness = h
+            }
         }
         // Polling lives here, not in the harness: SwiftUI auto-cancels on
         // disappear and restarts on board/filter change. ~4s cadence, no
@@ -80,9 +87,15 @@ struct KanbanView: View {
 
     @ViewBuilder
     private func content(harness: KanbanHarness) -> some View {
-        PlatformSplit(showsSecondary: harness.showsSecondary) {
+        PlatformSplit(
+            showsSecondary: Binding(
+                get: { harness.showsSecondary },
+                set: { if !$0 { harness.closeSecondary() } }
+            ),
+            secondaryTitle: secondaryTitle(harness)
+        ) {
             KanbanBoardColumnsView(harness: harness)
-                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 420, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             secondaryPane(harness: harness)
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
@@ -92,6 +105,13 @@ struct KanbanView: View {
         .sheet(isPresented: $showManageSheet) {
             KanbanBoardManageSheet(harness: harness)
         }
+    }
+
+    /// Title for the pushed iPhone secondary page — "New Task" for the create
+    /// draft, or the selected card's title. nil when neither opens it.
+    private func secondaryTitle(_ harness: KanbanHarness) -> String? {
+        if harness.draft != nil { return "New Task" }
+        return harness.selectedCard?.title
     }
 
     @ViewBuilder
@@ -141,11 +161,10 @@ struct KanbanView: View {
 
     // MARK: - Banner
 
-    // Precedence: a hard error wins, then an informational success warning, then
-    // plugin-unavailable, then the version-capability notice. Only `lastError`
-    // renders red; everything below it is a `.warning`.
+    // Hard errors (`lastError`) route to the top-of-window strip. The in-surface
+    // banner keeps the orange notices: an informational success warning, then
+    // plugin-unavailable, then the version-capability notice — all `.warning`.
     private func bannerMessage(_ harness: KanbanHarness) -> String? {
-        if let error = harness.lastError { return error }
         if let warning = harness.lastWarning { return warning }
         if harness.pluginUnavailable { return "Kanban plugin not available on this server." }
         return capabilityBanner(
@@ -156,6 +175,6 @@ struct KanbanView: View {
     }
 
     private func bannerSeverity(_ harness: KanbanHarness) -> ManageBanner.Severity {
-        harness.lastError != nil ? .error : .warning
+        .warning
     }
 }

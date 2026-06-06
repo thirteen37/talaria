@@ -12,6 +12,9 @@ struct CronDraft: Equatable {
 final class CronHarness {
     var jobs: [DashboardCronJob] = []
     var lastError: String?
+    /// Top-of-window banner hub (window-scoped); optional so a missing host
+    /// degrades to no-op. Hard errors route here keyed by the surface id.
+    var banners: BannerCenter?
     var isLoading: Bool = false
     var selectionID: DashboardCronJob.ID?
     var draft: CronDraft?
@@ -33,8 +36,10 @@ final class CronHarness {
         do {
             jobs = try await client.listCronJobs()
             lastError = nil
+            banners?.dismiss(key: "cron")
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("cron", error.localizedDescription)
         }
     }
 
@@ -44,6 +49,14 @@ final class CronHarness {
     }
 
     func cancelAdd() { draft = nil }
+
+    /// Clears both state vars that open the secondary pane (the add draft and the
+    /// selected job) — used by the iPhone push to deselect the table when the
+    /// pushed editor page is popped via Back.
+    func closeSecondary() {
+        draft = nil
+        selectionID = nil
+    }
 
     func commitAdd(prompt: String, schedule: String, name: String) async {
         do {
@@ -56,6 +69,7 @@ final class CronHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("cron", error.localizedDescription)
         }
     }
 
@@ -74,6 +88,7 @@ final class CronHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("cron", error.localizedDescription)
         }
     }
 
@@ -83,6 +98,7 @@ final class CronHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("cron", error.localizedDescription)
         }
     }
 
@@ -96,6 +112,7 @@ final class CronHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("cron", error.localizedDescription)
         }
     }
 
@@ -105,6 +122,7 @@ final class CronHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("cron", error.localizedDescription)
         }
     }
 }
@@ -112,6 +130,8 @@ final class CronHarness {
 struct CronView: View {
     let client: DashboardClient?
     let hermesVersion: HermesVersion?
+
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
 
     @State private var harness: CronHarness?
 
@@ -135,6 +155,7 @@ struct CronView: View {
             }
         }
         .navigationTitle("Cron")
+        .dismissesBanner("cron", from: banners)
         // Keyed on client availability so the harness is built when the
         // dashboard finishes booting and `client` flips non-nil, not only on
         // first appear (a bare `.task` on the Group never re-runs for that flip).
@@ -142,6 +163,7 @@ struct CronView: View {
             guard let client else { harness = nil; return }
             if harness != nil { return }
             let h = CronHarness(client: client)
+            h.banners = banners
             harness = h
             await h.refresh()
         }
@@ -152,21 +174,29 @@ struct CronView: View {
         // Reachable only from the desktop window's Browse sidebar (macOS +
         // iPad); the iPhone shell has no Browse. `PlatformSplit` is a resizable
         // `HSplitView` on macOS, an `HStack`+`Divider` on iPad — no `#if`.
-        PlatformSplit(showsSecondary: harness.draft != nil || harness.selectedJob != nil) {
+        PlatformSplit(
+            showsSecondary: Binding(
+                get: { harness.draft != nil || harness.selectedJob != nil },
+                set: { if !$0 { harness.closeSecondary() } }
+            ),
+            secondaryTitle: editorTitle(harness)
+        ) {
             jobsTable(harness: harness)
-                .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 360, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             editorPane(harness: harness)
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar { toolbar(harness: harness) }
+        // Hard errors route to the top-of-window strip; only the capability
+        // warning stays in-surface.
         .manageBanner(
-            harness.lastError ?? capabilityBanner(
+            capabilityBanner(
                 .requiresDashboard,
                 feature: "Cron via Hermes dashboard",
                 version: hermesVersion
             ),
-            severity: harness.lastError != nil ? .error : .warning
+            severity: .warning
         )
     }
 
@@ -236,6 +266,14 @@ struct CronView: View {
             .disabled(harness.selectionID == nil)
             .help("Run the selected cron job now")
         }
+    }
+
+    /// Title for the pushed iPhone editor page — "New cron job" for an add draft,
+    /// or the selected job's name. nil when neither opens it (the pane is hidden).
+    private func editorTitle(_ harness: CronHarness) -> String? {
+        if harness.draft != nil { return "New cron job" }
+        if let job = harness.selectedJob { return job.name ?? job.id }
+        return nil
     }
 
     // Rendered only while adding a draft or with a job selected —

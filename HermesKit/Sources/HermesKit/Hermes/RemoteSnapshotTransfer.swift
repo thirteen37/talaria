@@ -14,6 +14,17 @@ public protocol RemoteSnapshotTransfer: Sendable {
     /// local filesystem. Implementations are expected to fail loudly on
     /// non-zero remote exit, oversize content, or local I/O errors.
     func fetch(remotePath: String, to: URL) async throws
+
+    /// Uploads the local file at `localURL` to `remotePath` on the host.
+    ///
+    /// Implementations write to a sibling remote temp path and then
+    /// atomically rename it over `remotePath`, so a concurrent reader (the
+    /// Hermes agent's own `memory` tool, say) never observes a half-written
+    /// file. The parent directory is created if missing. This is the first
+    /// non-dashboard *write* path — the only surface that needs it today is
+    /// the Memory editor (`MEMORY.md` / `USER.md`), which has no dashboard
+    /// route. See `docs/security.md`.
+    func upload(from localURL: URL, to remotePath: String) async throws
 }
 
 // MARK: - SFTP subprocess transfer (macOS only)
@@ -77,6 +88,46 @@ public struct SFTPSubprocessTransfer: RemoteSnapshotTransfer {
         try NIOSSHCatTransfer.installAtomically(from: tmpURL, to: to)
     }
 
+    public func upload(from localURL: URL, to remotePath: String) async throws {
+        guard profile.kind == .ssh, let host = profile.host, !host.isEmpty else {
+            throw SSHTransportError.other("profile is not an SSH profile")
+        }
+        guard FileManager.default.fileExists(atPath: localURL.path) else {
+            throw SSHTransportError.transferFailed("local upload source is missing at \(localURL.path)")
+        }
+
+        var arguments: [String] = []
+        if let port = profile.port {
+            arguments += ["-P", String(port)]
+        }
+        if let identityFile = profile.identityFile {
+            arguments += ["-i", identityFile]
+        }
+        arguments += ["-b", "-"]
+        let destination = profile.user.map { "\($0)@\(host)" } ?? host
+        arguments.append(destination)
+
+        // Upload to a sibling remote temp then rename over the target, so a
+        // concurrent reader of `remotePath` (the agent's own memory tool)
+        // never sees a torn write. Same-filesystem rename → atomic.
+        let remoteTmp = "\(remotePath).uploading-\(UUID().uuidString)"
+        let batch = Self.sftpPutCommands(localPath: localURL.path, remoteTmp: remoteTmp, remotePath: remotePath)
+            .joined(separator: "\n") + "\n"
+        let result = try await OneShotProcess.run(
+            executableURL: URL(fileURLWithPath: "/usr/bin/sftp"),
+            arguments: arguments,
+            stdin: Data(batch.utf8),
+            timeout: 60
+        )
+        if result.timedOut {
+            throw SSHTransportError.commandTimeout("sftp put timed out after 60s")
+        }
+        if result.exitCode != 0 {
+            let stderr = result.stderr.isEmpty ? result.stdout : result.stderr
+            throw SSHTransportError.transferFailed(stderr)
+        }
+    }
+
     /// Visible for testing. Builds the single-line sftp batch command
     /// that pulls the remote temp file to the local cache path. Both
     /// paths are double-quoted so a space in either (e.g. a Mac user
@@ -85,6 +136,25 @@ public struct SFTPSubprocessTransfer: RemoteSnapshotTransfer {
     /// inside double quotes.
     static func sftpGetCommand(remoteTmp: String, localPath: String) -> String {
         "get \(sftpQuote(remoteTmp)) \(sftpQuote(localPath))"
+    }
+
+    /// Visible for testing. Builds the sftp batch lines that upload `localPath`
+    /// to `remotePath` via a temp + rename. The leading `-` on `mkdir` tells
+    /// sftp batch mode to ignore a failure (the `memories/` dir already
+    /// existing is the normal case); `put`/`rename` keep their default
+    /// abort-on-error so a real failure surfaces a non-zero exit. OpenSSH's
+    /// `rename` uses the `posix-rename@openssh.com` extension, which overwrites
+    /// the destination atomically. All paths are double-quoted (sftp escapes
+    /// with backslash inside double quotes) so spaces don't split arguments.
+    static func sftpPutCommands(localPath: String, remoteTmp: String, remotePath: String) -> [String] {
+        var commands: [String] = []
+        let parent = (remotePath as NSString).deletingLastPathComponent
+        if !parent.isEmpty, parent != "/", parent != "." {
+            commands.append("-mkdir \(sftpQuote(parent))")
+        }
+        commands.append("put \(sftpQuote(localPath)) \(sftpQuote(remoteTmp))")
+        commands.append("rename \(sftpQuote(remoteTmp)) \(sftpQuote(remotePath))")
+        return commands
     }
 
     private static func sftpQuote(_ value: String) -> String {
@@ -150,6 +220,56 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
     }
 
     public func fetch(remotePath: String, to: URL) async throws {
+        let connection = try await makeConnection()
+        // No `defer { connection.close().wait() }` — calling
+        // EventLoopFuture.wait() from an async function blocks a
+        // cooperative-pool thread (anti-pattern flagged by swift-nio).
+        // Instead, close explicitly on every exit path.
+        do {
+            try await fetchOnConnection(
+                connection: connection,
+                remotePath: remotePath,
+                to: to
+            )
+        } catch {
+            _ = try? await connection.close().get()
+            throw error
+        }
+        _ = try? await connection.close().get()
+    }
+
+    public func upload(from localURL: URL, to remotePath: String) async throws {
+        guard FileManager.default.fileExists(atPath: localURL.path) else {
+            throw SSHTransportError.transferFailed("local upload source is missing at \(localURL.path)")
+        }
+        // Memory files are a few KB; reading the payload into memory keeps the
+        // stdin-streaming handler simple. The 256 MiB `maxBytes` cap still
+        // guards the read against a pathologically large source.
+        let payload: Data
+        do {
+            payload = try Data(contentsOf: localURL)
+        } catch {
+            throw SSHTransportError.transferFailed("could not read upload source: \(error.localizedDescription)")
+        }
+        if payload.count > Self.maxBytes {
+            throw SSHTransportError.transferFailed("upload source exceeds \(Self.maxBytes)-byte cap (got \(payload.count))")
+        }
+
+        let connection = try await makeConnection()
+        do {
+            try await uploadOnConnection(connection: connection, payload: payload, remotePath: remotePath)
+        } catch {
+            _ = try? await connection.close().get()
+            throw error
+        }
+        _ = try? await connection.close().get()
+    }
+
+    /// Opens a fresh authenticated SSH connection, reusing the same auth and
+    /// host-key delegates as the snapshot fetch — `upload` deliberately adds no
+    /// new trust surface. Typed host-key / auth errors are funneled through the
+    /// ACP transport's translator so both transports surface identical errors.
+    private func makeConnection() async throws -> Channel {
         guard let host = profile.host, !host.isEmpty else {
             throw SSHTransportError.other("profile is not an SSH profile")
         }
@@ -186,9 +306,8 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
                 }
             }
 
-        let connection: Channel
         do {
-            connection = try await bootstrap.connect(host: host, port: port).get()
+            return try await bootstrap.connect(host: host, port: port).get()
         } catch {
             // Typed host-key / auth errors raised by our delegates would
             // otherwise escape unwrapped and be reclassified as a generic
@@ -197,22 +316,6 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
             // surface identical typed errors for the same conditions.
             throw NIOSSHConnectError.map(error, host: host, port: port)
         }
-        // No `defer { connection.close().wait() }` — calling
-        // EventLoopFuture.wait() from an async function blocks a
-        // cooperative-pool thread (anti-pattern flagged by swift-nio).
-        // Instead, close explicitly on every exit path.
-
-        do {
-            try await fetchOnConnection(
-                connection: connection,
-                remotePath: remotePath,
-                to: to
-            )
-        } catch {
-            _ = try? await connection.close().get()
-            throw error
-        }
-        _ = try? await connection.close().get()
     }
 
     private func fetchOnConnection(connection: Channel, remotePath: String, to: URL) async throws {
@@ -263,6 +366,43 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
         // which left a window where the snapshot didn't exist on disk —
         // a concurrent `HermesDB.open` would have seen file-not-found.
         try Self.installAtomically(from: tmpURL, to: to)
+    }
+
+    private func uploadOnConnection(connection: Channel, payload: Data, remotePath: String) async throws {
+        let remoteTmp = "\(remotePath).uploading-\(UUID().uuidString)"
+        let command = Self.writeCommand(remoteTmp: remoteTmp, remotePath: remotePath)
+        let result: WriteResultBox
+        do {
+            result = try await runWriteExec(connection: connection, command: command, payload: payload)
+        } catch let typed as SSHTransportError {
+            throw typed
+        } catch {
+            throw SSHTransportError.transferFailed(error.localizedDescription)
+        }
+
+        if let error = result.error {
+            throw SSHTransportError.transferFailed(error.localizedDescription)
+        }
+        if result.exitCode != 0 {
+            let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw SSHTransportError.transferFailed(stderr.isEmpty ? "remote write exited \(result.exitCode)" : stderr)
+        }
+    }
+
+    /// Visible for testing. The remote shell line that receives the file on
+    /// stdin and atomically installs it: create the parent dir if missing,
+    /// `cat` stdin into a sibling temp, then `mv -f` it over the target (a
+    /// same-directory rename, atomic on POSIX filesystems) so a concurrent
+    /// reader never sees a partial write. Every path is single-quoted (no
+    /// shell expansion) exactly like the `cat` fetch command.
+    static func writeCommand(remoteTmp: String, remotePath: String) -> String {
+        let quote = ShellQuoting.shellQuote
+        let parent = (remotePath as NSString).deletingLastPathComponent
+        var prefix = ""
+        if !parent.isEmpty, parent != "/", parent != "." {
+            prefix = "mkdir -p \(quote(parent)) && "
+        }
+        return "\(prefix)cat > \(quote(remoteTmp)) && mv -f \(quote(remoteTmp)) \(quote(remotePath))"
     }
 
     /// Shared atomic-install helper for both transports. `replaceItemAt`
@@ -447,6 +587,122 @@ final class NIOSSHCatHandler: ChannelDuplexHandler, @unchecked Sendable {
     }
 }
 
+/// Per-upload child-channel handler. Requests the remote write command, streams
+/// the file as stdin, half-closes our output side to deliver stdin EOF, then
+/// accumulates stderr and captures the exit code. Modeled on
+/// ``NIOSSHCatHandler`` but inverted (we write stdin instead of reading stdout);
+/// the payload is small (memory files), so it's sent as a single channel-data
+/// message rather than chunked off-loop.
+///
+/// `@unchecked Sendable`: all handler state is touched only on the channel's
+/// event loop. The on-loop future continuations (exec reply, write completion)
+/// capture `context`, which stays valid for the brief active window between
+/// `channelActive` and the post-write half-close.
+final class NIOSSHWriteHandler: ChannelDuplexHandler, @unchecked Sendable {
+    typealias InboundIn = SSHChannelData
+    typealias InboundOut = Never
+    typealias OutboundIn = Never
+    typealias OutboundOut = SSHChannelData
+
+    private let command: String
+    private let payload: [UInt8]
+    private var complete: EventLoopPromise<NIOSSHCatTransfer.WriteResultBox>?
+    private var result = NIOSSHCatTransfer.WriteResultBox()
+    private var failed = false
+    private var timedOut = false
+
+    init(command: String, payload: Data, complete: EventLoopPromise<NIOSSHCatTransfer.WriteResultBox>) {
+        self.command = command
+        self.payload = Array(payload)
+        self.complete = complete
+    }
+
+    func handlerAdded(context: ChannelHandlerContext) {
+        let option = context.channel.setOption(ChannelOptions.allowRemoteHalfClosure, value: true)
+        option.assumeIsolated().whenFailure { error in
+            context.fireErrorCaught(error)
+        }
+    }
+
+    func channelActive(context: ChannelHandlerContext) {
+        let execRequest = SSHChannelRequestEvent.ExecRequest(command: command, wantReply: true)
+        context.triggerUserOutboundEvent(execRequest).assumeIsolated().whenComplete { [weak self] outcome in
+            switch outcome {
+            case .success:
+                self?.sendPayload(context: context)
+            case .failure(let error):
+                self?.fail(error: error)
+                context.close(promise: nil)
+            }
+        }
+    }
+
+    private func sendPayload(context: ChannelHandlerContext) {
+        guard !payload.isEmpty else {
+            // Empty file: nothing to stream, just signal stdin EOF so the
+            // remote `cat` writes an empty file and `mv` installs it.
+            context.close(mode: .output, promise: nil)
+            return
+        }
+        var buffer = context.channel.allocator.buffer(capacity: payload.count)
+        buffer.writeBytes(payload)
+        let data = SSHChannelData(type: .channel, data: .byteBuffer(buffer))
+        context.writeAndFlush(wrapOutboundOut(data)).assumeIsolated().whenComplete { [weak self] outcome in
+            switch outcome {
+            case .success:
+                // Half-close our output side → remote stdin EOF → `cat` finishes.
+                context.close(mode: .output, promise: nil)
+            case .failure(let error):
+                self?.fail(error: error)
+                context.close(promise: nil)
+            }
+        }
+    }
+
+    func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        let envelope = unwrapInboundIn(data)
+        guard case let .byteBuffer(bytes) = envelope.data else { return }
+        // The write command emits no stdout; only stderr is of interest.
+        if envelope.type == .stdErr {
+            result.stderr += String(decoding: bytes.readableBytesView, as: UTF8.self)
+        }
+    }
+
+    func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+        if let exit = event as? SSHChannelRequestEvent.ExitStatus {
+            result.exitCode = exit.exitStatus
+        }
+        context.fireUserInboundEventTriggered(event)
+    }
+
+    func channelInactive(context: ChannelHandlerContext) {
+        result.timedOut = timedOut
+        let promise = complete
+        complete = nil
+        promise?.succeed(result)
+        context.fireChannelInactive()
+    }
+
+    /// Called by ``NIOSSHCatTransfer.runWriteExec``'s timeout timer on the event
+    /// loop before it force-closes the channel.
+    func markTimedOut() {
+        timedOut = true
+    }
+
+    func errorCaught(context: ChannelHandlerContext, error: Error) {
+        fail(error: error)
+        context.close(promise: nil)
+    }
+
+    private func fail(error: Error) {
+        guard !failed else { return }
+        failed = true
+        result.error = error
+        complete?.succeed(result)
+        complete = nil
+    }
+}
+
 extension NIOSSHCatTransfer {
     /// Captured outcome of a single `cat` exec invocation. `timedOut` is
     /// set only by the fetch-timeout path so the caller can distinguish a
@@ -514,6 +770,55 @@ extension NIOSSHCatTransfer {
             // `exitCode == 0 && bytesWritten == 0` signature, and we
             // must not collapse those into a spurious timeout error.
             throw SSHTransportError.commandTimeout("cat exec exceeded \(Self.fetchTimeout) — remote stalled")
+        }
+        return result
+    }
+
+    /// Captured outcome of a single write exec. Mirrors ``CatResultBox`` minus
+    /// the byte counter (the write command emits no stdout to size).
+    public struct WriteResultBox: @unchecked Sendable {
+        public var exitCode: Int = 0
+        public var stderr: String = ""
+        public var error: Error?
+        public var timedOut: Bool = false
+
+        public init() {}
+    }
+
+    fileprivate func runWriteExec(
+        connection: Channel,
+        command: String,
+        payload: Data
+    ) async throws -> WriteResultBox {
+        let promise = connection.eventLoop.makePromise(of: WriteResultBox.self)
+
+        let childChannel = try await connection.eventLoop.flatSubmit { () -> EventLoopFuture<Channel> in
+            let childPromise = connection.eventLoop.makePromise(of: Channel.self)
+            do {
+                let sshHandler = try connection.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
+                sshHandler.createChannel(childPromise, channelType: .session) { childChannel, _ in
+                    childChannel.eventLoop.makeCompletedFuture {
+                        try childChannel.pipeline.syncOperations.addHandler(
+                            NIOSSHWriteHandler(command: command, payload: payload, complete: promise)
+                        )
+                    }
+                }
+            } catch {
+                childPromise.fail(error)
+            }
+            return childPromise.futureResult
+        }.get()
+
+        let timeout = connection.eventLoop.scheduleTask(in: Self.fetchTimeout) {
+            let handler = try? childChannel.pipeline.syncOperations.handler(type: NIOSSHWriteHandler.self)
+            handler?.markTimedOut()
+            childChannel.close(promise: nil)
+        }
+        promise.futureResult.whenComplete { _ in timeout.cancel() }
+
+        let result = try await promise.futureResult.get()
+        if result.timedOut {
+            throw SSHTransportError.commandTimeout("write exec exceeded \(Self.fetchTimeout) — remote stalled")
         }
         return result
     }

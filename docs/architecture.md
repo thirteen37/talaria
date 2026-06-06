@@ -32,7 +32,8 @@ Dashboard-backed surfaces today:
 - Cron: `/api/cron/jobs` plus pause/resume/trigger subroutes.
 - Kanban: `/api/plugins/kanban/*` — boards, tasks, links, comments, run logs.
 - Models: `/api/model/options`, `/api/model/auxiliary`, `/api/model/set`.
-- Environment: `/api/env*` (`.env` CRUD + reveal).
+- Environment: `/api/env*` (`.env` CRUD + reveal). Custom-var enumeration also reads the `.env` file directly (see below).
+- Memory: `GET /api/memory` for read-only provider status only. The built-in `MEMORY.md` / `USER.md` text has no dashboard route, so the Memory editor reads **and writes** those files directly on disk.
 - Logs: polled `/api/logs`.
 - Updates: `/api/status`, `/api/hermes/update`, `/api/actions/hermes-update/status`.
 - Profiles config editor: schema + current config via `/api/config/schema` and `/api/config`, non-destructive writes via `PUT /api/config`, and the profile list via `/api/profiles`. Soul and Personalities editors ride this surface (`/api/profiles/{profile}/soul` and `agent.personalities` in the config). Editing the default profile reuses the window's shared dashboard; editing a *named* profile launches an isolated profile-scoped dashboard (`hermes -p <name> dashboard`). An editable YAML mirror and the read-only two-profile comparison share the same surface.
@@ -48,6 +49,8 @@ A few operations remain on CLI fallbacks because Hermes does not expose dashboar
 - Gateway lifecycle writes: `hermes gateway start/stop/restart/install/uninstall`.
 
 One more, update check/apply (`hermes update --check`, `hermes update`), uses the CLI *by choice* even though the dashboard routes above exist: only the CLI reports the commits-behind verdict for source installs, which `/api/status` does not.
+
+All non-dashboard file access — the `.env` custom-var read and the Memory editor's `MEMORY.md` / `USER.md` read+write — routes through one unified `HermesFileStore` (`HermesKit/.../Hermes/`). It resolves the local URL or remote home-relative path and dispatches local `FileManager` vs. the SSH `RemoteSnapshotTransfer` (NIO `cat`, or system-`sftp` on macOS), now extended with a temp-then-atomic-rename `upload` for the direct-write case. `HermesSoulReader`, `HermesConfigReader`, and `HermesEnvFileReader` are thin wrappers over it; `HermesMemoryStore` is the memory-specific one. Remote writes reuse the read path's SSH auth and host-key trust, adding no new trust surface.
 
 Remote dashboard access on macOS is provided by spawning system `ssh` with a loopback `-L <local>:127.0.0.1:<remote>` forward and running `hermes dashboard` on the remote host. iOS reaches the dashboard over the pure-Swift NIO-SSH transport instead: one connection both execs `hermes dashboard` on the remote host and tunnels its HTTP — and the live-chat WebSocket — over `direct-tcpip` channels (no local forward), reusing the window's host-key trust so it doesn't re-prompt for a key the dashboard connection already trusted.
 

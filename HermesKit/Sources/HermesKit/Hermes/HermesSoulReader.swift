@@ -38,66 +38,25 @@ public enum HermesSoulReader {
         profileName: String,
         transfer: RemoteSnapshotTransfer? = nil
     ) async throws -> String {
-        switch profile.kind {
-        case .local:
-            return try readLocal(profile: profile, profileName: profileName)
-        case .ssh:
-            return try await readRemote(profile: profile, profileName: profileName, transfer: transfer)
+        do {
+            return try await HermesFileStore.read(
+                profile: profile,
+                location: .profileRelative(tail: soulRelativePath(profileName: profileName)),
+                transfer: transfer
+            )
+        } catch let error as HermesFileStoreError {
+            throw mapError(error)
         }
     }
 
-    private static func readLocal(profile: ServerProfile, profileName: String) throws -> String {
-        let home = profile.hermesHome.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
-            ?? URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-                .appendingPathComponent(".hermes", isDirectory: true)
-        let url = home.appendingPathComponent(soulRelativePath(profileName: profileName))
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            throw HermesSoulReaderError.notFound(path: url.path)
-        }
-        do {
-            return try String(contentsOf: url, encoding: .utf8)
-        } catch {
-            throw HermesSoulReaderError.readFailed(error.localizedDescription)
-        }
-    }
-
-    private static func readRemote(
-        profile: ServerProfile,
-        profileName: String,
-        transfer: RemoteSnapshotTransfer?
-    ) async throws -> String {
-        let active: RemoteSnapshotTransfer
-        if let transfer {
-            active = transfer
-        } else {
-            #if os(macOS)
-            active = SFTPSubprocessTransfer(profile: profile)
-            #else
-            throw HermesSoulReaderError.unsupportedPlatform
-            #endif
-        }
-
-        let remotePath = remoteSoulPath(hermesHome: profile.hermesHome, profileName: profileName)
-        let tmpURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("talaria-soul-\(UUID().uuidString).md")
-        defer { try? FileManager.default.removeItem(at: tmpURL) }
-
-        do {
-            try await active.fetch(remotePath: remotePath, to: tmpURL)
-        } catch let error as SSHTransportError {
-            if case let .transferFailed(message) = error,
-               message.lowercased().contains("no such file") {
-                throw HermesSoulReaderError.notFound(path: remotePath)
-            }
-            throw HermesSoulReaderError.readFailed(error.message)
-        } catch {
-            throw HermesSoulReaderError.readFailed(error.localizedDescription)
-        }
-
-        do {
-            return try String(contentsOf: tmpURL, encoding: .utf8)
-        } catch {
-            throw HermesSoulReaderError.readFailed(error.localizedDescription)
+    private static func mapError(_ error: HermesFileStoreError) -> HermesSoulReaderError {
+        switch error {
+        case .notFound(let path):
+            return .notFound(path: path)
+        case .readFailed(let detail), .writeFailed(let detail):
+            return .readFailed(detail)
+        case .transferUnavailable:
+            return .unsupportedPlatform
         }
     }
 }

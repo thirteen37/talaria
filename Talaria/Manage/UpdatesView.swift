@@ -15,6 +15,10 @@ final class UpdatesHarness {
     var applyLog: [LogEntry] = []
     var applyExitCode: Int32?
     var lastError: String?
+    /// Top-of-window banner hub (window-scoped). Hard errors route here keyed by
+    /// the surface id so they render full-width across the top. Optional so a
+    /// missing host degrades to no-op.
+    var banners: BannerCenter?
 
     let runner: HermesAdminRunning?
 
@@ -40,8 +44,10 @@ final class UpdatesHarness {
         lastError = nil
         do {
             status = try await HermesUpdates.check(runner: runner)
+            banners?.dismiss(key: "updates")
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("updates", error.localizedDescription)
         }
     }
 
@@ -51,6 +57,7 @@ final class UpdatesHarness {
         applyLog.removeAll()
         applyExitCode = nil
         lastError = nil
+        banners?.dismiss(key: "updates")
         let stream = HermesUpdates.apply(runner: runner)
         applyTask = Task { [weak self] in
             defer { Task { @MainActor in self?.isApplying = false } }
@@ -79,6 +86,7 @@ final class UpdatesHarness {
                 return
             } catch {
                 self?.lastError = error.localizedDescription
+                self?.banners?.surfaceError("updates", error.localizedDescription)
             }
         }
     }
@@ -92,6 +100,10 @@ final class UpdatesHarness {
 struct UpdatesView: View {
     let updates: UpdatesHarness?
     let hermesVersion: HermesVersion?
+
+    /// Window's top-of-window banner hub. Optional so a host that doesn't supply
+    /// one degrades to no-op (hard errors then simply don't render).
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
 
     init(updates: UpdatesHarness?, hermesVersion: HermesVersion? = nil) {
         self.updates = updates
@@ -114,6 +126,10 @@ struct UpdatesView: View {
             }
         }
         .navigationTitle("Updates")
+        .dismissesBanner("updates", from: banners)
+        // Wire the window banner hub into the window-owned harness on every
+        // appear (the `.task` below may early-return, so it can't own this).
+        .onAppear { updates?.banners = banners }
         // Kick off the first check once the harness is available. `status ==
         // nil` guards against clobbering an in-flight apply when the user
         // navigates back mid-apply — the apply log persists.
@@ -169,13 +185,15 @@ struct UpdatesView: View {
             applyLogView(harness: harness)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // Hard errors now route to the top-of-window strip; only the orange
+        // capability warning stays in-surface.
         .manageBanner(
-            harness.lastError ?? capabilityBanner(
+            capabilityBanner(
                 .updateCheck,
                 feature: "`hermes update --check`",
                 version: hermesVersion
             ),
-            severity: harness.lastError != nil ? .error : .warning
+            severity: .warning
         )
     }
 

@@ -132,6 +132,19 @@ bodies are JSON; the "Body" column lists the wrapping the dashboard's Pydantic m
 > There is **no** top-level `/api/soul`. It must be profile-scoped or you hit the SPA catch-all trap
 > above.
 
+### Memory (read-only status)
+
+| Method | Path           | Body | Returns / notes |
+| ------ | -------------- | ---- | --------------- |
+| GET    | `/api/memory`  | —    | `{active: <string>, providers: [{name, description, configured}], builtin_files: {memory: <int>, user: <int>}}`. `active = ""` means the **built-in** file-backed memory; `builtin_files` are byte sizes only. |
+
+> There is **no** dashboard route for the raw text of `MEMORY.md` / `USER.md`. The agent edits that
+> content via its internal `memory` tool. The Memory editor therefore reads **and writes** those files
+> directly on disk (the one direct-write exception — see `docs/security.md` and `docs/integration-coverage.md`),
+> using `GET /api/memory` only for the read-only provider line and the "external provider active" warning.
+> The provider **picker** lives in the Plugins screen via `PUT /api/memory/provider`; `POST /api/memory/reset`
+> is out of scope.
+
 ### Models (gated on `requiresModelAPI` ≥ `0.14.0`)
 
 | Method | Path                    | Body                                 | Returns / notes |
