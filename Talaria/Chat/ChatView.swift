@@ -40,7 +40,8 @@ struct ChatView: View {
                 turnStartDate: viewModel.turnStartDate,
                 gitBranch: viewModel.gitBranch,
                 contextUsed: viewModel.contextUsed,
-                contextSize: viewModel.contextSize
+                contextSize: viewModel.contextSize,
+                backendBadge: viewModel.backendKind?.badge
             )
 
             if viewModel.isReadOnly {
@@ -110,6 +111,9 @@ final class LocalChatViewModel {
     var turnStartDate: Date?
     var contextUsed: Int?
     var contextSize: Int?
+    /// Which transport this session is actually running on (ACP vs WS gateway),
+    /// surfaced as a small badge in the status bar for parity testing.
+    var backendKind: ChatBackendKind?
     let isReadOnly: Bool
 
     private weak var manager: SessionManager?
@@ -151,6 +155,9 @@ final class LocalChatViewModel {
         }
         statusText = "Session cwd: \(cwd)"
         loadGitBranch()
+        // The backend is booted by the time the session is registered, so this
+        // reflects the actual transport chosen (incl. any WS→ACP fallback).
+        backendKind = await manager.backendKind(for: sessionId)
 
         let stream = await manager.notifications(for: sessionId)
         notificationTask = Task { [weak self] in

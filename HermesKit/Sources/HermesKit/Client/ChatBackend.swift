@@ -1,5 +1,17 @@
 import Foundation
 
+/// Which transport a live chat session is running on. Surfaced in the chat UI
+/// (the "ACP / WS" badge) and used for parity testing during the migration.
+public enum ChatBackendKind: String, Sendable, Equatable {
+    /// ACP JSON-RPC over a `hermes acp` subprocess / SSH (``HermesClient``).
+    case acp
+    /// Dashboard `/api/ws` JSON-RPC gateway (``GatewayChatClient``).
+    case gateway
+
+    /// Short label for the chat status bar.
+    public var badge: String { self == .gateway ? "WS" : "ACP" }
+}
+
 /// The subset of a live-chat client that `SessionManager` and the chat UI
 /// actually use. It exists so the same `SessionManager` / `LocalChatViewModel`
 /// pipeline can be driven by either backend during the migration off ACP:

@@ -128,6 +128,13 @@ public actor SessionManager {
         sessions[id]?.client
     }
 
+    /// Which concrete backend a live session is using — for the chat UI's
+    /// "ACP / WS" indicator and parity testing. `nil` if the session isn't open.
+    public func backendKind(for id: SessionId) -> ChatBackendKind? {
+        guard let client = sessions[id]?.client else { return nil }
+        return client is GatewayChatClient ? .gateway : .acp
+    }
+
     public func cwd(for id: SessionId) -> String? {
         sessions[id]?.cwd
     }

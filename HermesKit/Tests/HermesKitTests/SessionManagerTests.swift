@@ -23,6 +23,50 @@ struct SessionManagerTests {
     }
 
     @Test
+    func backendKindReportsACPForTransportBackedSession() async throws {
+        let scripter = TransportScripter()
+        let manager = SessionManager { await scripter.next() }
+
+        let openTask = Task { try await manager.openNew(cwd: "/tmp") }
+        try await scripter.respondToInitialize()
+        try await scripter.respondToNewSession(sessionId: "abc")
+        _ = try await openTask.value
+
+        #expect(await manager.backendKind(for: "abc") == .acp)
+        #expect(await manager.backendKind(for: "missing") == nil)
+    }
+
+    @Test
+    func backendKindReportsGatewayForGatewayBackedSession() async throws {
+        // A SessionManager whose factory yields a GatewayChatClient reports
+        // `.gateway`, so the chat UI's badge reflects the WS path.
+        let socket = FakeGatewayWebSocket()
+        let manager = SessionManager(backendFactory: { GatewayChatClient(webSocket: socket) })
+
+        let openTask = Task { try await manager.openNew(cwd: "/tmp") }
+        // Respond to the session.create the gateway client sends.
+        let frame = try await socket.waitForSent(at: 0)
+        socket.pushInbound(gatewayResponse(id: frame, sessionId: "rt-1"))
+        let state = try await openTask.value
+
+        #expect(await manager.backendKind(for: state.id) == .gateway)
+    }
+
+    /// Builds a `{jsonrpc,id,result:{session_id}}` response for the id in `frame`.
+    private func gatewayResponse(id frame: Data, sessionId: String) -> Data {
+        let object = (try? JSONDecoder().decode(JSONValue.self, from: frame)).flatMap { value -> String? in
+            if case let .object(o) = value, case let .string(id)? = o["id"] { return id }
+            return nil
+        } ?? ""
+        let response = JSONValue.object([
+            "jsonrpc": .string("2.0"),
+            "id": .string(object),
+            "result": .object(["session_id": .string(sessionId)])
+        ])
+        return (try? JSONEncoder().encode(response)) ?? Data()
+    }
+
+    @Test
     func openExistingIssuesSessionLoad() async throws {
         let scripter = TransportScripter()
         let manager = SessionManager { await scripter.next() }

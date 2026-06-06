@@ -71,6 +71,12 @@ final class ServerWindowHarness {
     /// for capability gating — see ``effectiveHermesVersion``.
     var liveHermesVersion: HermesVersion?
 
+    /// Shared with the chat backend factory so it can gate WS-vs-ACP selection on
+    /// the live version at session-open time (the factory is built before the
+    /// dashboard — and thus the version — is known). `refreshLiveVersion()` pushes
+    /// the resolved version here. nil on windows that don't use gateway chat.
+    var chatVersionBox: LiveVersionBox?
+
     /// The version every capability banner should gate on: the **live**
     /// dashboard status version when known, else the profile's cached probe
     /// version. The cached value is captured once at probe time and never
@@ -151,7 +157,10 @@ final class ServerWindowHarness {
     /// parity; gated additionally on the connected Hermes version
     /// (`HermesCapability.gatewayChat`). macOS only for now — the iOS NIO-SSH
     /// path needs `NIOSSHGatewayWebSocket` (Phase 3). See `docs/gateway-chat.md`.
-    static let useGatewayChatDefaultsKey = "HermesKit.useGatewayChat"
+    ///
+    /// `nonisolated` so the per-session backend factory (`@Sendable`) and
+    /// `preferGatewayChat()` can read it off the main actor.
+    nonisolated static let useGatewayChatDefaultsKey = "HermesKit.useGatewayChat"
 
     /// Forces a fresh dashboard connection from *any* state — the manual
     /// reconnect. It covers both the first-connect retry (a brand-new host not
@@ -196,6 +205,8 @@ final class ServerWindowHarness {
         guard let dashboardClient else { return }
         if let status = try? await dashboardClient.getStatus() {
             liveHermesVersion = HermesVersion(status.version)
+            // Let the chat backend factory see the version for WS-vs-ACP gating.
+            chatVersionBox?.set(liveHermesVersion)
         }
     }
 
