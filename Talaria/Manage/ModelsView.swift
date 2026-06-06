@@ -15,6 +15,11 @@ final class ModelsHarness {
     var assignments: DashboardModelAssignments?
     var isLoading: Bool = false
     var lastError: String?
+    /// Top-of-window banner hub (window-scoped). Hard errors route here keyed by
+    /// the surface id so they render full-width across the top; a successful
+    /// endpoint save posts a transient confirmation. Optional so a missing host
+    /// degrades to no-op.
+    var banners: BannerCenter?
     /// Non-nil while the provider/model picker pane is open.
     var pickerTarget: ModelPickerTarget?
     /// Slots with a write in flight, so their controls disable without
@@ -90,6 +95,11 @@ final class ModelsHarness {
             customEndpoints = CustomEndpoint.list(in: config)
         }
         lastError = firstError
+        if let firstError {
+            banners?.surfaceError("models", firstError)
+        } else {
+            banners?.dismiss(key: "models")
+        }
     }
 
     // MARK: - Picker lifecycle
@@ -187,6 +197,7 @@ final class ModelsHarness {
             fresh = try await client.getConfig()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("models", error.localizedDescription)
             return false
         }
 
@@ -238,7 +249,9 @@ final class ModelsHarness {
                     && $0.baseURL == endpoint.baseURL
                     && $0.defaultModel == endpoint.defaultModel
             }) {
-                lastError = "An endpoint named “\(endpoint.name)” with that base URL already exists."
+                let message = "An endpoint named “\(endpoint.name)” with that base URL already exists."
+                lastError = message
+                banners?.surfaceError("models", message)
                 return false
             }
             draft = dictDraft(slug: CustomEndpoint.slug(forName: endpoint.name, existing: takenSlugs()))
@@ -254,7 +267,9 @@ final class ModelsHarness {
             // success while a just-written key var was left orphaned. Failing up
             // front keeps the sheet open with a real error and writes nothing.
             guard let entry = CustomEndpoint.listEntry(for: anchor, in: fresh) else {
-                lastError = "This endpoint no longer exists — it may have been removed in another window. Reopen the list and try again."
+                let message = "This endpoint no longer exists — it may have been removed in another window. Reopen the list and try again."
+                lastError = message
+                banners?.surfaceError("models", message)
                 return false
             }
             oldKeyEnv = Self.listEntryKeyEnv(entry)
@@ -273,7 +288,7 @@ final class ModelsHarness {
             (newKey?.isEmpty == false) ? .set : (draft.hasAPIKey ? .keep : .remove)
         let newVarName = CustomEndpoint.apiKeyEnvVarName(forSlug: draft.slug)
 
-        return await runEndpoint(slug: draft.slug) {
+        let saved = await runEndpoint(slug: draft.slug) {
             if let newKey, !newKey.isEmpty {
                 try await $0.setEnvVar(key: newVarName, value: newKey)
             }
@@ -295,6 +310,14 @@ final class ModelsHarness {
                 try? await $0.deleteEnvVar(key: oldVar)
             }
         }
+        // Only confirm when the write *and* its post-write reload succeeded
+        // (`runEndpoint` returns true even if its internal refresh failed). A
+        // failed reload leaves `lastError` set, so its error must stand rather
+        // than be replaced by a green success over stale data.
+        if saved, lastError == nil {
+            banners?.surfaceSuccess("models", "Endpoint saved")
+        }
+        return saved
     }
 
     /// Removes an endpoint from wherever it lives — `providers.<slug>` (dict) or
@@ -427,10 +450,12 @@ final class ModelsHarness {
         do {
             try await body(client)
             lastError = nil
+            banners?.dismiss(key: "models")
             await refresh()
             return true
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("models", error.localizedDescription)
             return false
         }
     }
@@ -443,10 +468,12 @@ final class ModelsHarness {
         do {
             try await body(client)
             lastError = nil
+            banners?.dismiss(key: "models")
             pickerTarget = nil
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("models", error.localizedDescription)
         }
     }
 
@@ -465,6 +492,10 @@ final class ModelsHarness {
 struct ModelsView: View {
     let client: DashboardClient?
     let hermesVersion: HermesVersion?
+
+    /// Window's top-of-window banner hub. Optional so a host that doesn't supply
+    /// one degrades to no-op (hard errors then simply don't render).
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
 
     @State private var harness: ModelsHarness?
     /// Drives the confirm dialog for the destructive "Reset auxiliary" action —
@@ -510,6 +541,7 @@ struct ModelsView: View {
             }
         }
         .navigationTitle("Models")
+        .dismissesBanner("models", from: banners)
         // Keyed on client availability so the harness is built when the
         // dashboard finishes booting and `client` flips non-nil (matching the
         // other dashboard surfaces).
@@ -517,6 +549,7 @@ struct ModelsView: View {
             guard let client else { harness = nil; return }
             if harness != nil { return }
             let h = ModelsHarness(client: client)
+            h.banners = banners
             harness = h
             await h.refresh()
         }
@@ -538,13 +571,14 @@ struct ModelsView: View {
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar { toolbar(harness: harness) }
+        // Hard errors route to the top-of-window strip; only the capability warning stays in-surface.
         .manageBanner(
-            harness.lastError ?? capabilityBanner(
+            capabilityBanner(
                 .requiresModelAPI,
                 feature: "Model management via Hermes dashboard",
                 version: hermesVersion
             ),
-            severity: harness.lastError != nil ? .error : .warning
+            severity: .warning
         )
         .alert("Reset all auxiliary models?", isPresented: $showResetConfirm) {
             Button("Reset", role: .destructive) {

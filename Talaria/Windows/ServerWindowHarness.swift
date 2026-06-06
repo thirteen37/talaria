@@ -14,6 +14,11 @@ import SwiftUI
 final class ServerWindowHarness {
     let store: SessionsStore
     let profile: ServerProfile
+    /// Window-scoped banner hub for the top-of-window strip. All hard errors
+    /// (session, dashboard) and transient success/info notices route here; it
+    /// rebuilds with the harness on a profile switch, so a stale window's
+    /// banners never leak into the next profile. See ``BannerCenter``.
+    let banners = BannerCenter()
     /// The active Hermes profile (`hermes -p <name>`) this window is scoped to.
     /// `default` for the unscoped install. Every consumer the harness bundles
     /// (ACP transport, admin runner, dashboard supervisor) is built for this

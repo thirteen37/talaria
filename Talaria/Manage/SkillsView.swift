@@ -8,6 +8,12 @@ final class SkillsHarness {
     var rows: [DashboardSkill] = []
     var isLoading: Bool = false
     var lastError: String?
+    /// Top-of-window banner hub (window-scoped). Hard errors route here keyed by
+    /// ``bannerKey`` so they render full-width across the top. Optional so a
+    /// missing host degrades to no-op.
+    var banners: BannerCenter?
+    /// Surface id used to key this list's banners ("skills"), set by the view.
+    var bannerKey: String = "list"
     var selectionID: String?
     var toggling: Set<String> = []
 
@@ -62,8 +68,10 @@ final class SkillsHarness {
         do {
             rows = try await client.listSkills()
             lastError = nil
+            banners?.dismiss(key: bannerKey)
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
         }
         await refreshHubInstalled()
         // Probe every hub skill for upstream updates fire-and-forget so the
@@ -85,7 +93,10 @@ final class SkillsHarness {
             hubInstalledNames = Set(installed.filter(\.isHubManaged).map(\.name))
         } catch {
             hubInstalledNames = []
-            if lastError == nil { lastError = error.localizedDescription }
+            if lastError == nil {
+                lastError = error.localizedDescription
+                banners?.surfaceError(bannerKey, error.localizedDescription)
+            }
         }
     }
 
@@ -99,6 +110,7 @@ final class SkillsHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
         }
     }
 
@@ -150,6 +162,7 @@ final class SkillsHarness {
             }
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
         }
     }
 
@@ -163,6 +176,7 @@ final class SkillsHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
         }
     }
 
@@ -193,6 +207,7 @@ final class SkillsHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
         }
     }
 }
@@ -201,6 +216,10 @@ struct SkillsView: View {
     let client: DashboardClient?
     let runner: HermesAdminRunning?
     let hermesVersion: HermesVersion?
+
+    /// Window's top-of-window banner hub. Optional so a host that doesn't supply
+    /// one degrades to no-op (hard errors then simply don't render).
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
 
     @State private var harness: SkillsHarness?
     // Both hub sections collapse by default so the installed list owns the
@@ -241,6 +260,7 @@ struct SkillsView: View {
             }
         }
         .navigationTitle("Skills")
+        .dismissesBanner("skills", from: banners)
         // Keyed on client availability so the harness is built when the
         // dashboard finishes booting and `client` flips non-nil, not only on
         // first appear (a bare `.task` on the Group never re-runs for that flip).
@@ -248,6 +268,8 @@ struct SkillsView: View {
             guard let client else { harness = nil; return }
             if harness != nil { return }
             let h = SkillsHarness(client: client, runner: runner)
+            h.banners = banners
+            h.bannerKey = "skills"
             harness = h
             await h.refresh()
         }
@@ -272,19 +294,19 @@ struct SkillsView: View {
                 .help("Refresh the skills list")
             }
         }
+        // Hard errors route to the top-of-window strip; only the capability warning stays in-surface.
         .manageBanner(
-            harness.lastError
-                ?? capabilityBanner(
-                    .requiresDashboard,
-                    feature: "Skills via Hermes dashboard",
-                    version: hermesVersion
-                )
+            capabilityBanner(
+                .requiresDashboard,
+                feature: "Skills via Hermes dashboard",
+                version: hermesVersion
+            )
                 ?? capabilityBanner(
                     .skillsHub,
                     feature: "Installing, updating and removing Skills Hub skills",
                     version: hermesVersion
                 ),
-            severity: harness.lastError != nil ? .error : .warning
+            severity: .warning
         )
     }
 

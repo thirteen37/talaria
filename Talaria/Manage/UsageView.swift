@@ -26,6 +26,10 @@ final class UsageHarness {
     var analytics: DashboardUsageAnalytics?
     var isLoading: Bool = false
     var lastError: String?
+    /// Top-of-window banner hub (window-scoped). Hard errors route here keyed by
+    /// the surface id so they render full-width across the top. Optional so a
+    /// missing host degrades to no-op.
+    var banners: BannerCenter?
     /// The active look-back window. Changing it re-queries.
     var range: UsageRange = .month
 
@@ -43,8 +47,10 @@ final class UsageHarness {
         do {
             analytics = try await client.getUsageAnalytics(days: range.rawValue)
             lastError = nil
+            banners?.dismiss(key: "usage")
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("usage", error.localizedDescription)
         }
     }
 
@@ -68,6 +74,10 @@ struct UsageView: View {
     let client: DashboardClient?
     let hermesVersion: HermesVersion?
 
+    /// Window's top-of-window banner hub. Optional so a host that doesn't supply
+    /// one degrades to no-op (hard errors then simply don't render).
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
+
     @State private var harness: UsageHarness?
 
     init(client: DashboardClient?, hermesVersion: HermesVersion? = nil) {
@@ -90,6 +100,7 @@ struct UsageView: View {
             }
         }
         .navigationTitle("Usage")
+        .dismissesBanner("usage", from: banners)
         // Keyed on client availability so the harness is built when the
         // dashboard finishes booting and `client` flips non-nil, matching the
         // other dashboard surfaces (Cron, Models).
@@ -97,6 +108,7 @@ struct UsageView: View {
             guard let client else { harness = nil; return }
             if harness != nil { return }
             let h = UsageHarness(client: client)
+            h.banners = banners
             harness = h
             await h.refresh()
         }
@@ -128,13 +140,14 @@ struct UsageView: View {
                 ProgressView()
             }
         }
+        // Hard errors route to the top-of-window strip; only the capability warning stays in-surface.
         .manageBanner(
-            harness.lastError ?? capabilityBanner(
+            capabilityBanner(
                 .requiresDashboard,
                 feature: "Usage analytics via Hermes dashboard",
                 version: hermesVersion
             ),
-            severity: harness.lastError != nil ? .error : .warning
+            severity: .warning
         )
     }
 

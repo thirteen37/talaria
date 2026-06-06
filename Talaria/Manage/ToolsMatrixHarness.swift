@@ -6,7 +6,20 @@ import HermesKit
 final class ToolsMatrixHarness {
     var matrix: ToolsMatrix?
     var isLoading: Bool = false
-    var lastError: String?
+    /// Hard errors mirror to the top-of-window strip keyed "tools" via the
+    /// observer, so every mutation site routes without per-call wiring.
+    var lastError: String? {
+        didSet {
+            if let lastError {
+                banners?.surfaceError("tools", lastError)
+            } else {
+                banners?.dismiss(key: "tools")
+            }
+        }
+    }
+    /// Top-of-window banner hub (window-scoped); optional so a missing host
+    /// degrades to no-op.
+    var banners: BannerCenter?
     var busyCells: Set<String> = []
 
     /// Hermes' known env vars (`GET /api/env`), used to drive each tool's config

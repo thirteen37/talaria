@@ -246,6 +246,9 @@ struct PhoneServerWindow: View {
         // Track this window's foreground state (to gate notifications) and
         // consume a tapped-notification route addressed to this profile.
         .chatNotificationRouting(store: harness.store, profileId: harness.profile.id)
+        // Full-width banner strip across the top of the window: bridges
+        // session/dashboard errors + the web-UI progress note from the sidebar.
+        .bridgeWindowBanners(harness: harness)
     }
 
     @ViewBuilder
@@ -273,60 +276,9 @@ struct PhoneServerWindow: View {
                 isLoadingHermesProfiles: hermesProfilesLoading
             )
 
-            if let error = harness.store.lastError {
-                Section {
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(error)
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                            Button("Dismiss") { harness.store.lastError = nil }
-                                .buttonStyle(.borderless)
-                                .controlSize(.mini)
-                        }
-                    }
-                }
-            }
-
-            if harness.isBuildingWebUI {
-                Section {
-                    HStack(alignment: .top, spacing: 6) {
-                        ProgressView()
-                            .controlSize(.small)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Building web UI…")
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                            // Dimmed primary, not .secondary: secondary text can
-                            // vanish over material on-device (iOS vibrancy bug).
-                            Text("Hermes is compiling its dashboard after an update. This can take a minute.")
-                                .font(.caption2)
-                                .foregroundStyle(.primary)
-                                .opacity(0.6)
-                        }
-                    }
-                }
-            }
-
-            if let dashboardError = harness.dashboardError {
-                Section {
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(dashboardError)
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                            Button("Reconnect") { harness.reconnectDashboard() }
-                                .buttonStyle(.borderless)
-                                .controlSize(.small)
-                                .help("Reconnect the Hermes dashboard")
-                        }
-                    }
-                }
-            }
+            // Connection / session errors and the "Building web UI…" progress
+            // note no longer render here — they're bridged to the full-width
+            // top-of-window strip (see `bridgeWindowBanners` in `content`).
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {

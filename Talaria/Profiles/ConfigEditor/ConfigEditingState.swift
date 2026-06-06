@@ -38,7 +38,20 @@ final class ConfigEditingState: Identifiable {
     var yamlParseError: String?
 
     var isLoading = false
-    var lastError: String?
+    /// Hard errors mirror to the top-of-window strip keyed "config" via the
+    /// observer; the in-surface banner keeps only the dashboard-unavailable warning.
+    var lastError: String? {
+        didSet {
+            if let lastError {
+                banners?.surfaceError("config", lastError)
+            } else {
+                banners?.dismiss(key: "config")
+            }
+        }
+    }
+    /// Top-of-window banner hub (window-scoped); optional so a missing host
+    /// degrades to no-op.
+    var banners: BannerCenter?
     /// Dashboard client unavailable (not yet online, or spawn failed): the editor
     /// degrades to a read-only YAML view from the on-disk config and disables Save.
     var dashboardUnavailable = false
@@ -370,6 +383,7 @@ final class ConfigEditingState: Identifiable {
                 toPut = ProfileConfigForm.merged(into: fresh, edits: edits)
             }
             try await client.updateConfig(toPut)
+            banners?.surfaceSuccess("config", "Configuration saved")
             load()
         } catch {
             lastError = error.localizedDescription

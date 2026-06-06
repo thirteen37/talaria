@@ -38,8 +38,27 @@ final class ConfigEditorHarness {
     /// editing states.
     var showDifferencesOnly = false
 
-    /// Profile-list error (config errors live on the editing states).
-    var lastError: String?
+    /// Profile-list error (config errors live on the editing states). Mirrors to
+    /// the top-of-window strip keyed "config", alongside the source state's errors.
+    var lastError: String? {
+        didSet {
+            if let lastError {
+                banners?.surfaceError("config", lastError)
+            } else {
+                banners?.dismiss(key: "config")
+            }
+        }
+    }
+
+    /// Top-of-window banner hub (window-scoped); optional so a missing host
+    /// degrades to no-op. Propagated to the source/dest editing states so their
+    /// hard errors and the "Configuration saved" success route to the same strip.
+    var banners: BannerCenter? {
+        didSet {
+            source.banners = banners
+            dest?.banners = banners
+        }
+    }
 
     // Dependencies
     private let defaultClientProvider: @MainActor () -> DashboardClient?
@@ -200,6 +219,7 @@ final class ConfigEditorHarness {
         let previousTask = compareTask
         let previousDest = dest
         let newDest = makeState(for: name)
+        newDest.banners = banners
         dest = newDest
         compareTask = Task { [weak self] in
             await previousTask?.value

@@ -6,6 +6,8 @@ struct ToolsView: View {
     let runner: HermesAdminRunning?
     let hermesVersion: HermesVersion?
 
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
+
     @State private var harness: ToolsMatrixHarness?
 
     init(client: DashboardClient?, runner: HermesAdminRunning?, hermesVersion: HermesVersion? = nil) {
@@ -35,6 +37,7 @@ struct ToolsView: View {
             }
         }
         .navigationTitle("Tools")
+        .dismissesBanner("tools", from: banners)
         .task(id: client != nil) {
             guard let client, runner != nil else {
                 harness = nil
@@ -42,6 +45,7 @@ struct ToolsView: View {
             }
             if harness != nil { return }
             let h = ToolsMatrixHarness(client: client, runner: runner)
+            h.banners = banners
             harness = h
             await h.refresh()
         }
@@ -78,13 +82,15 @@ struct ToolsView: View {
                 .frame(minWidth: 320, idealWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Hard errors route to the top-of-window strip; only the capability
+        // warning stays in-surface.
         .manageBanner(
-            harness.lastError ?? capabilityBanner(
+            capabilityBanner(
                 .toolsEnablePerPlatform,
                 feature: "Per-platform tools enable/disable",
                 version: hermesVersion
             ),
-            severity: harness.lastError != nil ? .error : .warning
+            severity: .warning
         )
     }
 
