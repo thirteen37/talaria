@@ -1300,12 +1300,31 @@ public struct SessionInfoUpdate: ACPMessage {
     public var meta: [String: JSONValue]?
     public var title: String?
     public var updatedAt: String?
-    public init(meta: [String: JSONValue]? = nil, title: String? = nil, updatedAt: String? = nil) {
+    /// Live session metadata the gateway reports (`session.info`): the active
+    /// model/mode alias, working directory, and git branch. Optional so the ACP
+    /// `session_info_update` path (which only carries title/updatedAt) still
+    /// round-trips, and so a title-only update doesn't clobber them.
+    public var model: String?
+    public var cwd: String?
+    public var branch: String?
+    public init(
+        meta: [String: JSONValue]? = nil,
+        title: String? = nil,
+        updatedAt: String? = nil,
+        model: String? = nil,
+        cwd: String? = nil,
+        branch: String? = nil
+    ) {
         self.meta = meta
         self.title = title
         self.updatedAt = updatedAt
+        self.model = model
+        self.cwd = cwd
+        self.branch = branch
     }
-    enum CodingKeys: String, CodingKey { case meta = "_meta"; case title; case updatedAt }
+    enum CodingKeys: String, CodingKey {
+        case meta = "_meta"; case title; case updatedAt; case model; case cwd; case branch
+    }
 }
 
 public struct UsageUpdate: ACPMessage {

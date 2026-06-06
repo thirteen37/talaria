@@ -279,7 +279,13 @@ final class SessionsStore {
 
         do {
             let source = try await effectiveSource(for: summary)
-            if let source, source != "acp" {
+            // Talaria's own live chat is now created over the `/api/ws` gateway,
+            // which Hermes tags `source="tui"` (its embedded-chat surface) — not
+            // the legacy `"acp"` the old subprocess backend used. Both are
+            // resumable as live, editable chats via `session.resume`, so both
+            // must stay editable; only genuinely non-live sources (e.g. a
+            // one-shot `"cli"` run) open read-only.
+            if let source, !Self.liveResumableSources.contains(source.lowercased()) {
                 try await openReadOnly(summary, source: source)
                 return
             }
@@ -292,7 +298,10 @@ final class SessionsStore {
             insert(OpenSession(id: state.id, cwd: state.cwd, title: summary.title))
             selection = state.id
             attachStatus(id: state.id)
-            await ensureViewModel(id: state.id, cwd: state.cwd)
+            // Seed the prior transcript so a resumed session shows its history
+            // immediately (the live gateway doesn't replay it as updates).
+            let history = await liveHistory(for: state.id)
+            await ensureViewModel(id: state.id, cwd: state.cwd, seedMessages: history)
         } catch SessionManagerError.duplicateSession {
             // A concurrent caller registered first; just focus the session.
             selection = summary.id
@@ -301,6 +310,12 @@ final class SessionsStore {
             lastError = Self.describe(error)
         }
     }
+
+    /// Session `source` values Talaria can reopen as a live, editable chat over
+    /// the dashboard gateway. `"acp"` = the legacy ACP subprocess backend;
+    /// `"tui"` = the `/api/ws` gateway surface (Talaria's current backend and the
+    /// dashboard's own chat tab). Anything else opens read-only.
+    private static let liveResumableSources: Set<String> = ["acp", "tui"]
 
     private func effectiveSource(for summary: HermesSessionSummary) async throws -> String? {
         if let source = summary.source {
@@ -311,6 +326,21 @@ final class SessionsStore {
         }
         let detail = try await dashboardClient.sessionDetail(id: summary.id)
         return detail.source
+    }
+
+    /// Loads a resumed session's prior transcript via the dashboard
+    /// (`GET /api/sessions/{id}` messages) so the live chat opens populated.
+    /// Best-effort: a failure here just yields an empty seed (the session still
+    /// opens live), rather than aborting the open.
+    private func liveHistory(for id: SessionId) async -> [ChatTranscriptMessage] {
+        guard let dashboardClient else { return [] }
+        do {
+            let payload = try await dashboardClient.sessionMessages(id: id)
+            return SessionHistoryMapper.messages(from: payload.messages)
+        } catch {
+            AppLog.session.error("history seed failed for \(id, privacy: .public): \(String(describing: error), privacy: .public)")
+            return []
+        }
     }
 
     private func openReadOnly(_ summary: HermesSessionSummary, source: String) async throws {
@@ -422,11 +452,23 @@ final class SessionsStore {
         viewModels[id]
     }
 
-    private func ensureViewModel(id: SessionId, cwd: String) async {
+    private func ensureViewModel(
+        id: SessionId,
+        cwd: String,
+        seedMessages: [ChatTranscriptMessage] = []
+    ) async {
         if viewModels[id] != nil {
             return
         }
         let vm = LocalChatViewModel(manager: manager, sessionId: id, cwd: cwd, store: self)
+        // Seed the prior transcript for a resumed session. The live gateway
+        // backend carries history in the `session.resume` *result* (not as
+        // streamed updates the way the old ACP path did), so without this the
+        // chat would open blank until the next turn. New live turns stream in
+        // and append after the seed.
+        if !seedMessages.isEmpty {
+            vm.messages = seedMessages
+        }
         // Seed the header from any title the open session already carries (e.g.
         // a dashboard title captured by `openExisting`), so reopening a titled
         // session shows it immediately, before any new notification arrives.
@@ -453,7 +495,7 @@ final class SessionsStore {
             tuiReconcileTask?.cancel()
             tuiReconcileTask = nil
         }
-        // TUI tabs never touched the ACP stack (`manager` / `viewModels`); they
+        // TUI tabs never touched the chat stack (`manager` / `viewModels`); they
         // own a live terminal process instead. Drop the spec and let the macOS
         // registry terminate the process.
         if isTUI {
@@ -496,9 +538,9 @@ final class SessionsStore {
             lastError = "Dashboard not reachable"
             return
         }
-        // Tear down our ACP session first so the running `hermes acp` process
-        // releases its writer on the row before the dashboard delete fires.
-        // Running both in parallel can produce FK errors or orphan messages.
+        // Tear down our live chat session first so the dashboard's gateway
+        // session releases its writer on the row before the dashboard delete
+        // fires. Running both in parallel can produce FK errors or orphan messages.
         await closeTab(id)
         do {
             try await dashboardClient.deleteSession(id: id)

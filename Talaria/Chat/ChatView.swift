@@ -25,6 +25,10 @@ struct ChatView: View {
                     }
                     .padding(16)
                 }
+                // Open at the bottom so a resumed session's seeded history shows
+                // its most recent messages first (the `onChange` below only fires
+                // on later changes, not the initial seed).
+                .defaultScrollAnchor(.bottom)
                 .onChange(of: viewModel.messages) { _, messages in
                     guard let last = messages.last else {
                         return
@@ -38,6 +42,7 @@ struct ChatView: View {
                 hasError: viewModel.hasError,
                 isSending: viewModel.isSending,
                 turnStartDate: viewModel.turnStartDate,
+                model: viewModel.model,
                 gitBranch: viewModel.gitBranch,
                 contextUsed: viewModel.contextUsed,
                 contextSize: viewModel.contextSize
@@ -107,6 +112,9 @@ final class LocalChatViewModel {
     var pendingPermission: PermissionPromptState?
     var availableCommands: [AvailableCommand] = []
     var gitBranch: String?
+    /// Active model/mode alias reported by the gateway (`session.info`), shown
+    /// as a badge in the status bar. Nil until the first session-info update.
+    var model: String?
     var turnStartDate: Date?
     var contextUsed: Int?
     var contextSize: Int?
@@ -354,6 +362,15 @@ final class LocalChatViewModel {
         case let .usageUpdate(update):
             contextUsed = update.used
             contextSize = update.size
+        case let .sessionInfoUpdate(update):
+            if let model = update.model, !model.isEmpty {
+                self.model = model
+            }
+            // Prefer the gateway's branch when present — it's authoritative for
+            // remote sessions, where the local `GitInfo` probe of the cwd is wrong.
+            if let branch = update.branch, !branch.isEmpty {
+                gitBranch = branch
+            }
         default:
             if let text = update.displayText {
                 resetStreamingMessages()

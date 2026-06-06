@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import HermesKit
 
@@ -44,9 +45,37 @@ enum GatewayChatBackend {
             HermesLog.gateway.info("using ws ticket (gated dashboard) base=\(session.baseURL.absoluteString, privacy: .public)")
             return .ticket(ticket)
         }
-        let token = (try? await session.refresh()) ?? session.tokenSnapshot() ?? ""
-        HermesLog.gateway.info("using session token (loopback) base=\(session.baseURL.absoluteString, privacy: .public) tokenPresent=\(!token.isEmpty, privacy: .public)")
+        // Loopback `?token=` mode. The WS handshake — unlike HTTP, which skips
+        // auth on loopback — strictly compares the token to the dashboard's live
+        // `_SESSION_TOKEN`, so a STALE token (from a swallowed `refresh()` error
+        // falling back to a cached snapshot) is the one way a working HTTP token
+        // still 403s the upgrade. Log which path we took + a one-way fingerprint
+        // so a `refresh=ok` + 403 (→ host/origin gate, not token) is
+        // distinguishable from `refresh=failed→stale` + 403 (→ token_mismatch).
+        let token: String
+        let source: String
+        do {
+            token = try await session.refresh()
+            source = "refresh"
+        } catch {
+            let snapshot = session.tokenSnapshot()
+            token = snapshot ?? ""
+            source = "refresh-FAILED→\(snapshot != nil ? "snapshot" : "empty") err=\(String(describing: error))"
+        }
+        HermesLog.gateway.info(
+            "using session token (loopback) base=\(session.baseURL.absoluteString, privacy: .public) source=\(source, privacy: .public) tokenPresent=\(!token.isEmpty, privacy: .public) fp=\(tokenFingerprint(token), privacy: .public)"
+        )
         return .token(token)
+    }
+
+    /// One-way fingerprint (truncated SHA-256) of a credential, safe to log:
+    /// lets us tell whether the token the app sent matches the dashboard's live
+    /// `_SESSION_TOKEN` (compare against the SPA scrape) without ever writing the
+    /// secret itself to the log. `<empty>` for an absent token.
+    static func tokenFingerprint(_ token: String) -> String {
+        guard !token.isEmpty else { return "<empty>" }
+        let digest = SHA256.hash(data: Data(token.utf8))
+        return digest.prefix(4).map { String(format: "%02x", $0) }.joined()
     }
 
     /// A `ChatBackendFactory` that opens one gateway socket per session and

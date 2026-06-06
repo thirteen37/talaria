@@ -291,6 +291,10 @@ struct GatewayChatClientTests {
         let createFrame = try await fake.waitForSent(at: 0)
         fake.pushInbound(responseFrame(id: idOf(createFrame), result: ["session_id": .string("sess-1")]))
         let response = try await openTask.value
+        // Session open now also fetches the slash-command catalog (fire-and-forget);
+        // drain that frame so callers' positional frame indexing is deterministic.
+        let catalogFrame = try await fake.waitForSent(at: 1)
+        #expect(method(of: catalogFrame) == "commands.catalog")
         return (client, fake, response.sessionId)
     }
 
@@ -307,6 +311,9 @@ struct GatewayChatClientTests {
             "session_id": .string(runtimeId), "resumed": .string(boundId)
         ]))
         _ = try await openTask.value
+        // Resume also fetches the slash-command catalog; drain it for deterministic indexing.
+        let catalogFrame = try await fake.waitForSent(at: 1)
+        #expect(method(of: catalogFrame) == "commands.catalog")
         return (client, fake, boundId)
     }
 

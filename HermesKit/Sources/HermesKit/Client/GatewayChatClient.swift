@@ -79,6 +79,11 @@ public actor GatewayChatClient: ChatBackend {
         }
         runtimeSessionId = sid
         boundSessionId = sid
+        emitSessionInfo(fromInfo: Self.object(result)["info"])
+        // Populate the slash-command menu (the gateway exposes it via the
+        // `commands.catalog` RPC, not an event). Fire-and-forget so session
+        // open isn't delayed by it; the UI fills in when the result arrives.
+        Task { await self.loadAvailableCommands() }
         return NewSessionResponse(sessionId: sid)
     }
 
@@ -92,7 +97,27 @@ public actor GatewayChatClient: ChatBackend {
         // UI already knows (the stored id passed in).
         runtimeSessionId = Self.string(Self.object(result)["session_id"]) ?? sessionId
         boundSessionId = sessionId
+        emitSessionInfo(fromInfo: Self.object(result)["info"])
+        Task { await self.loadAvailableCommands() }
         return LoadSessionResponse()
+    }
+
+    /// Fetch the slash-command catalog (`commands.catalog`) and publish it as an
+    /// `availableCommandsUpdate` so the composer's slash menu populates — the
+    /// gateway exposes commands via this RPC rather than a streamed event.
+    /// The result shape is `{pairs: [["/name","description"], …], …}`; we strip
+    /// the leading `/` so names match the composer's `AvailableCommand` model.
+    private func loadAvailableCommands() async {
+        guard let result = try? await call("commands.catalog", EmptyParams()) else { return }
+        guard case let .array(pairs)? = Self.object(result)["pairs"] else { return }
+        let commands: [AvailableCommand] = pairs.compactMap { pair in
+            guard case let .array(items) = pair, items.count >= 2,
+                  let rawName = Self.string(items[0]), !rawName.isEmpty else { return nil }
+            let name = rawName.hasPrefix("/") ? String(rawName.dropFirst()) : rawName
+            return AvailableCommand(name: name, description: Self.string(items[1]) ?? "")
+        }
+        guard !commands.isEmpty else { return }
+        emit(.availableCommandsUpdate(AvailableCommandsUpdate(availableCommands: commands)))
     }
 
     public func prompt(sessionId: SessionId, content: [ContentBlock]) async throws -> PromptResponse {
@@ -227,6 +252,7 @@ public actor GatewayChatClient: ChatBackend {
                 rawOutput: p["result"]
             )))
         case "session.info":
+            emitSessionInfo(fromInfo: payload)
             if let usage = usageUpdate(from: p["usage"]) {
                 emit(.usageUpdate(usage))
             }
@@ -269,14 +295,33 @@ public actor GatewayChatClient: ChatBackend {
         notificationContinuation.yield(.sessionUpdate(SessionNotification(sessionId: sid, update: update)))
     }
 
-    /// Hermes `usage` keys vary; accept the common `{used,size}` (and the
-    /// `context_*` aliases) and skip when neither is present.
+    /// Hermes `usage` keys vary; accept the common `{used,size}` plus the
+    /// `context_*` aliases the gateway actually emits (`_get_usage` →
+    /// `context_used` / `context_max`) and skip when neither is present.
     private func usageUpdate(from value: JSONValue?) -> UsageUpdate? {
         guard case let .object(u) = value else { return nil }
         let used = Self.int(u["used"]) ?? Self.int(u["context_used"])
-        let size = Self.int(u["size"]) ?? Self.int(u["context_size"]) ?? Self.int(u["context_length"])
+        let size = Self.int(u["size"]) ?? Self.int(u["context_size"])
+            ?? Self.int(u["context_length"]) ?? Self.int(u["context_max"])
         guard let used, let size else { return nil }
         return UsageUpdate(size: size, used: used, cost: u["cost"])
+    }
+
+    /// Surface the gateway's session metadata (model/mode alias, cwd, git
+    /// branch) as a `sessionInfoUpdate` so the chat status bar can show the
+    /// model badge and the correct branch — the latter matters for remote
+    /// sessions, whose cwd lives on the host so a local `git` probe is wrong.
+    /// Carried both in the `session.create`/`session.resume` result `info` and
+    /// in the `session.info` event payload. Title is left nil so this never
+    /// clobbers the agent-authored session title.
+    private func emitSessionInfo(fromInfo value: JSONValue?) {
+        let i = Self.object(value)
+        let model = Self.string(i["model"])
+        let cwd = Self.string(i["cwd"])
+        let branchRaw = Self.string(i["branch"])
+        let branch = (branchRaw?.isEmpty == false) ? branchRaw : nil
+        guard model != nil || cwd != nil || branch != nil else { return }
+        emit(.sessionInfoUpdate(SessionInfoUpdate(model: model, cwd: cwd, branch: branch)))
     }
 
     private func resolveTurn(status: String, errorText: String?) {
@@ -486,6 +531,10 @@ public actor GatewayChatClient: ChatBackend {
             let message: String?
         }
     }
+
+    /// Encodes to `{}` — for RPCs whose params the gateway ignores (e.g.
+    /// `commands.catalog`).
+    private struct EmptyParams: Codable, Sendable {}
 
     private struct CreateParams: Codable, Sendable {
         let cols: Int
