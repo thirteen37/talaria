@@ -337,7 +337,15 @@ struct SoulAndPersonalitiesView: View {
 
     @ViewBuilder
     private func content(harness: PersonalitiesHarness, soul: SoulEditingState) -> some View {
-        PlatformSplit(showsSecondary: harness.selection != nil) {
+        PlatformSplit(
+            showsSecondary: Binding(
+                get: { harness.selection != nil },
+                // Back on iPhone discards any unsaved draft (a pop can't be
+                // intercepted) and reseeds cleanly — see the view's dirty-guard note.
+                set: { if !$0 { harness.select(nil) } }
+            ),
+            secondaryTitle: secondaryTitle(harness)
+        ) {
             primaryPane(harness: harness, soul: soul)
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
@@ -396,11 +404,20 @@ struct SoulAndPersonalitiesView: View {
                 }
             }
             .tag(PersonalitySelection.soul)
+            // A plain iOS List doesn't honor `List(selection:)` taps outside edit
+            // mode (so the iPhone push / iPad panel wouldn't open); route the tap
+            // through the same dirty-guard the selection binding uses.
+            .contentShape(Rectangle())
+            .onTapGesture { attemptNavigate(.select(.soul), harness: harness, soul: soul) }
 
             Section("Personalities") {
                 ForEach(harness.items) { item in
                     PersonalityRow(item: item, isActive: harness.activeName == item.name)
                         .tag(PersonalitySelection.personality(item.name))
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            attemptNavigate(.select(.personality(item.name)), harness: harness, soul: soul)
+                        }
                 }
             }
         }
@@ -412,6 +429,16 @@ struct SoulAndPersonalitiesView: View {
                     description: Text("Add a personality to overlay a system prompt onto the base SOUL.md.")
                 )
             }
+        }
+    }
+
+    /// Title for the pushed iPhone detail page — the base-soul file name or the
+    /// selected personality's name. nil when nothing is selected (the pane is hidden).
+    private func secondaryTitle(_ harness: PersonalitiesHarness) -> String? {
+        switch harness.selection {
+        case .soul?: return "SOUL.md"
+        case let .personality(name)?: return name
+        case nil: return nil
         }
     }
 

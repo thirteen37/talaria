@@ -64,9 +64,15 @@ struct ToolsView: View {
         // macOS, an `HStack`+`Divider` on iPad. Selecting a tool's Config button
         // opens the secondary pane; closing it (or losing the tool's last var)
         // collapses the split back to the full-width matrix.
-        PlatformSplit(showsSecondary: harness.selectedToolID != nil) {
+        PlatformSplit(
+            showsSecondary: Binding(
+                get: { harness.selectedToolID != nil },
+                set: { if !$0 { harness.selectedToolID = nil } }
+            ),
+            secondaryTitle: configTitle(harness)
+        ) {
             matrixPane(harness: harness)
-                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 420, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             configPane(harness: harness)
                 .frame(minWidth: 320, idealWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
@@ -98,6 +104,14 @@ struct ToolsView: View {
             ContentUnavailableView("No tools", systemImage: "hammer")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// Title for the pushed iPhone config page — the selected tool's friendly
+    /// label (or raw id). nil when nothing is selected (the pane is hidden).
+    private func configTitle(_ harness: ToolsMatrixHarness) -> String? {
+        guard let toolID = harness.selectedToolID,
+              let row = harness.matrix?.rows.first(where: { $0.name == toolID }) else { return nil }
+        return row.label ?? row.name
     }
 
     @ViewBuilder

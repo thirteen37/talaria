@@ -227,7 +227,13 @@ struct MemoryEditorView: View {
 
     @ViewBuilder
     private func content(harness: MemoryHarness) -> some View {
-        PlatformSplit(showsSecondary: harness.selection != nil) {
+        PlatformSplit(
+            showsSecondary: Binding(
+                get: { harness.selection != nil },
+                set: { if !$0 { harness.selection = nil } }
+            ),
+            secondaryTitle: harness.selected?.file.fileName
+        ) {
             primaryPane(harness: harness)
                 .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
@@ -274,6 +280,10 @@ struct MemoryEditorView: View {
                 ForEach(harness.editors) { editor in
                     MemoryFileRow(editor: editor)
                         .tag(editor.file)
+                        // A plain iOS List ignores `List(selection:)` taps outside
+                        // edit mode, so route the tap through the dirty-guard too.
+                        .contentShape(Rectangle())
+                        .onTapGesture { attemptNavigate(.select(editor.file), harness: harness) }
                 }
             }
 
