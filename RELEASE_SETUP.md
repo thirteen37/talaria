@@ -160,3 +160,114 @@ attached to the GitHub Release plus a PR updating `docs/appcast.xml`.
 
 Then execute the manual test plan (`docs/test-plan.md`) against the
 artefact, including the **Release artifact verification** section.
+
+## 9. iOS / iPadOS TestFlight
+
+The macOS pipeline above (Developer ID → notarise → DMG → Sparkle) does **not**
+apply to iOS. App Store / TestFlight is a separate signing identity, profile,
+and upload path. `scripts/release-ios.sh` archives the `TalariaIOS` scheme with
+App Store signing and uploads to App Store Connect.
+
+The repo-side prerequisites are already done: the iOS app icon is an opaque
+full-bleed 1024 (`Talaria/Assets.xcassets/AppIcon.appiconset/icon_ios_1024.png`),
+`ITSAppUsesNonExemptEncryption` is set in `Talaria/Info-iOS.plist`, and a
+privacy manifest ships in `Talaria/PrivacyInfo.xcprivacy`. The steps below are
+the **manual / account-side** work that cannot be scripted from this repo.
+
+### 9a. Apple Distribution certificate — REQUIRED
+
+The certs on file (`Apple Development`, `Developer ID Application`) do **not**
+sign App Store builds. Create an **Apple Distribution** certificate:
+
+1. [developer.apple.com → Certificates → Create](https://developer.apple.com/account/resources/certificates/add)
+   → **Apple Distribution** → follow the CSR flow → download → double-click to install.
+2. Verify: `security find-identity -v -p codesigning` lists
+   `"Apple Distribution: YU XI LIM (9URLHJ84PY)"`.
+
+### 9b. Explicit App ID — REQUIRED
+
+The iOS target uses `io.lyx.Talaria` (`project.yml`) — a distinct, owned
+reverse-domain id, separate from the macOS target's `com.talaria.Talaria`. The
+macOS id is deliberately left unchanged: it ships via GitHub + Sparkle, and
+Sparkle refuses to install an update whose `CFBundleIdentifier` differs from the
+installed host, so renaming it would strand every existing v1.0 user and orphan
+their preferences. Keeping the ids separate has no downside — the macOS app is
+not in App Store Connect, so there is no record collision.
+
+1. [developer.apple.com → Identifiers → Register an App ID](https://developer.apple.com/account/resources/identifiers/add/bundleId)
+   → **App** → explicit Bundle ID `io.lyx.Talaria` → no extra capabilities
+   needed for v1.
+
+### 9c. App Store Connect app record — REQUIRED
+
+1. Sign the **Paid/Free Apps agreement** in App Store Connect → Agreements
+   (TestFlight is blocked until this is signed).
+2. [appstoreconnect.apple.com → Apps → +](https://appstoreconnect.apple.com/apps)
+   → New App → Platform **iOS** → the bundle id from 9b → SKU + name
+   (confirm "Talaria" is available).
+
+### 9d. App Store Connect API key role — REQUIRED for scripted upload
+
+The existing `TalariaNotary` key (RELEASE_SETUP §2) was created with the
+**Developer** role. App Store uploads via the API need at least **App Manager**.
+Either elevate that key's role or mint a second key, then export the `.p8`,
+Key ID, and Issuer ID.
+
+### 9e. Run the upload
+
+Local (uses the keychain Apple Distribution cert + API key for the profile):
+
+```sh
+ASC_KEY_ID=<keyid> ASC_ISSUER_ID=<issuer> ASC_KEY_PATH=~/.private/AuthKey_<keyid>.p8 \
+  scripts/release-ios.sh 1.0
+```
+
+Dry run with no credentials (produces a signed `.ipa` under `build-ios/export/`
+for manual upload via Xcode Organizer / Transporter):
+
+```sh
+scripts/release-ios.sh --export-only
+```
+
+`-allowProvisioningUpdates` lets `xcodebuild` create the App Store provisioning
+profile automatically the first time, so 9b's App ID must exist first.
+
+### 9f. Export-compliance declaration — CONFIRM
+
+`Info-iOS.plist` ships `ITSAppUsesNonExemptEncryption = false`, declaring the
+app uses only exempt encryption (standard SSH/TLS transport). This is a legal
+self-classification to Apple/BIS — confirm it matches your distribution before
+submitting. If it does not, set it `true` and complete the compliance
+documentation App Store Connect prompts for.
+
+### 9g. TestFlight testers
+
+- **Internal** testers (your team, ≤100) need no review — fastest first loop.
+- **External** testers require a one-time **Beta App Review** plus a beta
+  description and feedback email. Because Talaria connects to a *user-supplied*
+  Hermes server, add review notes explaining the self-hosted-backend
+  requirement (or provide a demo server) — reviewers cannot exercise it blind.
+
+### 9h. CI lane — `.github/workflows/ios-testflight.yml`
+
+`.github/workflows/ios-testflight.yml` archives, signs, and uploads to
+TestFlight by running `scripts/release-ios.sh` on a `macos-15` runner. It is
+**`workflow_dispatch` only** (run it from the Actions tab with a version input);
+it does not fire on `v*` tags, so it won't push an unproven build on every
+macOS release. The comment at the top of the file shows how to add the tag
+trigger once the lane is proven.
+
+It reuses the existing `KEYCHAIN_PASSWORD` and `ASC_API_KEY_BASE64` /
+`ASC_API_KEY_ID` / `ASC_API_ISSUER_ID` secrets (RELEASE_SETUP §2/§4). The ASC
+key must carry the **App Manager** role (§9d) — the Developer role used for
+notarisation cannot upload to TestFlight. Two **new** secrets are required:
+
+| Secret | How to produce |
+| --- | --- |
+| `IOS_DISTRIBUTION_P12_BASE64` | Export your **Apple Distribution** cert + private key (§9a) from Keychain Access as `.p12`, then `base64 -i AppleDistribution.p12 \| pbcopy` |
+| `IOS_DISTRIBUTION_P12_PASSWORD` | The password you set during `.p12` export |
+
+Signing is automatic + `-allowProvisioningUpdates`, so the App Store
+provisioning profile is created via the API key on first run — the explicit
+App ID (§9b) and app record (§9c) must already exist, and the Paid/Free Apps
+agreement must be signed, or the upload step fails.
