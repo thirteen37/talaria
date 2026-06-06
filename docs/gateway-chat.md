@@ -214,13 +214,23 @@ Talaria does not implement voice in v1.
   codecs over a persistent `direct-tcpip` channel (`NIOSSHDashboardConnection.openDirectTCPIPChannel`).
   Compile-verified on iOS.
 
+## Selection, gating & visibility
+
+- **Opt-in flag:** `useGatewayChat` (UserDefaults `HermesKit.useGatewayChat`), toggled in
+  **Settings → Developer**. Default off.
+- **Version gate + fallback:** the per-session backend factory
+  (`GatewayChatBackend.makeSelectingFactory`, macOS + iOS) uses WS only when the flag is on **and**
+  the connected Hermes advertises `HermesCapability.gatewayChat` (read at open time via
+  `LiveVersionBox`, filled by the harness from `/api/status`). Any WS open failure also falls back to
+  ACP, so flipping the flag never breaks chat.
+- **Indicator:** the chat status bar shows an **ACP** / **WS** badge for the active session
+  (`SessionManager.backendKind(for:)` → the concrete client type).
+- **iOS:** chat tunnels `/api/ws` over the window's live NIO-SSH dashboard connection
+  (`NIOSSHGatewayWebSocket` over the `GatewayChatTunnel` the harness fills in `acquireDashboard()`);
+  the NIO ACP transport is the fallback.
+
 ## Remaining work
 
-- **iOS harness wiring (Phase 3):** the iOS chat path and the dashboard currently use *separate*
-  NIO-SSH connections, and the dashboard's `NIOSSHDashboardConnection` isn't exposed to the chat
-  backend factory. Wiring iOS gateway chat needs the dashboard endpoint/supervisor to surface its
-  connection + remote bind port so `NIOSSHGatewayWebSocket.connect(connection:remotePort:…)` can
-  tunnel `/api/ws` over it. Deferred pending that plumbing + live verification.
 - **Live end-to-end parity (all paths):** run one chat turn (prompt → thinking → tool calls w/ diff →
   result → completion), an approval, and a cancel against a running `hermes dashboard`; compare WS vs
   ACP rendering, over loopback (macOS local), `ssh -L` (macOS remote), and NIO-SSH (iOS). Confirm the

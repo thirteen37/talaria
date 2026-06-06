@@ -240,19 +240,6 @@ extension ServerWindowHarness {
         UserDefaults.standard.bool(forKey: useNIOSSHTransportDefaultsKey)
     }
 
-    /// User opt-in for driving live chat over the dashboard `/api/ws` gateway
-    /// instead of the ACP subprocess (the `useGatewayChat` default, toggled in
-    /// Settings → Developer). The actual per-session choice also requires the
-    /// connected Hermes to advertise `HermesCapability.gatewayChat` — see
-    /// `GatewayChatBackend.makeSelectingFactory`, which falls back to ACP
-    /// otherwise — so flipping this against an older server is safe.
-    ///
-    /// `nonisolated` so the per-session backend factory (a `@Sendable` closure)
-    /// can read it; it only touches `UserDefaults`, which is thread-safe.
-    nonisolated static func preferGatewayChat() -> Bool {
-        UserDefaults.standard.bool(forKey: useGatewayChatDefaultsKey)
-    }
-
     /// Builds the trust store the NIO transport consults during the host-key
     /// callback. macOS layers the read-only `~/.ssh/known_hosts` over the
     /// pinned store so previously trusted hosts connect silently.

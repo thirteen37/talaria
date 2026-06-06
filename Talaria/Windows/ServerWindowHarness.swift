@@ -77,6 +77,12 @@ final class ServerWindowHarness {
     /// the resolved version here. nil on windows that don't use gateway chat.
     var chatVersionBox: LiveVersionBox?
 
+    /// iOS only: the live NIO-SSH dashboard tunnel the gateway chat factory rides
+    /// for `/api/ws` (iOS has no loopback socket). Filled by `acquireDashboard()`
+    /// once the dashboard connects; nil on macOS (which uses `DashboardCoordinator`)
+    /// and before the dashboard is up.
+    var chatTunnelBox: GatewayChatTunnelBox?
+
     /// The version every capability banner should gate on: the **live**
     /// dashboard status version when known, else the profile's cached probe
     /// version. The cached value is captured once at probe time and never
@@ -161,6 +167,19 @@ final class ServerWindowHarness {
     /// `nonisolated` so the per-session backend factory (`@Sendable`) and
     /// `preferGatewayChat()` can read it off the main actor.
     nonisolated static let useGatewayChatDefaultsKey = "HermesKit.useGatewayChat"
+
+    /// User opt-in for driving live chat over the dashboard `/api/ws` gateway
+    /// instead of the ACP subprocess (the `useGatewayChat` default, toggled in
+    /// Settings → Developer). The actual per-session choice also requires the
+    /// connected Hermes to advertise `HermesCapability.gatewayChat` — the
+    /// platform `GatewayChatBackend.makeSelectingFactory` falls back to ACP
+    /// otherwise — so flipping this against an older server is safe.
+    ///
+    /// `nonisolated` so the per-session backend factory (a `@Sendable` closure)
+    /// can read it; it only touches `UserDefaults`, which is thread-safe.
+    nonisolated static func preferGatewayChat() -> Bool {
+        UserDefaults.standard.bool(forKey: useGatewayChatDefaultsKey)
+    }
 
     /// Forces a fresh dashboard connection from *any* state — the manual
     /// reconnect. It covers both the first-connect retry (a brand-new host not
