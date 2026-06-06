@@ -33,7 +33,7 @@ public final class NIOSSHGatewayWebSocket: GatewayWebSocket, @unchecked Sendable
         connection: NIOSSHDashboardConnection,
         remotePort: Int,
         path: String = "/api/ws",
-        token: String?
+        credential: GatewayCredential
     ) async throws -> NIOSSHGatewayWebSocket {
         var captured: AsyncThrowingStream<Data, Error>.Continuation?
         let stream = AsyncThrowingStream<Data, Error> { captured = $0 }
@@ -42,9 +42,10 @@ public final class NIOSSHGatewayWebSocket: GatewayWebSocket, @unchecked Sendable
         let key = GatewayWebSocketHandshake.makeKey()
         let host = "127.0.0.1:\(remotePort)"
         let fullPath: String = {
-            guard let token, !token.isEmpty else { return path }
-            let encoded = token.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? token
-            return "\(path)?token=\(encoded)"
+            let value = credential.value
+            guard !value.isEmpty else { return path }
+            let encoded = value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
+            return "\(path)?\(credential.queryName)=\(encoded)"
         }()
         let signal = HandshakeSignal()
         let continuation = socket.continuation

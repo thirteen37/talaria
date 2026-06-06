@@ -2,28 +2,22 @@ import Foundation
 import HermesKit
 
 /// macOS wiring that builds a WebSocket (`/api/ws`) chat backend on top of the
-/// window's shared `hermes dashboard`, as an alternative to the ACP subprocess
-/// transport. Reachable wherever the dashboard exposes a real loopback socket —
-/// local and the `ssh -L` remote forward — i.e. everything except the iOS
-/// NIO-SSH path (which gets `NIOSSHGatewayWebSocket` in Phase 3).
-///
-/// Selection is behind ``ServerWindowHarness/preferGatewayChat()`` (default
-/// off), so the shipping app stays on ACP until the WebSocket path is verified
-/// end-to-end. See `docs/gateway-chat.md`.
+/// window's shared `hermes dashboard`. Reachable wherever the dashboard exposes a
+/// real loopback socket — local and the `ssh -L` remote forward (the iOS NIO-SSH
+/// path uses `NIOSSHGatewayWebSocket`). See `docs/gateway-chat.md`.
 enum GatewayChatBackend {
     /// Per-session refcount on the window's dashboard plus the connection
     /// details needed to open the gateway socket.
     struct Acquired: Sendable {
         let baseURL: URL
-        let token: String?
+        let credential: GatewayCredential
         let supervisor: DashboardSupervisor
     }
 
-    /// Acquires (a refcount on) the shared dashboard for `profile`, scrapes the
-    /// session token if needed, and returns the WebSocket connection inputs.
-    /// `DashboardCoordinator` caches one supervisor per `(profile, hermesProfile)`,
-    /// so this rides the same `hermes dashboard` the window's non-chat surfaces
-    /// already use rather than spawning a second one.
+    /// Acquires (a refcount on) the shared dashboard for `profile` and resolves
+    /// the WebSocket auth credential. `DashboardCoordinator` caches one
+    /// supervisor per `(profile, hermesProfile)`, so this rides the same
+    /// `hermes dashboard` the window's non-chat surfaces already use.
     @MainActor
     static func acquire(
         profile: ServerProfile,
@@ -33,14 +27,24 @@ enum GatewayChatBackend {
             profile: profile,
             hermesProfileName: hermesProfileName
         )
-        // The WS handshake carries the token in the query string, so it must be
-        // resolved before connecting (HTTP can lazily 401-refresh; the socket
-        // can't).
-        var token = endpoint.session.tokenSnapshot()
-        if token == nil {
-            token = try? await endpoint.session.refresh()
+        return Acquired(
+            baseURL: endpoint.baseURL,
+            credential: await resolveCredential(session: endpoint.session),
+            supervisor: supervisor
+        )
+    }
+
+    /// Resolve the credential for the `/api/ws` upgrade. Prefer a single-use
+    /// ticket (gated dashboards reject `?token=`); fall back to a freshly
+    /// re-scraped session token for loopback dashboards (the token rotates when
+    /// the dashboard restarts, and the handshake — unlike HTTP — can't lazily
+    /// 401-refresh, so a stale snapshot would be rejected).
+    static func resolveCredential(session: DashboardSession) async -> GatewayCredential {
+        if let ticket = try? await session.client().mintWSTicket() {
+            return .ticket(ticket)
         }
-        return Acquired(baseURL: endpoint.baseURL, token: token, supervisor: supervisor)
+        let token = (try? await session.refresh()) ?? session.tokenSnapshot() ?? ""
+        return .token(token)
     }
 
     /// A `ChatBackendFactory` that opens one gateway socket per session and
@@ -54,7 +58,7 @@ enum GatewayChatBackend {
             do {
                 let socket = try URLSessionGatewayWebSocket(
                     dashboardBaseURL: acquired.baseURL,
-                    token: acquired.token
+                    credential: acquired.credential
                 )
                 return GatewayChatClient(webSocket: socket) {
                     await DashboardCoordinator.shared.release(acquired.supervisor)
@@ -68,5 +72,4 @@ enum GatewayChatBackend {
             }
         }
     }
-
 }

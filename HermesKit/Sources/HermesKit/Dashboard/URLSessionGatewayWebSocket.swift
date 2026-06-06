@@ -13,15 +13,15 @@ public final class URLSessionGatewayWebSocket: GatewayWebSocket, @unchecked Send
     private var receiveStarted = false
     private var closed = false
 
-    /// Build the `ws://…/api/ws?token=…` URL from the dashboard's base
-    /// (`http://127.0.0.1:<port>`) and session token, then open the socket.
+    /// Build the `ws://…/api/ws?<credential>` URL from the dashboard's base
+    /// (`http://127.0.0.1:<port>`) and the auth credential, then open the socket.
     public convenience init(
         dashboardBaseURL: URL,
-        token: String?,
+        credential: GatewayCredential,
         session: URLSession = .shared,
         path: String = "/api/ws"
     ) throws {
-        guard let url = Self.makeWebSocketURL(base: dashboardBaseURL, token: token, path: path) else {
+        guard let url = Self.makeWebSocketURL(base: dashboardBaseURL, credential: credential, path: path) else {
             throw GatewayWebSocketError.notConnected
         }
         self.init(url: url, session: session)
@@ -41,8 +41,8 @@ public final class URLSessionGatewayWebSocket: GatewayWebSocket, @unchecked Send
     }
 
     /// Maps an `http(s)://host:port` dashboard base to the matching
-    /// `ws(s)://host:port<path>?token=…`.
-    static func makeWebSocketURL(base: URL, token: String?, path: String = "/api/ws") -> URL? {
+    /// `ws(s)://host:port<path>?<credential>`.
+    static func makeWebSocketURL(base: URL, credential: GatewayCredential, path: String = "/api/ws") -> URL? {
         guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
             return nil
         }
@@ -51,9 +51,7 @@ public final class URLSessionGatewayWebSocket: GatewayWebSocket, @unchecked Send
         default: components.scheme = "ws"
         }
         components.path = path
-        if let token {
-            components.queryItems = [URLQueryItem(name: "token", value: token)]
-        }
+        components.queryItems = [URLQueryItem(name: credential.queryName, value: credential.value)]
         return components.url
     }
 
@@ -106,7 +104,19 @@ public final class URLSessionGatewayWebSocket: GatewayWebSocket, @unchecked Send
                 self.receiveNext()
             case let .failure(error):
                 let wasClosed = self.stateQueue.sync { self.closed }
-                self.continuation.finish(throwing: wasClosed ? nil : error)
+                guard !wasClosed else {
+                    self.continuation.finish(throwing: nil)
+                    return
+                }
+                // A rejected upgrade surfaces as an opaque URLError; the server's
+                // HTTP status (e.g. 403 when the dashboard refuses the handshake)
+                // is on `task.response`. Surface it so the failure is legible.
+                if let http = self.task.response as? HTTPURLResponse,
+                   !(200..<300).contains(http.statusCode) {
+                    self.continuation.finish(throwing: GatewayWebSocketError.closedWithCode(http.statusCode))
+                } else {
+                    self.continuation.finish(throwing: error)
+                }
             }
         }
     }

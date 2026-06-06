@@ -84,6 +84,17 @@ public struct DashboardStatus: Codable, Equatable, Sendable {
     }
 }
 
+/// Response from `POST /api/auth/ws-ticket` — a single-use WebSocket-auth ticket.
+public struct DashboardWSTicket: Codable, Equatable, Sendable {
+    public let ticket: String
+    public let ttlSeconds: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case ticket
+        case ttlSeconds = "ttl_seconds"
+    }
+}
+
 public struct DashboardSessionSummary: Codable, Equatable, Sendable {
     public let id: String
     public let title: String?
@@ -607,6 +618,16 @@ public struct DashboardClient: Sendable {
 
     public func getStatus() async throws -> DashboardStatus {
         try await get(path: "/api/status")
+    }
+
+    /// Mints a single-use, short-TTL ticket for authenticating a WebSocket
+    /// upgrade (`POST /api/auth/ws-ticket`). Required by **gated** dashboards,
+    /// which reject the legacy `?token=` on `/api/ws`. On a loopback dashboard
+    /// the route is unauthenticated/absent and this throws — callers fall back
+    /// to the session token.
+    public func mintWSTicket() async throws -> String {
+        let response: DashboardWSTicket = try await sendDecoding(method: "POST", path: "/api/auth/ws-ticket")
+        return response.ticket
     }
 
     public func listSessions(limit: Int? = nil, offset: Int? = nil) async throws -> DashboardSessionsResponse {

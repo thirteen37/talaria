@@ -21,6 +21,28 @@ public protocol GatewayWebSocket: Sendable {
     func close() async
 }
 
+/// The credential appended to the `/api/ws` URL. Loopback dashboards accept the
+/// session token (`?token=`); gated (OAuth) dashboards reject that and require a
+/// single-use ticket (`?ticket=`, minted via `POST /api/auth/ws-ticket`).
+public enum GatewayCredential: Sendable, Equatable {
+    case token(String)
+    case ticket(String)
+
+    /// The query-parameter name the server reads this credential from.
+    public var queryName: String {
+        switch self {
+        case .token: return "token"
+        case .ticket: return "ticket"
+        }
+    }
+
+    public var value: String {
+        switch self {
+        case let .token(value), let .ticket(value): return value
+        }
+    }
+}
+
 public enum GatewayWebSocketError: Error, Equatable, Sendable, LocalizedError {
     case notConnected
     case closed

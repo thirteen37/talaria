@@ -18,18 +18,24 @@ enum GatewayChatBackend {
             guard let tunnel = tunnel() else {
                 throw GatewayChatError.sessionNotReady
             }
-            // The WS handshake carries the token in the query string, so resolve
-            // it before connecting (HTTP can lazily 401-refresh; the socket can't).
-            var token = tunnel.session.tokenSnapshot()
-            if token == nil {
-                token = try? await tunnel.session.refresh()
-            }
+            // Prefer a single-use ticket (gated dashboards reject ?token=); fall
+            // back to a freshly re-scraped session token. The handshake carries
+            // the credential in the query string and can't lazily 401-refresh.
+            let credential = await resolveCredential(session: tunnel.session)
             let socket = try await NIOSSHGatewayWebSocket.connect(
                 connection: tunnel.connection,
                 remotePort: tunnel.remotePort,
-                token: token
+                credential: credential
             )
             return GatewayChatClient(webSocket: socket)
         }
+    }
+
+    static func resolveCredential(session: DashboardSession) async -> GatewayCredential {
+        if let ticket = try? await session.client().mintWSTicket() {
+            return .ticket(ticket)
+        }
+        let token = (try? await session.refresh()) ?? session.tokenSnapshot() ?? ""
+        return .token(token)
     }
 }
