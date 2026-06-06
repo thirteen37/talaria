@@ -2,16 +2,16 @@
 
 This file tracks the Hermes surfaces Talaria currently depends on. It is
 organized by integration boundary rather than release stage so it stays useful
-as ACP, dashboard routes, and CLI fallbacks evolve independently.
+as the gateway, dashboard routes, and CLI fallbacks evolve independently.
 
 ## Integration Boundaries
 
 Talaria talks to Hermes through four channels:
 
-- **ACP / JSON-RPC** for live chat sessions.
+- **Gateway WebSocket (`/api/ws`)** — JSON-RPC 2.0 — for live chat sessions (rides `hermes dashboard`).
 - **Dashboard HTTP** for durable state and management screens.
 - **Hermes CLI fallbacks** where the dashboard does not expose a route yet.
-- **Embedded TUI (PTY)** for rendering `hermes chat --tui` inline as an alternative to native ACP chat (macOS only).
+- **Embedded TUI (PTY)** for rendering `hermes chat --tui` inline as an alternative to native gateway chat (macOS only).
 
 Talaria does not read or write Hermes SQLite files directly.
 
@@ -19,7 +19,7 @@ Talaria does not read or write Hermes SQLite files directly.
 
 | Capability | Min Hermes | First tag | Used for |
 | --- | --- | --- | --- |
-| `acp` | `0.3.0` | `v2026.3.17` | Live chat over ACP / JSON-RPC |
+| `acp` | `0.3.0` | `v2026.3.17` | Legacy probe flag (`ACP supported` in the capability view). Live chat now rides the dashboard `/api/ws` gateway and no longer gates on this. |
 | `permissions` | `0.3.0` | `v2026.3.17` | Agent permission requests and user decisions |
 | `diffs` | `0.3.0` | `v2026.3.17` | Tool-call diff payload rendering |
 | `updateCheck` | `0.12.0` | `v2026.4.30` | `hermes update --check` CLI fallback |
@@ -31,29 +31,31 @@ Talaria does not read or write Hermes SQLite files directly.
 | `skillsHub` | `0.14.0` | `v2026.5.16` | `hermes skills install/update/uninstall` CLI fallback (search is public HTTP, ungated) |
 
 Dashboard-backed screens render a warning banner when `requiresDashboard` is
-not met. Profiles still load and ACP chat can still run; non-chat dashboard
-surfaces remain unavailable until `hermes dashboard` can be started and reached.
+not met. Profiles still load, but live chat now rides the dashboard `/api/ws`
+gateway, so chat — like every other dashboard surface — is unavailable until
+`hermes dashboard` can be started and reached.
 
-## ACP Coverage
+## Live Chat Coverage (gateway)
 
-ACP remains the live-session transport. `HermesClient` and `SessionManager`
-cover:
+Live chat runs over the dashboard `/api/ws` JSON-RPC gateway — the same path
+Hermes Desktop uses. `GatewayChatClient` maps gateway events onto the shared
+`HermesNotification` / `SessionUpdate` model and, with `SessionManager`, covers:
 
-- `initialize`
-- `session/new`
-- `session/load`
-- `session/prompt`
-- `session/cancel`
-- typed `session/update` streaming
-- text deltas
-- reasoning / thinking deltas
-- tool start, progress, and completion events
-- `session/request_permission` with typed permission outcomes
+- `session.create` / `session.resume` (new + resumed sessions; resumed sessions seed prior history)
+- `prompt.submit` / `session.interrupt` (turn submit + cancel)
+- `message.delta` text streaming
+- `reasoning.delta` / `reasoning.available` thinking streaming
+- `tool.start` / `tool.progress` / `tool.complete` events
+- `approval.request` / `clarify.request` / `sudo.request` / `secret.request` with typed permission outcomes
 - tool-call diff payloads
-- `available_commands_update` for slash command suggestions
+- `commands.catalog` for slash-command suggestions
+- `session.info` for the model badge, git branch, and token-usage gauge
 
-The chat UI renders markdown text bubbles, tool-call state, diff payloads, local
-turn status with elapsed time, and the active session git branch.
+The chat UI renders markdown text bubbles, tool-call state, diff payloads, the
+model badge, local turn status with elapsed time, the context/token-usage gauge,
+and the active session git branch. (Historical note: chat used to run over a
+`hermes acp` subprocess and a bespoke byte-`Transport` stack; that was removed
+once the WebSocket path reached parity — see `docs/gateway-chat.md`.)
 
 ## Dashboard Coverage
 
@@ -130,9 +132,10 @@ files directly.
 ## Terminal (TUI) Sessions
 
 A chat can be launched as the real Hermes TUI inside an embedded terminal
-emulator (SwiftTerm), instead of the native ACP renderer. This path bypasses
-both ACP and the dashboard: Talaria spawns `hermes chat --tui` directly in a PTY
-and renders its raw output. macOS only — iOS has no local-process/PTY path.
+emulator (SwiftTerm), instead of the native gateway-chat renderer. This path
+bypasses both the gateway chat path and the dashboard: Talaria spawns
+`hermes chat --tui` directly in a PTY and renders its raw output. macOS only —
+iOS has no local-process/PTY path.
 
 | Surface | Hermes CLI command |
 | --- | --- |
@@ -142,12 +145,12 @@ and renders its raw output. macOS only — iOS has no local-process/PTY path.
 - **Local** profiles run the command via `env` with the login-shell PATH and
   `HERMES_HOME`, and the session cwd as the process working directory.
 - **Remote** profiles always use system `ssh -tt` (PTY), even when the macOS
-  NIO-SSH ACP opt-in is enabled — the NIO transport cannot drive a local-process
+  NIO-SSH opt-in is enabled — the NIO transport cannot drive a local-process
   terminal view.
 
 The command builder is pure and unit-tested (`HermesKit` `TUILaunchSpec.swift`).
 SwiftTerm is a macOS-app-target-only dependency. Only one mode runs per session
-id at a time (TUI and inline ACP are mutually exclusive for the same session).
+id at a time (TUI and inline gateway chat are mutually exclusive for the same session).
 
 ## Known Gaps
 

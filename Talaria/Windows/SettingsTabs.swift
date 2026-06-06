@@ -15,6 +15,13 @@ import SwiftUI
 struct SettingsTabs: View {
     var onDismiss: (() -> Void)? = nil
 
+    /// Settings-scoped banner hub. The macOS Settings scene has no window
+    /// harness in scope, so it can't reach the window `BannerCenter`; this
+    /// second, Settings-local instance gives the profile editors the same
+    /// top-of-window strip (and "Server profile saved" success) there. Same
+    /// reusable ``BannerCenter`` — the unification payoff.
+    @State private var settingsBanners = BannerCenter()
+
     var body: some View {
         TabView {
             profilesTab
@@ -24,6 +31,8 @@ struct SettingsTabs: View {
             notificationsTab
                 .tabItem { Label("Notifications", systemImage: "bell") }
         }
+        .bannerHost(settingsBanners)
+        .environment(settingsBanners)
     }
 
     @ViewBuilder
@@ -63,6 +72,7 @@ struct SettingsTabs: View {
             .navigationTitle("Settings")
         #endif
     }
+
 }
 
 private extension View {

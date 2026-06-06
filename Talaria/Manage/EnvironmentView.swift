@@ -7,6 +7,11 @@ final class EnvironmentHarness {
     var vars: [DashboardEnvVar] = []
     var isLoading: Bool = false
     var lastError: String?
+    /// Top-of-window banner hub (window-scoped). Hard errors route here keyed by
+    /// the surface id so they render full-width across the top; successful saves
+    /// post a transient confirmation. Optional so a missing host (e.g. a sheet
+    /// without the environment) degrades to no-op.
+    var banners: BannerCenter?
     var selectionID: String?
     /// Names with an in-flight save/delete, so their detail controls disable
     /// while the request is outstanding. (Reveal has its own per-field spinner
@@ -47,6 +52,7 @@ final class EnvironmentHarness {
         do {
             var merged = try await client.listEnvVars()
             lastError = nil
+            banners?.dismiss(key: "environment")
             // Enumerate user-named custom keys by reading the `.env` directly,
             // and append the ones the dashboard doesn't already know about
             // (known wins over file). A file-read failure is non-fatal — keep
@@ -99,11 +105,13 @@ final class EnvironmentHarness {
                     }
                 } catch {
                     lastError = error.localizedDescription
+                    banners?.surfaceError("environment", error.localizedDescription)
                 }
             }
             vars = merged
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("environment", error.localizedDescription)
         }
     }
 
@@ -115,7 +123,9 @@ final class EnvironmentHarness {
     func add(key: String, value: String) async {
         let name = key.trimmingCharacters(in: .whitespaces)
         guard name.range(of: Self.customNamePattern, options: .regularExpression) != nil else {
-            lastError = "“\(name)” isn’t a valid variable name. Use a letter or underscore, then letters, digits, or underscores."
+            let message = "“\(name)” isn’t a valid variable name. Use a letter or underscore, then letters, digits, or underscores."
+            lastError = message
+            banners?.surfaceError("environment", message)
             return
         }
         await save(key: name, value: value)
@@ -127,8 +137,15 @@ final class EnvironmentHarness {
         do {
             try await client.setEnvVar(key: key, value: value)
             await refresh()
+            // Only confirm if the post-write reload also succeeded — otherwise
+            // refresh() has posted its own error and an unconditional success
+            // here would dismiss it, hiding a failed reload over stale data.
+            if lastError == nil {
+                banners?.surfaceSuccess("environment", "Environment variable saved")
+            }
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("environment", error.localizedDescription)
         }
     }
 
@@ -140,6 +157,7 @@ final class EnvironmentHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("environment", error.localizedDescription)
         }
     }
 
@@ -154,6 +172,7 @@ final class EnvironmentHarness {
             return value
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("environment", error.localizedDescription)
             return nil
         }
     }
@@ -172,6 +191,10 @@ struct EnvironmentView: View {
     let snapshotTransfer: RemoteSnapshotTransfer?
     /// The window's profile — its `kind` selects the local-fs vs SSH read path.
     let profile: ServerProfile?
+
+    /// Window's top-of-window banner hub. Optional so a host that doesn't supply
+    /// one degrades to no-op (hard errors then simply don't render).
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
 
     @State private var harness: EnvironmentHarness?
     @State private var searchText: String = ""
@@ -223,6 +246,7 @@ struct EnvironmentView: View {
             }
         }
         .navigationTitle("Environment")
+        .dismissesBanner("environment", from: banners)
         // Keyed on client availability so the harness is built when the
         // dashboard finishes booting and `client` flips non-nil (matching the
         // other dashboard surfaces).
@@ -241,6 +265,7 @@ struct EnvironmentView: View {
                 )
                 : nil
             let h = EnvironmentHarness(client: client, fileReader: reader)
+            h.banners = banners
             harness = h
             await h.refresh()
         }
@@ -251,13 +276,15 @@ struct EnvironmentView: View {
         primaryPane(harness: harness)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .toolbar { toolbar(harness: harness) }
+            // Hard errors now route to the top-of-window strip; only the orange
+            // capability warning stays in-surface.
             .manageBanner(
-                harness.lastError ?? capabilityBanner(
+                capabilityBanner(
                     .requiresEnvAPI,
                     feature: "Environment management via Hermes dashboard",
                     version: hermesVersion
                 ),
-                severity: harness.lastError != nil ? .error : .warning
+                severity: .warning
             )
             // When the selected (expanded) row falls out of the visible set — the
             // user typed a non-matching search query or hid advanced vars —

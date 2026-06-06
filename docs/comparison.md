@@ -47,7 +47,8 @@ app and the built-in dashboard (which ships inside Hermes), everything here —
 Talaria's defining choice is its **integration boundary**, not its feature count.
 
 - **Dashboard-API-only data path.** Every non-chat surface goes through
-  `hermes dashboard` HTTP routes; live chat goes through ACP/JSON-RPC. Talaria
+  `hermes dashboard` HTTP routes; live chat rides the same dashboard over its
+  `/api/ws` gateway (JSON-RPC 2.0 over WebSocket). Talaria
   does **not** open Hermes' `state.db`, parse `cron/jobs.json`, or write
   `config.yaml`/memory files behind Hermes' back. The single documented
   exception is reading `.env` read-only to *enumerate* user-named custom vars
@@ -67,15 +68,17 @@ Talaria's defining choice is its **integration boundary**, not its feature count
   `direct-tcpip` tunnel (no `ssh` binary, no local forward). There is no
   separate "remote reads SQLite over SSH" path to maintain.
 
-- **One window = one server profile.** Each window owns its ACP clients,
-  dashboard client, CLI runner, version cache, and capability table.
+- **One window = one server profile.** Each window owns its chat clients (over
+  the dashboard gateway), dashboard client, CLI runner, version cache, and
+  capability table.
   `DashboardCoordinator` shares one `hermes dashboard` child per
   `(ServerProfile, Hermes profile)` pair and reference-counts it.
 
 - **Capability-gated on the connected Hermes version.** Surfaces that need a
   newer Hermes (e.g. dashboard, model API, env API all need `≥ 0.14.0`) show a
-  "dashboard required" banner below the gate rather than breaking; ACP chat
-  keeps working. See `docs/integration-coverage.md`.
+  "dashboard required" banner below the gate rather than breaking. Live chat now
+  rides that same dashboard gateway, so it needs the dashboard too. See
+  `docs/integration-coverage.md`.
 
 - **Native, signed, notarized.** Hardened Runtime + Developer-ID signing +
   notarization + Sparkle auto-update. Not Electron, not a browser tab — unlike
@@ -104,7 +107,7 @@ from a phone" and lose on native feel and offline integration.
 
 | Capability | Talaria | HD · Nous (official) | HD · fathah (3rd-party) | Built-in dashboard | Scarf | hermes-workspace |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: |
-| Live chat (rich, streaming) | ✅ ACP | ✅ streaming | ✅ streaming | ✅ SSE | ✅ ACP | ✅ SSE |
+| Live chat (rich, streaming) | ✅ gateway WS | ✅ streaming | ✅ streaming | ✅ SSE | ✅ ACP | ✅ SSE |
 | Terminal / TUI escape hatch | ✅ SwiftTerm (macOS) | 🟡 TUI backend | ⬜ | ⬜ | ✅ SwiftTerm | ✅ PTY |
 | Sessions browse / search / read | ✅ | ✅ | ✅ full-text | ✅ | ✅ | ✅ |
 | Session rename / delete | ✅ (rename via CLI) | 🟡 | 🟡 | ✅ | ✅ | 🟡 |

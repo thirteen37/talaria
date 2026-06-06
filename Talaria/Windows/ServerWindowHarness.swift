@@ -2,9 +2,9 @@ import HermesKit
 import SwiftUI
 
 /// Bundles the per-window state so we can rebuild it cleanly when the
-/// window swaps profiles. The `SessionsStore` holds the live ACP transport;
-/// making a fresh harness guarantees the previous profile's one tears down
-/// before the new one boots.
+/// window swaps profiles. The `SessionsStore` holds the live chat session
+/// clients; making a fresh harness guarantees the previous profile's one tears
+/// down before the new one boots.
 ///
 /// Platform behavior (transport selection, admin runner, dashboard lifecycle,
 /// host-key store) lives in `ServerWindowHarness+macOS` / `+iOS`, selected by
@@ -14,10 +14,15 @@ import SwiftUI
 final class ServerWindowHarness {
     let store: SessionsStore
     let profile: ServerProfile
+    /// Window-scoped banner hub for the top-of-window strip. All hard errors
+    /// (session, dashboard) and transient success/info notices route here; it
+    /// rebuilds with the harness on a profile switch, so a stale window's
+    /// banners never leak into the next profile. See ``BannerCenter``.
+    let banners = BannerCenter()
     /// The active Hermes profile (`hermes -p <name>`) this window is scoped to.
     /// `default` for the unscoped install. Every consumer the harness bundles
-    /// (ACP transport, admin runner, dashboard supervisor) is built for this
-    /// name, so a switch tears the harness down and rebuilds — the same
+    /// (chat session clients, admin runner, dashboard supervisor) is built for
+    /// this name, so a switch tears the harness down and rebuilds — the same
     /// machinery a server switch uses. Does not persist: resets to `default`
     /// on launch and on every server switch.
     let hermesProfileName: String
@@ -74,6 +79,12 @@ final class ServerWindowHarness {
     /// for capability gating — see ``effectiveHermesVersion``.
     var liveHermesVersion: HermesVersion?
 
+    /// iOS only: the live NIO-SSH dashboard tunnel the gateway chat factory rides
+    /// for `/api/ws` (iOS has no loopback socket). Filled by `acquireDashboard()`
+    /// once the dashboard connects; nil on macOS (which uses `DashboardCoordinator`)
+    /// and before the dashboard is up.
+    var chatTunnelBox: GatewayChatTunnelBox?
+
     /// The version every capability banner should gate on: the **live**
     /// dashboard status version when known, else the profile's cached probe
     /// version. The cached value is captured once at probe time and never
@@ -103,7 +114,7 @@ final class ServerWindowHarness {
     /// Builds a harness backed by an in-process ``MockACPTransport`` for UI
     /// tests — no SSH, no admin runner, no snapshot.
     static func makeMock() -> ServerWindowHarness {
-        let manager = SessionManager { MockACPTransport() }
+        let manager = SessionManager(backendFactory: { MockChatBackend() })
         let store = SessionsStore(manager: manager, adminRunner: nil)
         let profile = ServerProfile(name: "Mock Server", kind: .ssh, host: "mock.local")
         return ServerWindowHarness(store: store, profile: profile)
@@ -139,9 +150,10 @@ final class ServerWindowHarness {
         }
     }
 
-    /// `UserDefaults` key honored on macOS to opt the ACP transport into
-    /// the pure-Swift NIO-SSH path instead of the default system-ssh
-    /// subprocess. Host-key trust consults `HostKeyStore` for the NIO
+    /// `UserDefaults` key honored on macOS to opt the remote dashboard transport
+    /// (which the live-chat WebSocket rides) into the pure-Swift NIO-SSH path
+    /// instead of the default system-ssh `-L` forward. Host-key trust consults
+    /// `HostKeyStore` for the NIO
     /// path; system-ssh defers to `~/.ssh/known_hosts`. See
     /// `docs/security.md`. iOS always uses NIO regardless of this flag —
     /// system-ssh isn't available there. Flip the default in a later

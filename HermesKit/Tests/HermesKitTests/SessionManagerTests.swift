@@ -4,55 +4,37 @@ import Testing
 
 @Suite
 struct SessionManagerTests {
-    private let encoder = JSONEncoder()
-    private let decoder = JSONDecoder()
-
     @Test
-    func openNewIssuesInitializeAndSessionNew() async throws {
-        let scripter = TransportScripter()
-        let manager = SessionManager { await scripter.next() }
+    func openNewRegistersUnderBackendSessionId() async throws {
+        let scripter = BackendScripter(newSessionId: "abc")
+        let manager = SessionManager(backendFactory: { await scripter.next() })
 
-        let openTask = Task { try await manager.openNew(cwd: "/tmp/one") }
-
-        try await scripter.respondToInitialize()
-        try await scripter.respondToNewSession(sessionId: "abc")
-
-        let state = try await openTask.value
+        let state = try await manager.openNew(cwd: "/tmp/one")
         #expect(state.id == "abc")
         #expect(state.cwd == "/tmp/one")
     }
 
     @Test
-    func openExistingIssuesSessionLoad() async throws {
-        let scripter = TransportScripter()
-        let manager = SessionManager { await scripter.next() }
+    func openExistingRegistersUnderRequestedId() async throws {
+        let scripter = BackendScripter()
+        let manager = SessionManager(backendFactory: { await scripter.next() })
 
-        let openTask = Task { try await manager.openExisting(id: "session-1", cwd: "/tmp/proj") }
-
-        try await scripter.respondToInitialize()
-        try await scripter.respondToLoadSession()
-
-        let state = try await openTask.value
+        let state = try await manager.openExisting(id: "session-1", cwd: "/tmp/proj")
         #expect(state.id == "session-1")
     }
 
     @Test
     func notificationsBufferedBeforeSubscriberAttachedAreReplayed() async throws {
-        // Regression: when SessionsStore resumes a session, hermes streams
-        // the historical transcript as `session/update` notifications during
-        // `session/load`. The chat view model subscribes only *after* the
-        // load completes, so without a replay buffer those notifications
-        // were fanned out to zero subscribers and dropped — the resumed
-        // session showed up empty.
-        let scripter = TransportScripter()
-        let manager = SessionManager { await scripter.next() }
+        // Regression: when SessionsStore resumes a session, hermes streams the
+        // historical transcript as session updates before the chat view model
+        // subscribes. Without a replay buffer those would fan out to zero
+        // subscribers and be dropped — the resumed session showed up empty.
+        let scripter = BackendScripter()
+        let manager = SessionManager(backendFactory: { await scripter.next() })
 
-        let openTask = Task { try await manager.openExisting(id: "sess", cwd: "/tmp") }
-        try await scripter.respondToInitialize()
-        try await scripter.respondToLoadSession()
-        let state = try await openTask.value
+        let state = try await manager.openExisting(id: "sess", cwd: "/tmp")
+        let backend = try await scripter.waitForBackend(at: 0)
 
-        // Push two historical updates before any subscriber attaches.
         let first = SessionNotification(
             sessionId: state.id,
             update: .userMessageChunk(Content(content: .text("hi from past")))
@@ -61,19 +43,11 @@ struct SessionManagerTests {
             sessionId: state.id,
             update: .agentMessageChunk(Content(content: .text("hello from past")))
         )
-        let transports = await scripter.transports
-        let transport = try #require(transports.first)
-        transport.pushInbound(try JSONRPCFramer.encode(
-            JSONRPCNotification(method: ACPMethod.sessionUpdate, params: first)
-        ))
-        transport.pushInbound(try JSONRPCFramer.encode(
-            JSONRPCNotification(method: ACPMethod.sessionUpdate, params: second)
-        ))
+        backend.emit(.sessionUpdate(first))
+        backend.emit(.sessionUpdate(second))
         // Let the pump deliver them to the (empty) subscriber set.
         try await Task.sleep(nanoseconds: 50_000_000)
 
-        // Attach a late subscriber and expect both buffered notifications
-        // in send order.
         let stream = await manager.notifications(for: state.id)
         var iterator = stream.makeAsyncIterator()
         let receivedFirst = await iterator.next()
@@ -85,27 +59,21 @@ struct SessionManagerTests {
 
     @Test
     func notificationsFanOutToMultipleSubscribers() async throws {
-        let scripter = TransportScripter()
-        let manager = SessionManager { await scripter.next() }
+        let scripter = BackendScripter(newSessionId: "sess")
+        let manager = SessionManager(backendFactory: { await scripter.next() })
 
-        let openTask = Task { try await manager.openNew(cwd: "/tmp/x") }
-        try await scripter.respondToInitialize()
-        try await scripter.respondToNewSession(sessionId: "sess")
-        let state = try await openTask.value
+        let state = try await manager.openNew(cwd: "/tmp/x")
+        let backend = try await scripter.waitForBackend(at: 0)
 
         let streamA = await manager.notifications(for: state.id)
         let streamB = await manager.notifications(for: state.id)
-
         try await Task.sleep(nanoseconds: 50_000_000)
 
         let notification = SessionNotification(
             sessionId: state.id,
             update: .agentMessageChunk(Content(content: .text("hello")))
         )
-        let frame = try JSONRPCFramer.encode(JSONRPCNotification(method: ACPMethod.sessionUpdate, params: notification))
-        let transports = await scripter.transports
-        let transport = try #require(transports.first)
-        transport.pushInbound(frame)
+        backend.emit(.sessionUpdate(notification))
 
         var iterA = streamA.makeAsyncIterator()
         var iterB = streamB.makeAsyncIterator()
@@ -118,23 +86,14 @@ struct SessionManagerTests {
 
     @Test
     func concurrentOpenExistingForSameIdResolvesToOneRegistration() async throws {
-        let scripter = TransportScripter()
-        let manager = SessionManager { await scripter.next() }
+        let scripter = BackendScripter()
+        let manager = SessionManager(backendFactory: { await scripter.next() })
 
-        // Two parallel openExisting calls for the same session id. Both will
-        // boot fresh transports and issue initialize + session/load; only one
-        // may end up registered. Without the post-await re-check inside
-        // openExisting, the second call would silently overwrite the first
-        // and leak the original client.
+        // Two parallel openExisting calls for the same id. Both boot fresh
+        // backends; only one may register. Without the post-await re-check inside
+        // openExisting, the second would overwrite the first and leak its client.
         let firstTask = Task { try await manager.openExisting(id: "shared-id", cwd: "/tmp/a") }
         let secondTask = Task { try await manager.openExisting(id: "shared-id", cwd: "/tmp/b") }
-
-        let firstTransport = try await scripter.waitForTransport(at: 0)
-        let secondTransport = try await scripter.waitForTransport(at: 1)
-        try await scripter.respondToInitialize(on: firstTransport)
-        try await scripter.respondToInitialize(on: secondTransport)
-        try await scripter.respondToLoadSession(on: firstTransport)
-        try await scripter.respondToLoadSession(on: secondTransport)
 
         var successes = 0
         var duplicates = 0
@@ -157,14 +116,10 @@ struct SessionManagerTests {
 
     @Test
     func closeFinishesSubscribersAndDropsClient() async throws {
-        let scripter = TransportScripter()
-        let manager = SessionManager { await scripter.next() }
+        let scripter = BackendScripter(newSessionId: "sess")
+        let manager = SessionManager(backendFactory: { await scripter.next() })
 
-        let openTask = Task { try await manager.openNew(cwd: "/tmp/x") }
-        try await scripter.respondToInitialize()
-        try await scripter.respondToNewSession(sessionId: "sess")
-        let state = try await openTask.value
-
+        let state = try await manager.openNew(cwd: "/tmp/x")
         let stream = await manager.notifications(for: state.id)
         try await Task.sleep(nanoseconds: 30_000_000)
 
@@ -178,89 +133,69 @@ struct SessionManagerTests {
     }
 }
 
-private actor TransportScripter {
-    var transports: [InMemoryTransport] = []
-    private var frameIndex: [ObjectIdentifier: Int] = [:]
+/// Vends ``ScriptedChatBackend`` instances and keeps references so tests can
+/// drive each session's notification stream directly — the gateway/WS wire is
+/// covered separately by `GatewayChatClientTests`.
+private actor BackendScripter {
+    private(set) var backends: [ScriptedChatBackend] = []
+    private let newSessionId: SessionId
 
-    func next() async -> any Transport {
-        let transport = InMemoryTransport()
-        transports.append(transport)
-        return transport
+    init(newSessionId: SessionId = "sess") {
+        self.newSessionId = newSessionId
     }
 
-    func waitForTransport(at position: Int) async throws -> InMemoryTransport {
+    func next() -> any ChatBackend {
+        let backend = ScriptedChatBackend(newSessionId: newSessionId)
+        backends.append(backend)
+        return backend
+    }
+
+    func waitForBackend(at position: Int) async throws -> ScriptedChatBackend {
         for _ in 0..<200 {
-            if transports.count > position {
-                return transports[position]
+            if backends.count > position {
+                return backends[position]
             }
             try await Task.sleep(nanoseconds: 10_000_000)
         }
-        throw ScripterError.noTransport
+        throw ScripterError.noBackend
     }
 
-    func respondToInitialize() async throws {
-        let transport = try await latest()
-        try await respondToInitialize(on: transport)
-    }
-
-    func respondToInitialize(on transport: InMemoryTransport) async throws {
-        let frame = try await waitForFrame(transport)
-        let request = try JSONDecoder().decode(JSONRPCRequest<JSONValue>.self, from: frame.dropLastNewline())
-        let response = InitializeResponse(protocolVersion: 1, agentCapabilities: AgentCapabilities())
-        transport.pushInbound(try JSONRPCFramer.encode(JSONRPCResponse(id: request.id, result: response)))
-    }
-
-    func respondToNewSession(sessionId: SessionId) async throws {
-        let transport = try await latest()
-        let frame = try await waitForFrame(transport)
-        let request = try JSONDecoder().decode(JSONRPCRequest<JSONValue>.self, from: frame.dropLastNewline())
-        transport.pushInbound(try JSONRPCFramer.encode(JSONRPCResponse(id: request.id, result: NewSessionResponse(sessionId: sessionId))))
-    }
-
-    func respondToLoadSession() async throws {
-        let transport = try await latest()
-        try await respondToLoadSession(on: transport)
-    }
-
-    func respondToLoadSession(on transport: InMemoryTransport) async throws {
-        let frame = try await waitForFrame(transport)
-        let request = try JSONDecoder().decode(JSONRPCRequest<JSONValue>.self, from: frame.dropLastNewline())
-        transport.pushInbound(try JSONRPCFramer.encode(JSONRPCResponse(id: request.id, result: LoadSessionResponse())))
-    }
-
-    private func latest() async throws -> InMemoryTransport {
-        for _ in 0..<200 {
-            if let transport = transports.last {
-                return transport
-            }
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        throw ScripterError.noTransport
-    }
-
-    private func waitForFrame(_ transport: InMemoryTransport) async throws -> Data {
-        let key = ObjectIdentifier(transport)
-        for _ in 0..<200 {
-            let data = await transport.sentData()
-            let consumed = frameIndex[key, default: 0]
-            if data.count > consumed {
-                frameIndex[key] = consumed + 1
-                return data[consumed]
-            }
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        throw ScripterError.timeout
-    }
-
-    enum ScripterError: Error {
-        case noTransport
-        case timeout
-    }
+    enum ScripterError: Error { case noBackend }
 }
 
-private extension Data {
-    func dropLastNewline() -> Data {
-        guard last == 0x0A else { return self }
-        return Data(dropLast())
+/// Minimal in-memory ``ChatBackend`` whose notification stream the test feeds
+/// directly via ``emit(_:)``.
+private final class ScriptedChatBackend: ChatBackend, @unchecked Sendable {
+    nonisolated let notifications: AsyncThrowingStream<HermesNotification, Error>
+    private let continuation: AsyncThrowingStream<HermesNotification, Error>.Continuation
+    private let newSessionId: SessionId
+
+    init(newSessionId: SessionId) {
+        self.newSessionId = newSessionId
+        var captured: AsyncThrowingStream<HermesNotification, Error>.Continuation?
+        self.notifications = AsyncThrowingStream { captured = $0 }
+        self.continuation = captured!
     }
+
+    func emit(_ notification: HermesNotification) {
+        continuation.yield(notification)
+    }
+
+    func start(clientInfo: Implementation) async throws {}
+
+    func newSession(cwd: String, mcpServers: [McpServer]) async throws -> NewSessionResponse {
+        NewSessionResponse(sessionId: newSessionId)
+    }
+
+    func loadSession(sessionId: SessionId, cwd: String, mcpServers: [McpServer]) async throws -> LoadSessionResponse {
+        LoadSessionResponse()
+    }
+
+    func prompt(sessionId: SessionId, content: [ContentBlock]) async throws -> PromptResponse {
+        PromptResponse(stopReason: .endTurn)
+    }
+
+    func cancel(sessionId: SessionId) async throws {}
+    func respond(id: JSONRPCID, error: JSONRPCError) async throws {}
+    func close() async { continuation.finish() }
 }

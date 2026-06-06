@@ -12,6 +12,10 @@ final class LogsHarness {
     var entries: [Entry] = []
     var paused: Bool = false
     var lastError: String?
+    /// Top-of-window banner hub (window-scoped). Hard errors route here keyed by
+    /// the surface id so they render full-width across the top. Optional so a
+    /// missing host degrades to no-op.
+    var banners: BannerCenter?
     /// Server-side level filter applied via `/api/logs?level=`. Empty string
     /// means "all levels" — the dashboard treats absent / blank as no filter.
     var levelFilter: String = ""
@@ -128,11 +132,13 @@ final class LogsHarness {
             }
             lastSnapshotLines = response.lines
             lastError = nil
+            banners?.dismiss(key: "logs")
         } catch {
             // Same single-flight guard: don't let a superseded poll's error
             // overwrite the latest poll's state.
             guard generation == pollGeneration else { return }
             lastError = error.localizedDescription
+            banners?.surfaceError("logs", error.localizedDescription)
         }
     }
 
@@ -141,6 +147,10 @@ final class LogsHarness {
 struct LogsView: View {
     let client: DashboardClient?
     let hermesVersion: HermesVersion?
+
+    /// Window's top-of-window banner hub. Optional so a host that doesn't supply
+    /// one degrades to no-op (hard errors then simply don't render).
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
 
     @State private var harness: LogsHarness?
     @State private var autoScroll: Bool = true
@@ -166,6 +176,7 @@ struct LogsView: View {
             }
         }
         .navigationTitle("Logs")
+        .dismissesBanner("logs", from: banners)
         // Keyed on client availability so the harness is built when the
         // dashboard finishes booting and `client` flips non-nil, not only on
         // first appear (a bare `.task` on the Group never re-runs for that flip).
@@ -174,8 +185,9 @@ struct LogsView: View {
             // Re-appearing after `.onDisappear` left a stopped harness in place:
             // restart its poll loop (idempotent — `start()` guards on `task ==
             // nil`) instead of returning early and leaving tailing dead.
-            if let harness { harness.start(); return }
+            if let harness { harness.banners = banners; harness.start(); return }
             let h = LogsHarness(client: client)
+            h.banners = banners
             harness = h
             h.start()
         }
@@ -212,13 +224,15 @@ struct LogsView: View {
                 .help("Clear and refresh the logs")
             }
         }
+        // Hard errors now route to the top-of-window strip; only the orange
+        // capability warning stays in-surface.
         .manageBanner(
-            harness.lastError ?? capabilityBanner(
+            capabilityBanner(
                 .requiresDashboard,
                 feature: "Logs via Hermes dashboard",
                 version: hermesVersion
             ),
-            severity: harness.lastError != nil ? .error : .warning
+            severity: .warning
         )
     }
 

@@ -208,7 +208,7 @@ struct DesktopServerWindow: View {
     /// In-place Hermes-profile swap. Mirrors `switchProfile`: tears the harness
     /// down (dropping open chats, consistent with a server switch) before
     /// swapping `activeHermesProfile`, which re-fires `.task` to rebuild the
-    /// whole window — dashboard, ACP chat, and admin runner — under `-p <name>`.
+    /// whole window — dashboard, chat, and admin runner — under `-p <name>`.
     private func switchHermesProfile(to name: String) {
         guard name != activeHermesProfile else { return }
         harness?.tearDown()
@@ -247,6 +247,10 @@ struct DesktopServerWindow: View {
         // Track this window's foreground state (to gate notifications) and
         // consume a tapped-notification route addressed to this profile.
         .chatNotificationRouting(store: harness.store, profileId: harness.profile.id)
+        // Full-width banner strip across the top of the window: bridges
+        // session/dashboard errors + the web-UI progress note from the sidebar,
+        // and publishes the center so detail surfaces emit save successes here.
+        .bridgeWindowBanners(harness: harness)
     }
 
     @ViewBuilder
@@ -268,69 +272,9 @@ struct DesktopServerWindow: View {
                     }
                 }
 
-            if let error = harness.store.lastError {
-                Section {
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(error)
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                            Button("Dismiss") { harness.store.lastError = nil }
-                                .buttonStyle(.borderless)
-                                .controlSize(.mini)
-                        }
-                    }
-                }
-            }
-
-            // The dashboard process is up but not yet serving. Surfaces would
-            // otherwise sit on a hintless "connecting…" placeholder for the
-            // length of the startup. `.buildingWebUI` is the confirmed-build
-            // case (marker seen); `.slowToStart` is alive-but-not-listening with
-            // no marker — likely still building, but unconfirmed, so the copy
-            // hedges rather than asserting a build.
-            if let phase = harness.startupPhase {
-                Section {
-                    HStack(alignment: .top, spacing: 6) {
-                        ProgressView()
-                            .controlSize(.small)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(phase == .buildingWebUI ? "Building web UI…" : "Starting server…")
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                            Text(phase == .buildingWebUI
-                                ? "Hermes is compiling its dashboard after an update. This can take a minute."
-                                : "The dashboard isn't responding yet. If Hermes was just updated it may still be compiling its web UI — this can take a minute.")
-                                .font(.caption2)
-                                .foregroundStyle(.primary)
-                                .opacity(0.6)
-                        }
-                    }
-                }
-            }
-
-            // Surface a failed dashboard spawn window-wide. Without this the
-            // dashboard surfaces sit on a perpetual "connecting…" placeholder
-            // with no hint as to why.
-            if let dashboardError = harness.dashboardError {
-                Section {
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(dashboardError)
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                            Button("Reconnect") { harness.reconnectDashboard() }
-                                .buttonStyle(.borderless)
-                                .controlSize(.mini)
-                                .help("Reconnect the dashboard")
-                        }
-                    }
-                }
-            }
+            // Connection / session errors and the "Building web UI…" progress
+            // note no longer render here — they're bridged to the full-width
+            // top-of-window strip (see `bridgeWindowBanners` in `content`).
 
             Section("Browse") {
                 browseRow(.sessions, store: harness.store)

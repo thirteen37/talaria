@@ -33,7 +33,7 @@ public enum HermesProbe {
         case .local:
             result = try await runLocal(profile: profile, timeout: timeout)
         case .ssh:
-            try await SSHTransport.probeConnectivity(profile: profile)
+            try await SSHProbe.probeConnectivity(profile: profile)
             result = try await runOverSSH(profile: profile, timeout: timeout)
         }
 
@@ -87,7 +87,7 @@ public enum HermesProbe {
             arguments += ["-i", identityFile]
         }
         let destination = profile.user.map { "\($0)@\(host)" } ?? host
-        arguments += ["--", destination, "sh", "-lc", SSHTransport.shellQuote(script)]
+        arguments += ["--", destination, "sh", "-lc", SSHProbe.shellQuote(script)]
 
         do {
             let result = try await OneShotProcess.run(
@@ -98,7 +98,7 @@ public enum HermesProbe {
             if result.exitCode != 0 && result.stdout.isEmpty {
                 // Classify SSH-level failures (auth, host key) separately from
                 // hermes-binary-missing so the UI can render the right message.
-                let classified = SSHTransport.classifyStderr(result.stderr)
+                let classified = SSHProbe.classifyStderr(result.stderr)
                 if case .other = classified {
                     return result
                 }

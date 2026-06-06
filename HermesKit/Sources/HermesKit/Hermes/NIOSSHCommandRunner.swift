@@ -89,14 +89,14 @@ final class NIOSSHAuthLatch: @unchecked Sendable {
 }
 
 /// Builds the SSH client configuration shared by every NIO-SSH consumer
-/// (the snapshot `cat`/upload transfer, the command runner, and the iOS
-/// dashboard connection). Centralizing credential resolution + the auth/host-key
+/// (the dashboard connection, the snapshot `cat`/upload transfer, and the
+/// command runner). Centralizing credential resolution + the auth/host-key
 /// delegates here keeps the security-critical wiring from drifting between
 /// call sites.
 enum NIOSSHConnectionFactory {
     /// Resolves credentials and connects a fresh authenticating SSH channel.
     /// Throws a typed ``SSHTransportError`` on auth/host-key/connect failure
-    /// (already routed through ``NIOSSHTransport/mapConnectError``). The returned
+    /// (already routed through ``NIOSSHConnectError/map(_:host:port:)``). The returned
     /// ``NIOSSHConnection`` carries an auth-exhaustion latch so the caller's
     /// first child-channel open fails fast on a rejected login.
     static func connect(
@@ -139,7 +139,7 @@ enum NIOSSHConnectionFactory {
         let hostKeyDelegate = NIOSSHHostKeyVerifier(store: hostKeyStore, host: host, port: port, confirmUnknown: hostKeyConfirmer)
 
         let bootstrap = ClientBootstrap(group: group)
-            // Match the ACP transport's connect bound so a stalled SYN
+            // Match the dashboard connection's connect bound so a stalled SYN
             // doesn't pin the UI for ~75s on macOS's default TCP backoff.
             .connectTimeout(.seconds(15))
             // Build the (non-Sendable) `SSHClientConfiguration` and install the
@@ -167,7 +167,7 @@ enum NIOSSHConnectionFactory {
             // Auth runs after TCP connect, so exhaustion can't have fired yet;
             // settle the latch so its promise doesn't leak.
             authLatch.resolve()
-            throw NIOSSHTransport.mapConnectError(error, host: host, port: port)
+            throw NIOSSHConnectError.map(error, host: host, port: port)
         }
         // Settle the latch when the connection ends so it never leaks on the
         // success path; a real auth exhaustion fails it first (resolve no-ops).
@@ -257,7 +257,7 @@ public struct NIOSSHCommandRunner: RemoteCommandRunning {
         hostKeyStore: HostKeyStore,
         hostKeyConfirmer: HostKeyConfirmer? = nil,
         passphrase: String? = nil,
-        group: EventLoopGroup = NIOSSHTransport.sharedGroup
+        group: EventLoopGroup = SSHEventLoopGroup.shared
     ) {
         self.profile = profile
         self.credentialProvider = credentialProvider

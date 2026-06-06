@@ -41,7 +41,21 @@ final class KanbanHarness {
     var draft: KanbanDraft?
     var includeArchived: Bool = false
     var isLoading: Bool = false
-    var lastError: String?
+    /// Hard errors mirror to the top-of-window strip keyed "kanban" via the
+    /// observer, so every mutation site routes without per-call wiring. The
+    /// orange `lastWarning` stays in-surface (the action succeeded).
+    var lastError: String? {
+        didSet {
+            if let lastError {
+                banners?.surfaceError("kanban", lastError)
+            } else {
+                banners?.dismiss(key: "kanban")
+            }
+        }
+    }
+    /// Top-of-window banner hub (window-scoped); optional so a missing host
+    /// degrades to no-op.
+    var banners: BannerCenter?
     /// Informational notice returned alongside an otherwise-successful mutation
     /// (e.g. the server's `warning` on create/move/edit). Kept separate from
     /// `lastError` so the banner can render it as a `.warning` rather than a red
@@ -227,6 +241,14 @@ final class KanbanHarness {
     }
 
     func cancelCreate() { draft = nil }
+
+    /// Clears both state vars that open the secondary pane (the create draft and
+    /// the selected card) in one call — used by the iPhone push to deselect the
+    /// board when the pushed create/detail page is popped via Back.
+    func closeSecondary() {
+        draft = nil
+        clearSelection()
+    }
 
     func createTask(_ draft: KanbanDraft) async {
         do {

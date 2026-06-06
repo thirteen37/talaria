@@ -6,6 +6,8 @@ struct ToolsView: View {
     let runner: HermesAdminRunning?
     let hermesVersion: HermesVersion?
 
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
+
     @State private var harness: ToolsMatrixHarness?
 
     init(client: DashboardClient?, runner: HermesAdminRunning?, hermesVersion: HermesVersion? = nil) {
@@ -35,6 +37,7 @@ struct ToolsView: View {
             }
         }
         .navigationTitle("Tools")
+        .dismissesBanner("tools", from: banners)
         .task(id: client != nil) {
             guard let client, runner != nil else {
                 harness = nil
@@ -42,6 +45,7 @@ struct ToolsView: View {
             }
             if harness != nil { return }
             let h = ToolsMatrixHarness(client: client, runner: runner)
+            h.banners = banners
             harness = h
             await h.refresh()
         }
@@ -64,21 +68,29 @@ struct ToolsView: View {
         // macOS, an `HStack`+`Divider` on iPad. Selecting a tool's Config button
         // opens the secondary pane; closing it (or losing the tool's last var)
         // collapses the split back to the full-width matrix.
-        PlatformSplit(showsSecondary: harness.selectedToolID != nil) {
+        PlatformSplit(
+            showsSecondary: Binding(
+                get: { harness.selectedToolID != nil },
+                set: { if !$0 { harness.selectedToolID = nil } }
+            ),
+            secondaryTitle: configTitle(harness)
+        ) {
             matrixPane(harness: harness)
-                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 420, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             configPane(harness: harness)
                 .frame(minWidth: 320, idealWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Hard errors route to the top-of-window strip; only the capability
+        // warning stays in-surface.
         .manageBanner(
-            harness.lastError ?? capabilityBanner(
+            capabilityBanner(
                 .toolsEnablePerPlatform,
                 feature: "Per-platform tools enable/disable",
                 version: hermesVersion
             ),
-            severity: harness.lastError != nil ? .error : .warning
+            severity: .warning
         )
     }
 
@@ -98,6 +110,14 @@ struct ToolsView: View {
             ContentUnavailableView("No tools", systemImage: "hammer")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// Title for the pushed iPhone config page — the selected tool's friendly
+    /// label (or raw id). nil when nothing is selected (the pane is hidden).
+    private func configTitle(_ harness: ToolsMatrixHarness) -> String? {
+        guard let toolID = harness.selectedToolID,
+              let row = harness.matrix?.rows.first(where: { $0.name == toolID }) else { return nil }
+        return row.label ?? row.name
     }
 
     @ViewBuilder

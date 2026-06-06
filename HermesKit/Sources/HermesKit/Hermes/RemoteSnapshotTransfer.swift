@@ -209,7 +209,7 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
         hostKeyStore: HostKeyStore,
         hostKeyConfirmer: HostKeyConfirmer? = nil,
         passphrase: String? = nil,
-        group: EventLoopGroup = NIOSSHTransport.sharedGroup
+        group: EventLoopGroup = SSHEventLoopGroup.shared
     ) {
         self.profile = profile
         self.credentialProvider = credentialProvider
@@ -265,11 +265,11 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
         _ = try? await connection.channel.close().get()
     }
 
-    /// Opens a fresh authenticated SSH connection, reusing the same auth and
-    /// host-key delegates as the snapshot fetch — `upload` deliberately adds no
     /// new trust surface. Routes through ``NIOSSHConnectionFactory`` so it shares
     /// the dashboard/command-runner auth wiring, including the auth-exhaustion
     /// fast-fail that keeps a rejected login from stalling until LoginGraceTime.
+    /// Typed host-key / auth errors are funneled through ``NIOSSHConnectError``
+    /// by the factory so both transports surface identical errors.
     private func makeConnection() async throws -> NIOSSHConnection {
         try await NIOSSHConnectionFactory.connect(
             profile: profile,
@@ -390,8 +390,8 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
 
 /// Per-fetch child-channel handler. Drives the `cat` exec, streams
 /// stdout to the file (off the event loop, so the shared single-threaded
-/// `NIOSSHTransport.sharedGroup` doesn't stall the ACP transport during
-/// multi-MB transfers), accumulates stderr, captures the exit code, and
+/// `SSHEventLoopGroup.shared` doesn't stall the live dashboard/chat channels
+/// during multi-MB transfers), accumulates stderr, captures the exit code, and
 /// fulfills `complete` on channel close.
 ///
 /// Writes are serialized through a dedicated `DispatchQueue` so out-of-
@@ -504,7 +504,7 @@ final class NIOSSHCatHandler: ChannelDuplexHandler, @unchecked Sendable {
         // caller must never see "succeeded" while bytes are still queued.
         // `writeQueue.sync` would block the SSH event loop (single-thread
         // shared ELG), freezing every other channel on it including the
-        // live ACP transport. Instead, post an `.async` to the *serial*
+        // live dashboard and chat channels. Instead, post an `.async` to the *serial*
         // write queue: it can only run after every prior write has
         // finished, then we hop back to the loop to fulfill the promise.
         //

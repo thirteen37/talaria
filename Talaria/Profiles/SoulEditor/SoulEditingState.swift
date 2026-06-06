@@ -10,8 +10,21 @@ final class SoulEditingState: Identifiable {
     var text = ""
     private(set) var original: String?
     var isLoading = false
-    var lastError: String?
+    /// Hard errors mirror to the top-of-window strip keyed "soul" via the
+    /// observer; the in-pane note keeps only the dashboard-unavailable warning.
+    var lastError: String? {
+        didSet {
+            if let lastError {
+                banners?.surfaceError("soul", lastError)
+            } else {
+                banners?.dismiss(key: "soul")
+            }
+        }
+    }
     var dashboardUnavailable = false
+    /// Top-of-window banner hub (window-scoped); optional so a missing host
+    /// degrades to no-op.
+    var banners: BannerCenter?
 
     private let defaultClientProvider: @MainActor () -> DashboardClient?
     private let serverProfile: ServerProfile
@@ -101,6 +114,7 @@ final class SoulEditingState: Identifiable {
         }
         do {
             try await client.updateSoul(profile: profileName, content: text)
+            banners?.surfaceSuccess("soul", "Soul saved")
             load()
         } catch {
             lastError = error.localizedDescription

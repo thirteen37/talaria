@@ -2,7 +2,7 @@
 
 Talaria is a native SwiftUI front-end for Hermes Agent — macOS today, with an in-progress iOS target sharing the same source tree behind platform seam folders. Shared protocol and transport code lives in the `HermesKit` Swift package.
 
-Talaria is one of several GUIs for Hermes Agent. Its distinguishing choice is its **integration boundary**: every non-chat surface goes through the `hermes dashboard` HTTP API (live chat over ACP), so it never reads or writes Hermes' database or config files directly, and the same path works whether Hermes is local or remote over SSH. It's also fully native, signed, and notarized — not Electron, not a browser tab.
+Talaria is one of several GUIs for Hermes Agent. Its distinguishing choice is its **integration boundary**: every surface goes through `hermes dashboard` — non-chat screens over its HTTP API, live chat over its `/api/ws` JSON-RPC gateway — so it never reads or writes Hermes' database or config files directly, and the same path works whether Hermes is local or remote over SSH. It's also fully native, signed, and notarized — not Electron, not a browser tab.
 
 See [`docs/comparison.md`](docs/comparison.md) for the full feature-by-feature breakdown against the official Hermes Desktop (and the unrelated third-party app of the same name), the built-in `hermes dashboard`, and the other Hermes front-ends.
 
@@ -44,8 +44,8 @@ Talaria drives [Hermes Agent](https://github.com/NousResearch/hermes-agent). Ins
 
 This repository contains the dashboard-mode build:
 
-- `Talaria`: SwiftUI app (macOS, with a shared iOS target) — ACP chat plus dashboard-backed Browse surfaces: Sessions, **Skills, Tools, MCP, Plugins** (one tabbed destination — MCP servers include add/edit, enable, connection test, and a Nous-approved install catalog), Cron, Kanban, Gateway, Hermes profiles, **Configuration** (the `config.yaml` editor and the `.env` Environment editor as two tabs), Soul, Personalities, Models, and **System** (Doctor, Updates, and Logs as three tabs). Chats can also be opened as the real Hermes TUI in an embedded terminal (macOS). The Browse sidebar is reorderable and pages can be hidden; a Settings screen holds Server Profiles, Sidebar Order, and Notifications. Optional OS-level chat notifications (agent-finished / tool-approval) and Sparkle auto-update.
-- `HermesKit`: Swift package for ACP/JSON-RPC, transports, dashboard HTTP client/supervisor, CLI fallbacks, profile models, and capability gates.
+- `Talaria`: SwiftUI app (macOS, with a shared iOS target) — gateway chat (`/api/ws`) plus dashboard-backed Browse surfaces: Sessions, **Skills, Tools, MCP, Plugins** (one tabbed destination — MCP servers include add/edit, enable, connection test, and a Nous-approved install catalog), Cron, Kanban, Gateway, Hermes profiles, **Configuration** (the `config.yaml` editor and the `.env` Environment editor as two tabs), Soul, Personalities, Models, and **System** (Doctor, Updates, and Logs as three tabs). Chats can also be opened as the real Hermes TUI in an embedded terminal (macOS). The Browse sidebar is reorderable and pages can be hidden; a Settings screen holds Server Profiles, Sidebar Order, and Notifications. Optional OS-level chat notifications (agent-finished / tool-approval) and Sparkle auto-update.
+- `HermesKit`: Swift package for the JSON-RPC chat-event model, the gateway WebSocket + NIO-SSH transport, dashboard HTTP client/supervisor, CLI fallbacks, profile models, and capability gates.
 - `docs`: architecture, security, release, integration coverage, dashboard API, competitor comparison, roadmap, and manual test-plan notes.
 
 ## Prerequisite: Hermes Agent
