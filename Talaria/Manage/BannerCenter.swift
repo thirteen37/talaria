@@ -279,13 +279,17 @@ extension View {
                     harness.banners.dismiss(key: "dashboard")
                 }
             }
-            .onChange(of: harness.isBuildingWebUI, initial: true) { _, building in
-                if building {
+            .onChange(of: harness.startupPhase, initial: true) { _, phase in
+                if let phase {
+                    // `.buildingWebUI` is confirmed (the build marker was seen),
+                    // so we may assert the build; `.slowToStart` is alive-but-not
+                    // -listening with no marker — likely still building, but
+                    // unconfirmed, so hedge rather than claim a build outright.
                     harness.banners.info(
-                        "Building web UI…",
+                        phase == .buildingWebUI ? "Building web UI…" : "Starting server…",
                         key: "webui",
                         persist: true,
-                        onDismiss: { [weak harness] in harness?.isBuildingWebUI = false }
+                        onDismiss: { [weak harness] in harness?.startupPhase = nil }
                     )
                 } else {
                     harness.banners.dismiss(key: "webui")

@@ -232,10 +232,10 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
                 to: to
             )
         } catch {
-            _ = try? await connection.close().get()
+            _ = try? await connection.channel.close().get()
             throw error
         }
-        _ = try? await connection.close().get()
+        _ = try? await connection.channel.close().get()
     }
 
     public func upload(from localURL: URL, to remotePath: String) async throws {
@@ -259,66 +259,29 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
         do {
             try await uploadOnConnection(connection: connection, payload: payload, remotePath: remotePath)
         } catch {
-            _ = try? await connection.close().get()
+            _ = try? await connection.channel.close().get()
             throw error
         }
-        _ = try? await connection.close().get()
+        _ = try? await connection.channel.close().get()
     }
 
-    /// Opens a fresh authenticated SSH connection, reusing the same auth and
-    /// host-key delegates as the snapshot fetch — `upload` deliberately adds no
-    /// new trust surface. Typed host-key / auth errors are funneled through the
-    /// ACP transport's translator so both transports surface identical errors.
-    private func makeConnection() async throws -> Channel {
-        guard let host = profile.host, !host.isEmpty else {
-            throw SSHTransportError.other("profile is not an SSH profile")
-        }
-        let port = profile.port ?? 22
-        let user = profile.user ?? NSUserName()
-
-        let privateKey = try credentialProvider.privateKey(for: profile, passphrase: passphrase)
-        let password = try credentialProvider.password(for: profile)
-        if privateKey == nil, password == nil {
-            throw SSHTransportError.authFailed("profile has no identity file or password configured")
-        }
-        let authDelegate = NIOSSHAuthDelegate(username: user, privateKey: privateKey, password: password)
-        let hostKeyDelegate = NIOSSHHostKeyVerifier(store: hostKeyStore, host: host, port: port, confirmUnknown: hostKeyConfirmer)
-
-        let bootstrap = ClientBootstrap(group: group)
-            // Match the dashboard connection's connect bound so a stalled SYN
-            // doesn't pin the UI for ~75s on macOS's default TCP backoff.
-            .connectTimeout(.seconds(15))
-            // Build the (non-Sendable) `SSHClientConfiguration` and install the
-            // handler on the event loop so neither crosses the `@Sendable`
-            // initializer boundary; only the Sendable delegates are captured.
-            .channelInitializer { channel in
-                channel.eventLoop.makeCompletedFuture {
-                    try channel.pipeline.syncOperations.addHandler(
-                        NIOSSHHandler(
-                            role: .client(SSHClientConfiguration(
-                                userAuthDelegate: authDelegate,
-                                serverAuthDelegate: hostKeyDelegate
-                            )),
-                            allocator: channel.allocator,
-                            inboundChildChannelInitializer: nil
-                        )
-                    )
-                }
-            }
-
-        do {
-            return try await bootstrap.connect(host: host, port: port).get()
-        } catch {
-            // Typed host-key / auth errors raised by our delegates would
-            // otherwise escape unwrapped and be reclassified as a generic
-            // `.ioFailed` by RemoteSnapshot.runFetch. Funnel them through
-            // the same translator the dashboard transport uses so both
-            // surface identical typed errors for the same conditions.
-            throw NIOSSHConnectError.map(error, host: host, port: port)
-        }
+    /// new trust surface. Routes through ``NIOSSHConnectionFactory`` so it shares
+    /// the dashboard/command-runner auth wiring, including the auth-exhaustion
+    /// fast-fail that keeps a rejected login from stalling until LoginGraceTime.
+    /// Typed host-key / auth errors are funneled through ``NIOSSHConnectError``
+    /// by the factory so both transports surface identical errors.
+    private func makeConnection() async throws -> NIOSSHConnection {
+        try await NIOSSHConnectionFactory.connect(
+            profile: profile,
+            credentialProvider: credentialProvider,
+            hostKeyStore: hostKeyStore,
+            hostKeyConfirmer: hostKeyConfirmer,
+            passphrase: passphrase,
+            group: group
+        )
     }
 
-    private func fetchOnConnection(connection: Channel, remotePath: String, to: URL) async throws {
+    private func fetchOnConnection(connection: NIOSSHConnection, remotePath: String, to: URL) async throws {
         let tmpURL = to.appendingPathExtension("downloading-\(UUID().uuidString)")
         try? FileManager.default.removeItem(at: tmpURL)
         FileManager.default.createFile(atPath: tmpURL.path, contents: nil)
@@ -368,7 +331,7 @@ public struct NIOSSHCatTransfer: RemoteSnapshotTransfer {
         try Self.installAtomically(from: tmpURL, to: to)
     }
 
-    private func uploadOnConnection(connection: Channel, payload: Data, remotePath: String) async throws {
+    private func uploadOnConnection(connection: NIOSSHConnection, payload: Data, remotePath: String) async throws {
         let remoteTmp = "\(remotePath).uploading-\(UUID().uuidString)"
         let command = Self.writeCommand(remoteTmp: remoteTmp, remotePath: remotePath)
         let result: WriteResultBox
@@ -720,39 +683,29 @@ extension NIOSSHCatTransfer {
     }
 
     fileprivate func runExec(
-        connection: Channel,
+        connection: NIOSSHConnection,
         command: String,
         writeHandle: FileHandle
     ) async throws -> CatResultBox {
-        let promise = connection.eventLoop.makePromise(of: CatResultBox.self)
+        let eventLoop = connection.channel.eventLoop
+        let promise = eventLoop.makePromise(of: CatResultBox.self)
 
-        // Resolve the (non-Sendable, library) `NIOSSHHandler` and open the
-        // session child channel entirely on the event loop, so it never
-        // crosses an async boundary. The cat handler is installed inside the
-        // on-loop initializer.
-        let childChannel = try await connection.eventLoop.flatSubmit { () -> EventLoopFuture<Channel> in
-            let childPromise = connection.eventLoop.makePromise(of: Channel.self)
-            do {
-                let sshHandler = try connection.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
-                sshHandler.createChannel(childPromise, channelType: .session) { childChannel, _ in
-                    childChannel.eventLoop.makeCompletedFuture {
-                        try childChannel.pipeline.syncOperations.addHandler(
-                            NIOSSHCatHandler(command: command, writeHandle: writeHandle, complete: promise)
-                        )
-                    }
-                }
-            } catch {
-                childPromise.fail(error)
+        // Open the session child channel, failing fast if auth was rejected
+        // rather than stalling until the server's LoginGraceTime.
+        let childChannel = try await NIOSSHConnectionFactory.openChannel(on: connection) { childChannel in
+            childChannel.eventLoop.makeCompletedFuture {
+                try childChannel.pipeline.syncOperations.addHandler(
+                    NIOSSHCatHandler(command: command, writeHandle: writeHandle, complete: promise)
+                )
             }
-            return childPromise.futureResult
-        }.get()
+        }
 
         // Bound the await against ``fetchTimeout``. On expiry we flag the
         // handler (so the eventual `channelInactive` fulfills the promise
         // with `timedOut == true`) and force-close the channel to unblock
         // the await. Cleaning up the timer when the promise settles
         // normally avoids a dangling reference.
-        let timeout = connection.eventLoop.scheduleTask(in: Self.fetchTimeout) {
+        let timeout = eventLoop.scheduleTask(in: Self.fetchTimeout) {
             // On the event loop: read the handler back from the pipeline rather
             // than capturing it, then mark the timeout and tear the channel down.
             let handler = try? childChannel.pipeline.syncOperations.handler(type: NIOSSHCatHandler.self)
@@ -786,30 +739,24 @@ extension NIOSSHCatTransfer {
     }
 
     fileprivate func runWriteExec(
-        connection: Channel,
+        connection: NIOSSHConnection,
         command: String,
         payload: Data
     ) async throws -> WriteResultBox {
-        let promise = connection.eventLoop.makePromise(of: WriteResultBox.self)
+        let eventLoop = connection.channel.eventLoop
+        let promise = eventLoop.makePromise(of: WriteResultBox.self)
 
-        let childChannel = try await connection.eventLoop.flatSubmit { () -> EventLoopFuture<Channel> in
-            let childPromise = connection.eventLoop.makePromise(of: Channel.self)
-            do {
-                let sshHandler = try connection.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
-                sshHandler.createChannel(childPromise, channelType: .session) { childChannel, _ in
-                    childChannel.eventLoop.makeCompletedFuture {
-                        try childChannel.pipeline.syncOperations.addHandler(
-                            NIOSSHWriteHandler(command: command, payload: payload, complete: promise)
-                        )
-                    }
-                }
-            } catch {
-                childPromise.fail(error)
+        // Open the session child channel, failing fast if auth was rejected
+        // rather than stalling until the server's LoginGraceTime.
+        let childChannel = try await NIOSSHConnectionFactory.openChannel(on: connection) { childChannel in
+            childChannel.eventLoop.makeCompletedFuture {
+                try childChannel.pipeline.syncOperations.addHandler(
+                    NIOSSHWriteHandler(command: command, payload: payload, complete: promise)
+                )
             }
-            return childPromise.futureResult
-        }.get()
+        }
 
-        let timeout = connection.eventLoop.scheduleTask(in: Self.fetchTimeout) {
+        let timeout = eventLoop.scheduleTask(in: Self.fetchTimeout) {
             let handler = try? childChannel.pipeline.syncOperations.handler(type: NIOSSHWriteHandler.self)
             handler?.markTimedOut()
             childChannel.close(promise: nil)

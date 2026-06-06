@@ -103,17 +103,17 @@ extension ServerWindowHarness {
     func acquireDashboard() async {
         let (supervisor, connection) = makeIOSDashboardSupervisor(hermesProfileName: hermesProfileName)
         dashboardSupervisor = supervisor
-        isBuildingWebUI = false
+        startupPhase = nil
         do {
             let endpoint = try await supervisor.acquire(
-                onWebUIBuildDetected: { [weak self] in await self?.markWebUIBuilding() }
+                onStartupProgress: { [weak self] phase in await self?.noteStartupPhase(phase) }
             )
             try Task.checkCancellation()
             guard !dashboardReleased else { return }
             dashboardClient = endpoint.session.client()
             store.dashboardClient = dashboardClient
             dashboardError = nil
-            isBuildingWebUI = false
+            startupPhase = nil
             // Hand the live SSH connection + remote port to the chat factory so a
             // gateway-chat session can tunnel `/api/ws` over it.
             if let port = endpoint.baseURL.port {
@@ -130,7 +130,7 @@ extension ServerWindowHarness {
             guard !Task.isCancelled, !dashboardReleased else { return }
             dashboardClient = nil
             store.dashboardClient = nil
-            isBuildingWebUI = false
+            startupPhase = nil
             dashboardError = error.localizedDescription
         }
     }

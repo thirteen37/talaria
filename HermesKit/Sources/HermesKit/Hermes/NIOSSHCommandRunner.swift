@@ -29,15 +29,76 @@ extension RemoteCommandRunning {
     }
 }
 
+/// A connected, authenticating NIO-SSH channel plus a fast-fail signal for
+/// auth exhaustion. Open your first child channel via
+/// ``NIOSSHConnectionFactory/openChannel(on:type:initializer:)`` (or race
+/// ``authExhausted`` yourself) so a fully-rejected login surfaces immediately
+/// as ``SSHTransportError/authFailed(_:)`` instead of stalling until the
+/// server's `LoginGraceTime` — the iOS "connection spinner never stops" bug.
+struct NIOSSHConnection: Sendable {
+    let channel: Channel
+    /// Fails with ``SSHTransportError/authFailed(_:)`` once every credential has
+    /// been offered and rejected. Succeeds (a no-op for failure observers) when
+    /// the connection closes, so it never leaks on the success path.
+    let authExhausted: EventLoopFuture<Void>
+}
+
+/// Resolves at most once, bridging ``NIOSSHAuthDelegate``'s exhaustion callback
+/// into a future the connection-open await can race. `onExhausted` fails it with
+/// a clear auth error; `resolve()` (called from connection-close cleanup)
+/// succeeds it. Either call after the latch is settled is a safe no-op, so the
+/// "auth rejected" and "connection closed normally" paths can both run without
+/// a "promise resolved twice" crash.
+final class NIOSSHAuthLatch: @unchecked Sendable {
+    private let promise: EventLoopPromise<Void>
+    private let lock = NSLock()
+    private var settled = false
+    private let message: String
+
+    /// `message` is surfaced verbatim via ``SSHTransportError/authFailed(_:)`` on
+    /// exhaustion. Don't prefix it with "Authentication failed" — that error's
+    /// errorDescription already adds it, so a prefix would double up.
+    init(eventLoop: EventLoop, message: String) {
+        self.promise = eventLoop.makePromise(of: Void.self)
+        self.message = message
+    }
+
+    var future: EventLoopFuture<Void> { promise.futureResult }
+
+    /// Suitable as ``NIOSSHAuthDelegate``'s `onExhausted`. Strongly captures the
+    /// latch so the delegate (retained by the channel pipeline for the
+    /// connection's lifetime) keeps it alive; the latch holds no ref back, so
+    /// there's no cycle.
+    var onExhausted: @Sendable () -> Void {
+        { self.failOnce() }
+    }
+
+    func resolve() {
+        lock.lock(); defer { lock.unlock() }
+        guard !settled else { return }
+        settled = true
+        promise.succeed(())
+    }
+
+    private func failOnce() {
+        lock.lock(); defer { lock.unlock() }
+        guard !settled else { return }
+        settled = true
+        promise.fail(SSHTransportError.authFailed(message))
+    }
+}
+
 /// Builds the SSH client configuration shared by every NIO-SSH consumer
-/// (the dashboard connection, the snapshot `cat` transfer, and the command
-/// runner). Centralizing credential resolution + the auth/host-key
+/// (the dashboard connection, the snapshot `cat`/upload transfer, and the
+/// command runner). Centralizing credential resolution + the auth/host-key
 /// delegates here keeps the security-critical wiring from drifting between
 /// call sites.
 enum NIOSSHConnectionFactory {
-    /// Resolves credentials and connects a fresh authenticated SSH channel.
+    /// Resolves credentials and connects a fresh authenticating SSH channel.
     /// Throws a typed ``SSHTransportError`` on auth/host-key/connect failure
-    /// (already routed through ``NIOSSHTransport/mapConnectError``).
+    /// (already routed through ``NIOSSHConnectError/map(_:host:port:)``). The returned
+    /// ``NIOSSHConnection`` carries an auth-exhaustion latch so the caller's
+    /// first child-channel open fails fast on a rejected login.
     static func connect(
         profile: ServerProfile,
         credentialProvider: SSHCredentialProvider,
@@ -45,7 +106,7 @@ enum NIOSSHConnectionFactory {
         hostKeyConfirmer: HostKeyConfirmer?,
         passphrase: String?,
         group: EventLoopGroup
-    ) async throws -> Channel {
+    ) async throws -> NIOSSHConnection {
         guard let host = profile.host, !host.isEmpty else {
             throw SSHTransportError.other("profile is not an SSH profile")
         }
@@ -57,7 +118,24 @@ enum NIOSSHConnectionFactory {
         if privateKey == nil, password == nil {
             throw SSHTransportError.authFailed("profile has no identity file or password configured")
         }
-        let authDelegate = NIOSSHAuthDelegate(username: user, privateKey: privateKey, password: password)
+        // Surface auth exhaustion (all credentials offered + rejected) as a
+        // fast, clear error. Without this the child-channel open below stalls:
+        // NIOSSH stops offering once we're out of credentials, but the server
+        // holds the connection open until its LoginGraceTime, so the await never
+        // returns and the UI spinner spins forever.
+        // Name *every* credential that was offered so a user with both a key and
+        // a password set knows to re-check both, not just the key.
+        let authFailureMessage = NIOSSHAuthDelegate.authRejectedMessage(
+            hasKey: privateKey != nil,
+            hasPassword: password != nil
+        )
+        let authLatch = NIOSSHAuthLatch(eventLoop: group.next(), message: authFailureMessage)
+        let authDelegate = NIOSSHAuthDelegate(
+            username: user,
+            privateKey: privateKey,
+            password: password,
+            onExhausted: authLatch.onExhausted
+        )
         let hostKeyDelegate = NIOSSHHostKeyVerifier(store: hostKeyStore, host: host, port: port, confirmUnknown: hostKeyConfirmer)
 
         let bootstrap = ClientBootstrap(group: group)
@@ -82,11 +160,83 @@ enum NIOSSHConnectionFactory {
                 }
             }
 
+        let channel: Channel
         do {
-            return try await bootstrap.connect(host: host, port: port).get()
+            channel = try await bootstrap.connect(host: host, port: port).get()
         } catch {
+            // Auth runs after TCP connect, so exhaustion can't have fired yet;
+            // settle the latch so its promise doesn't leak.
+            authLatch.resolve()
             throw NIOSSHConnectError.map(error, host: host, port: port)
         }
+        // Settle the latch when the connection ends so it never leaks on the
+        // success path; a real auth exhaustion fails it first (resolve no-ops).
+        channel.closeFuture.whenComplete { _ in authLatch.resolve() }
+        return NIOSSHConnection(channel: channel, authExhausted: authLatch.future)
+    }
+
+    /// Opens a child channel on `connection`, failing fast with the auth error
+    /// if credentials are exhausted before the channel opens. `initializer`
+    /// builds the child's handler(s) on the child's event loop.
+    static func openChannel(
+        on connection: NIOSSHConnection,
+        type: SSHChannelType = .session,
+        initializer: @escaping @Sendable (Channel) -> EventLoopFuture<Void>
+    ) async throws -> Channel {
+        let eventLoop = connection.channel.eventLoop
+        let childPromise = eventLoop.makePromise(of: Channel.self)
+        // Resolve the (non-Sendable, library) `NIOSSHHandler` and open the child
+        // entirely on the event loop, so it never crosses an async boundary.
+        eventLoop.execute {
+            do {
+                let sshHandler = try connection.channel.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
+                sshHandler.createChannel(childPromise, channelType: type) { child, _ in
+                    initializer(child)
+                }
+            } catch {
+                childPromise.fail(error)
+            }
+        }
+        return try await raceAuthExhaustion(
+            childPromise.futureResult,
+            authExhausted: connection.authExhausted,
+            on: eventLoop
+        ).get()
+    }
+
+    /// Returns a future that settles with whichever happens first: `open`
+    /// completing, or `authExhausted` failing. Resolves exactly once even when
+    /// both fire — on a rejected login the latch fails *and* the queued child
+    /// open then fails as the connection tears down, so the guard prevents a
+    /// "promise resolved twice" crash.
+    static func raceAuthExhaustion(
+        _ open: EventLoopFuture<Channel>,
+        authExhausted: EventLoopFuture<Void>,
+        on eventLoop: EventLoop
+    ) -> EventLoopFuture<Channel> {
+        let result = eventLoop.makePromise(of: Channel.self)
+        let once = ResolveOnce()
+        open.whenComplete { outcome in
+            guard once.claim() else { return }
+            result.completeWith(outcome)
+        }
+        authExhausted.whenFailure { error in
+            guard once.claim() else { return }
+            result.fail(error)
+        }
+        return result.futureResult
+    }
+}
+
+/// First-caller-wins guard so a raced promise resolves exactly once.
+final class ResolveOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if claimed { return false }
+        claimed = true
+        return true
     }
 }
 
@@ -128,39 +278,29 @@ public struct NIOSSHCommandRunner: RemoteCommandRunning {
         )
         do {
             let result = try await runOnConnection(connection: connection, command: command, timeout: timeout)
-            _ = try? await connection.close().get()
+            _ = try? await connection.channel.close().get()
             return result
         } catch {
-            _ = try? await connection.close().get()
+            _ = try? await connection.channel.close().get()
             throw error
         }
     }
 
-    private func runOnConnection(connection: Channel, command: String, timeout: TimeAmount) async throws -> RemoteCommandResult {
-        let promise = connection.eventLoop.makePromise(of: CommandResultBox.self)
+    private func runOnConnection(connection: NIOSSHConnection, command: String, timeout: TimeAmount) async throws -> RemoteCommandResult {
+        let eventLoop = connection.channel.eventLoop
+        let promise = eventLoop.makePromise(of: CommandResultBox.self)
 
-        // Resolve the (non-Sendable, library) `NIOSSHHandler` and open the
-        // session child channel entirely on the event loop, so it never
-        // crosses an async boundary. The command handler is installed inside
-        // the on-loop initializer.
-        let childChannel = try await connection.eventLoop.flatSubmit { () -> EventLoopFuture<Channel> in
-            let childPromise = connection.eventLoop.makePromise(of: Channel.self)
-            do {
-                let sshHandler = try connection.pipeline.syncOperations.handler(type: NIOSSHHandler.self)
-                sshHandler.createChannel(childPromise, channelType: .session) { childChannel, _ in
-                    childChannel.eventLoop.makeCompletedFuture {
-                        try childChannel.pipeline.syncOperations.addHandler(
-                            NIOSSHCommandHandler(command: command, complete: promise)
-                        )
-                    }
-                }
-            } catch {
-                childPromise.fail(error)
+        // Open the session child channel, failing fast if auth was rejected
+        // rather than stalling until the server's LoginGraceTime.
+        let childChannel = try await NIOSSHConnectionFactory.openChannel(on: connection) { childChannel in
+            childChannel.eventLoop.makeCompletedFuture {
+                try childChannel.pipeline.syncOperations.addHandler(
+                    NIOSSHCommandHandler(command: command, complete: promise)
+                )
             }
-            return childPromise.futureResult
-        }.get()
+        }
 
-        let timer = connection.eventLoop.scheduleTask(in: timeout) {
+        let timer = eventLoop.scheduleTask(in: timeout) {
             // On the event loop: read the handler back from the pipeline rather
             // than capturing it, then mark the timeout and tear the channel down.
             let handler = try? childChannel.pipeline.syncOperations.handler(type: NIOSSHCommandHandler.self)

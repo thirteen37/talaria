@@ -201,17 +201,17 @@ extension ServerWindowHarness {
             hermesProfileName: hermesProfileName
         )
         dashboardSupervisor = supervisor
-        isBuildingWebUI = false
+        startupPhase = nil
         do {
             let endpoint = try await supervisor.acquire(
-                onWebUIBuildDetected: { [weak self] in await self?.markWebUIBuilding() }
+                onStartupProgress: { [weak self] phase in await self?.noteStartupPhase(phase) }
             )
             try Task.checkCancellation()
             guard !dashboardReleased else { return }
             dashboardClient = endpoint.session.client()
             store.dashboardClient = dashboardClient
             dashboardError = nil
-            isBuildingWebUI = false
+            startupPhase = nil
             // Capture the live version now the dashboard is reachable, so
             // capability gating uses it over the profile's cached probe value.
             await refreshLiveVersion()
@@ -219,7 +219,7 @@ extension ServerWindowHarness {
             guard !Task.isCancelled, !dashboardReleased else { return }
             dashboardClient = nil
             store.dashboardClient = nil
-            isBuildingWebUI = false
+            startupPhase = nil
             dashboardError = error.localizedDescription
         }
     }

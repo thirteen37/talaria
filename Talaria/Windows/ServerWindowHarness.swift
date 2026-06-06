@@ -54,13 +54,16 @@ final class ServerWindowHarness {
     /// sidebar surfaces `dashboardError` if acquisition failed.
     var dashboardClient: DashboardClient?
     var dashboardError: String?
-    /// True while the spawning dashboard is compiling its web UI (first
-    /// `hermes dashboard` after a Hermes update). Drives the window-wide
-    /// "Building web UI…" banner so the long wait reads as progress rather than
-    /// a stuck "connecting…". Set by the supervisor's build callback during
-    /// ``acquireDashboard()``; cleared once the client is live, on failure, and
-    /// on ``reconnectDashboard()``.
-    var isBuildingWebUI = false
+    /// Non-nil while the spawning dashboard is still coming up, driving the
+    /// window-wide startup banner so the long wait reads as progress rather than
+    /// a stuck "connecting…". ``DashboardStartupPhase/buildingWebUI`` is the
+    /// confirmed-build case (marker seen) — the banner may assert the build;
+    /// ``DashboardStartupPhase/slowToStart`` is the unconfirmed "alive but not
+    /// listening yet" case (the common remote, non-PTY path where the marker
+    /// never streams) — the banner hedges. Set by the supervisor's progress
+    /// callback during ``acquireDashboard()``; cleared once the client is live,
+    /// on failure, and on ``reconnectDashboard()``.
+    var startupPhase: DashboardStartupPhase?
     var dashboardTask: Task<Void, Never>?
     var dashboardStarted = false
     var dashboardReleased = false
@@ -174,7 +177,7 @@ final class ServerWindowHarness {
         guard !dashboardReleased else { return }
         dashboardTask?.cancel()
         dashboardError = nil
-        isBuildingWebUI = false
+        startupPhase = nil
         let previous = dashboardSupervisor
         dashboardSupervisor = nil
         dashboardClient = nil
@@ -185,11 +188,12 @@ final class ServerWindowHarness {
         }
     }
 
-    /// Flips on the "Building web UI…" banner. Invoked from the supervisor's
-    /// build callback (off-actor), so it hops here to mutate harness state.
-    func markWebUIBuilding() {
+    /// Records the dashboard's startup phase, driving the progress banner.
+    /// Invoked from the supervisor's progress callback (off-actor), so it hops
+    /// here to mutate harness state.
+    func noteStartupPhase(_ phase: DashboardStartupPhase) {
         guard dashboardClient == nil, !dashboardReleased else { return }
-        isBuildingWebUI = true
+        startupPhase = phase
     }
 
     /// Refreshes ``liveHermesVersion`` from the connected dashboard's

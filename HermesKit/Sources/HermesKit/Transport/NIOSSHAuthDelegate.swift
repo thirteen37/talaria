@@ -73,4 +73,22 @@ final class NIOSSHAuthDelegate: NIOSSHClientUserAuthenticationDelegate, @uncheck
         onExhausted?()
         nextChallengePromise.succeed(nil)
     }
+
+    /// User-facing "the server rejected our login" message, naming *every*
+    /// credential that was offered so a user with both a key and a password set
+    /// knows to re-check both — not just the key. Shared by every NIO-SSH path
+    /// (the factory and the ACP transport) so the wording can't drift between
+    /// call sites. No "Authentication failed" prefix — ``SSHTransportError``'s
+    /// `authFailed` errorDescription already adds it, so a prefix would double up.
+    /// Callers guarantee at least one credential is configured.
+    static func authRejectedMessage(hasKey: Bool, hasPassword: Bool) -> String {
+        switch (hasKey, hasPassword) {
+        case (true, true):
+            return "The server rejected the key and password. Check the username and credentials for this server."
+        case (true, false):
+            return "The server rejected the key. Check the username and key for this server."
+        default:
+            return "The server rejected the password. Check the username and password for this server."
+        }
+    }
 }

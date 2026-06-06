@@ -44,10 +44,10 @@ final class DashboardCoordinator {
     func acquire(
         profile: ServerProfile,
         hermesProfileName: String = HermesProfiles.defaultProfileName,
-        onWebUIBuildDetected: (@Sendable () async -> Void)? = nil
+        onStartupProgress: (@Sendable (DashboardStartupPhase) async -> Void)? = nil
     ) async throws -> (DashboardEndpoint, DashboardSupervisor) {
         let supervisor = ensure(profile: profile, hermesProfileName: hermesProfileName)
-        let endpoint = try await supervisor.acquire(onWebUIBuildDetected: onWebUIBuildDetected)
+        let endpoint = try await supervisor.acquire(onStartupProgress: onStartupProgress)
         return (endpoint, supervisor)
     }
 

@@ -40,6 +40,22 @@ public enum DashboardSupervisorError: Error, Equatable, Sendable, LocalizedError
     }
 }
 
+/// Why a spawning dashboard isn't reachable yet, reported to the acquiring UI
+/// so it can show honest progress copy during the (possibly long) startup wait
+/// instead of a hintless "connecting…".
+public enum DashboardStartupPhase: Sendable, Equatable {
+    /// The captured output showed Hermes' `Building web UI…` marker — it's
+    /// confirmed compiling its web bundle (first `hermes dashboard` after an
+    /// update). The UI may assert the build in copy.
+    case buildingWebUI
+    /// The process is alive but the endpoint hasn't started listening within the
+    /// base window, and **no** build marker was seen — the common remote,
+    /// non-PTY case where the marker never streams. It's *likely* still
+    /// starting/compiling, but the cause is unconfirmed (could equally be a
+    /// misconfig or a wedged process), so the UI must not assert a build.
+    case slowToStart
+}
+
 /// One running `hermes dashboard` for one `ServerProfile`.
 ///
 /// Acquires/releases reference-count consumers (Sessions browser, Updates
@@ -113,14 +129,17 @@ public actor DashboardSupervisor {
         self.buildReachabilityTimeout = max(buildReachabilityTimeout, reachabilityTimeout)
     }
 
-    /// - Parameter onWebUIBuildDetected: fired once (on this actor) the first
-    ///   time the spawning dashboard's output shows it's compiling its web UI,
-    ///   so a consumer can surface a "Building web UI…" banner during the
-    ///   (possibly long) wait. Only the acquirer that triggers the spawn wires
-    ///   its callback; coalesced acquirers don't, matching how the spawn itself
-    ///   is shared. Ignored when the dashboard is already running.
+    /// - Parameter onStartupProgress: fired once (on this actor) the first time
+    ///   the spawning dashboard is observed still coming up — either confirmed
+    ///   building its web UI (``DashboardStartupPhase/buildingWebUI``) or merely
+    ///   alive-but-not-listening past the base window with no marker
+    ///   (``DashboardStartupPhase/slowToStart``) — so a consumer can surface a
+    ///   progress banner with copy honest to the phase. Only the acquirer that
+    ///   triggers the spawn wires its callback; coalesced acquirers don't,
+    ///   matching how the spawn itself is shared. Ignored when the dashboard is
+    ///   already running.
     public func acquire(
-        onWebUIBuildDetected: (@Sendable () async -> Void)? = nil
+        onStartupProgress: (@Sendable (DashboardStartupPhase) async -> Void)? = nil
     ) async throws -> DashboardEndpoint {
         if let current {
             refcount += 1
@@ -134,7 +153,7 @@ public actor DashboardSupervisor {
             return try await finishPendingAcquire(pending)
         }
         let task = Task<ActiveProcess, Error> { [self] in
-            try await self.spawnAndReady(onWebUIBuildDetected: onWebUIBuildDetected)
+            try await self.spawnAndReady(onStartupProgress: onStartupProgress)
         }
         pendingGeneration += 1
         let pending = PendingAcquire(generation: pendingGeneration, task: task)
@@ -252,7 +271,7 @@ public actor DashboardSupervisor {
     // MARK: - Spawn
 
     private func spawnAndReady(
-        onWebUIBuildDetected: (@Sendable () async -> Void)? = nil
+        onStartupProgress: (@Sendable (DashboardStartupPhase) async -> Void)? = nil
     ) async throws -> ActiveProcess {
         let port = try portAllocator()
         let spec = buildSpec(port: port)
@@ -286,7 +305,7 @@ public actor DashboardSupervisor {
                 stderr: stderrBuffer,
                 stderrTap: stderrTap,
                 baseURL: baseURL,
-                onWebUIBuildDetected: onWebUIBuildDetected
+                onStartupProgress: onStartupProgress
             )
             // Warm the session token so the first authenticated call from a
             // consumer doesn't pay an extra round-trip.
@@ -328,13 +347,27 @@ public actor DashboardSupervisor {
         stderr: DashboardStderrBuffer,
         stderrTap: Task<Void, Never>,
         baseURL: URL,
-        onWebUIBuildDetected: (@Sendable () async -> Void)? = nil
+        onStartupProgress: (@Sendable (DashboardStartupPhase) async -> Void)? = nil
     ) async throws {
         let start = Date()
         let baseDeadline = start.addingTimeInterval(reachabilityTimeout)
         let buildDeadline = start.addingTimeInterval(buildReachabilityTimeout)
         var lastProbeError: String?
-        var loggedBuildWait = false
+        // Whether the endpoint has ever answered at the HTTP level. The wait is
+        // gated on *observed behavior*, not the fragile `Building web UI…` text
+        // marker (which a remote, non-PTY `hermes dashboard` never streams in
+        // time): while the process is alive and the port isn't listening yet
+        // (probe fails at the transport level — refused/lost), treat it as "still
+        // coming up" and wait up to the build cap. Once it's listening but
+        // unhealthy (a non-2xx HTTP response), the build is done and waiting
+        // longer won't help, so fall back to the short base window.
+        var sawListening = false
+        // The build-feedback callback fires at most once, on whichever comes
+        // first: the textual `Building web UI…` marker, or simply crossing the
+        // base window while still not listening (the remote non-PTY case, where
+        // the marker never appears). Either way the user gets "still starting…"
+        // context for the long wait.
+        var firedBuildFeedback = false
         while true {
             try Task.checkCancellation()
             if let code = await process.exitCodeIfAvailable() {
@@ -343,24 +376,45 @@ public actor DashboardSupervisor {
             switch await Self.probeReachability(baseURL: baseURL, http: http) {
             case .reachable:
                 return
-            case let .failed(reason):
+            case let .notListening(reason):
                 lastProbeError = reason
                 HermesLog.dashboard.debug(
-                    "Dashboard probe \(baseURL.absoluteString, privacy: .public)/api/status not ready: \(reason, privacy: .public)"
+                    "Dashboard probe \(baseURL.absoluteString, privacy: .public)/api/status not listening: \(reason, privacy: .public)"
+                )
+            case let .listeningButUnhealthy(reason):
+                sawListening = true
+                lastProbeError = reason
+                HermesLog.dashboard.debug(
+                    "Dashboard probe \(baseURL.absoluteString, privacy: .public)/api/status listening but unhealthy: \(reason, privacy: .public)"
                 )
             }
-            // While the server is compiling its web UI (first launch after an
-            // update), wait past the base window up to the build cap rather than
-            // giving up on a dashboard that's simply still building.
-            let building = await stderr.sawWebUIBuild
-            if building, !loggedBuildWait {
-                loggedBuildWait = true
+
+            let now = Date()
+            // The `Building web UI…` marker is now UX-only — it no longer gates
+            // the wait, but when it does appear it confirms the build, so the UI
+            // can assert it in the banner copy.
+            if !firedBuildFeedback, await stderr.sawWebUIBuild {
+                firedBuildFeedback = true
                 HermesLog.dashboard.info(
-                    "Dashboard \(self.profile.name, privacy: .public) is building its web UI; extending the reachability window to \(self.buildReachabilityTimeout, privacy: .public)s."
+                    "Dashboard \(self.profile.name, privacy: .public) is building its web UI; waiting up to \(self.buildReachabilityTimeout, privacy: .public)s for it to start listening."
                 )
-                await onWebUIBuildDetected?()
+                await onStartupProgress?(.buildingWebUI)
             }
-            if Date() >= (building ? buildDeadline : baseDeadline) {
+            // Even without the marker, once we've waited past the base window and
+            // the endpoint still isn't listening, surface progress so the spinner
+            // has context during the (possibly long) wait. The cause is
+            // unconfirmed here — it's *likely* still building, but could be a
+            // wedged/misconfigured process — so report `.slowToStart`, not a
+            // definite build, and let the UI hedge its copy accordingly.
+            if !firedBuildFeedback, !sawListening, now >= baseDeadline {
+                firedBuildFeedback = true
+                HermesLog.dashboard.info(
+                    "Dashboard \(self.profile.name, privacy: .public) still not listening after \(self.reachabilityTimeout, privacy: .public)s; waiting up to \(self.buildReachabilityTimeout, privacy: .public)s in case it's still starting/building."
+                )
+                await onStartupProgress?(.slowToStart)
+            }
+
+            if now >= (sawListening ? baseDeadline : buildDeadline) {
                 break
             }
             try? await Task.sleep(nanoseconds: UInt64(reachabilityPollInterval * 1_000_000_000))
@@ -372,14 +426,14 @@ public actor DashboardSupervisor {
         // Still running but never served. Snapshot whatever the process has
         // written so far — we can't await `stderrTap` here, it only ends when
         // the process exits, which by definition hasn't happened on this path.
-        let building = await stderr.sawWebUIBuild
+        let sawBuildMarker = await stderr.sawWebUIBuild
         let capturedStderr = await stderr.snapshot()
         HermesLog.dashboard.error(
             """
             Dashboard \(self.profile.name, privacy: .public) (\(String(describing: self.profile.kind), privacy: .public)) \
             didn't come online at \(baseURL.absoluteString, privacy: .public) after \
-            \(building ? self.buildReachabilityTimeout : self.reachabilityTimeout, privacy: .public)s \
-            (web-UI build detected: \(building, privacy: .public)). \
+            \(sawListening ? self.reachabilityTimeout : self.buildReachabilityTimeout, privacy: .public)s \
+            (listening: \(sawListening, privacy: .public), web-UI build marker: \(sawBuildMarker, privacy: .public)). \
             Last probe: \(lastProbeError ?? "none", privacy: .public). \
             Process output so far: \(capturedStderr.isEmpty ? "<empty>" : capturedStderr, privacy: .public)
             """
@@ -405,8 +459,19 @@ public actor DashboardSupervisor {
     }
 
     private enum ReachabilityOutcome {
+        /// `/api/status` answered with a 2xx — the dashboard is serving.
         case reachable
-        case failed(reason: String)
+        /// The probe never reached an HTTP server: a transport-level failure
+        /// (connection refused/lost, forward dead, port not yet bound). The
+        /// dashboard is either still coming up (compiling its web UI) or truly
+        /// down — the supervisor keeps waiting up to the build cap to tell them
+        /// apart, since an early process exit fails fast separately.
+        case notListening(reason: String)
+        /// The endpoint answered with an `HTTPURLResponse` but a non-2xx status:
+        /// the port is bound and the server is up, just unhealthy. Waiting the
+        /// long build cap won't help, so the supervisor falls back to the short
+        /// base window.
+        case listeningButUnhealthy(reason: String)
     }
 
     private static func probeReachability(
@@ -425,9 +490,9 @@ public actor DashboardSupervisor {
             if (200..<300).contains(http.statusCode) {
                 return .reachable
             }
-            return .failed(reason: "HTTP \(http.statusCode)")
+            return .listeningButUnhealthy(reason: "HTTP \(http.statusCode)")
         } catch {
-            return .failed(reason: Self.describeProbeError(error))
+            return .notListening(reason: Self.describeProbeError(error))
         }
     }
 
