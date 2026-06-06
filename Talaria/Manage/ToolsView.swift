@@ -5,6 +5,10 @@ struct ToolsView: View {
     let runner: HermesAdminRunning?
     let hermesVersion: HermesVersion?
 
+    /// Window's top-of-window banner hub. Optional so a host that doesn't supply
+    /// one degrades to no-op (hard errors then simply don't render).
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
+
     @State private var harness: ManageListHarness<ToolRow>?
 
     init(runner: HermesAdminRunning?, hermesVersion: HermesVersion? = nil) {
@@ -27,6 +31,7 @@ struct ToolsView: View {
             }
         }
         .navigationTitle("Tools")
+        .dismissesBanner("tools", from: banners)
         .task {
             if runner == nil {
                 harness = nil
@@ -44,6 +49,8 @@ struct ToolsView: View {
                     }
                 }
             )
+            h.banners = banners
+            h.bannerKey = "tools"
             harness = h
             await h.refresh()
         }
@@ -88,13 +95,14 @@ struct ToolsView: View {
                 .help("Refresh the tools list")
             }
         }
+        // Hard errors route to the top-of-window strip; only the capability warning stays in-surface.
         .manageBanner(
-            harness.lastError ?? capabilityBanner(
+            capabilityBanner(
                 .toolsEnablePerPlatform,
                 feature: "Per-platform tools enable/disable",
                 version: hermesVersion
             ),
-            severity: harness.lastError != nil ? .error : .warning
+            severity: .warning
         )
     }
 }

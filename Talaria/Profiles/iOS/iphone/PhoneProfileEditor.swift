@@ -7,6 +7,9 @@ import SwiftUI
 /// compact-width sheet. Password + Keychain auth via the shared form sections.
 struct PhoneProfileEditor: View {
     @Environment(ProfileDirectory.self) private var directory
+    /// Settings-local banner hub (hosted by `SettingsTabs`). Optional so a host
+    /// without one degrades to no-op.
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
     @State private var state = ProfileEditorState()
     /// Drives the NavigationStack so `addNew()` can push the detail view.
     @State private var path: [UUID] = []
@@ -42,6 +45,10 @@ struct PhoneProfileEditor: View {
                 }
         }
         .task { await reload() }
+        // Clear this editor's pinned save error when the surface goes away (tab
+        // switch / sheet dismiss) so it doesn't linger over an unrelated Settings
+        // tab. Successes are keyless and auto-dismiss, so they're left alone.
+        .dismissesBanner("profile", from: banners)
     }
 
     @ViewBuilder
@@ -188,7 +195,9 @@ struct PhoneProfileEditor: View {
                     try PasswordKeychain.set(reference: reference, password: state.passwordInput)
                     draft.passwordKeychainReference = reference
                 } catch {
-                    directory.lastError = "Couldn't save password to Keychain: \(error.localizedDescription)"
+                    let message = "Couldn't save password to Keychain: \(error.localizedDescription)"
+                    directory.lastError = message
+                    banners?.surfaceError("profile", message)
                     return
                 }
             }
@@ -198,7 +207,15 @@ struct PhoneProfileEditor: View {
         }
         let saved = draft
         Task {
+            // Clear first so the post-upsert check reflects *this* save's outcome,
+            // not a stale failure from a previous attempt.
+            directory.lastError = nil
             await directory.upsert(saved)
+            if let error = directory.lastError {
+                banners?.surfaceError("profile", error)
+                return
+            }
+            banners?.surfaceSuccess("profile", "Server profile saved")
             if state.pendingDraft?.id == saved.id {
                 state.pendingDraft = nil
             }

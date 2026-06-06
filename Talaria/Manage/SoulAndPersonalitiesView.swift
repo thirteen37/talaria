@@ -19,7 +19,20 @@ final class PersonalitiesHarness {
     var activePrompt: String = ""
     var selection: PersonalitySelection?
     var isLoading: Bool = false
-    var lastError: String?
+    /// Hard errors mirror to the top-of-window strip keyed "personalities" via the
+    /// observer, so every mutation site routes without per-call wiring.
+    var lastError: String? {
+        didSet {
+            if let lastError {
+                banners?.surfaceError("personalities", lastError)
+            } else {
+                banners?.dismiss(key: "personalities")
+            }
+        }
+    }
+    /// Top-of-window banner hub (window-scoped); optional so a missing host
+    /// degrades to no-op.
+    var banners: BannerCenter?
     /// Names with an in-flight save/delete/activate, so their detail controls
     /// disable while the request is outstanding.
     var busy: Set<String> = []
@@ -151,7 +164,10 @@ final class PersonalitiesHarness {
             HermesPersonality.upsert(name: name, prompt: prompt, into: $0, oldName: oldName)
         }
         // Keep the detail open on the saved (possibly renamed) entry.
-        if lastError == nil { select(.personality(name)) }
+        if lastError == nil {
+            select(.personality(name))
+            banners?.surfaceSuccess("personalities", "Personality saved")
+        }
     }
 
     func delete(name: String) async {
@@ -229,6 +245,8 @@ struct SoulAndPersonalitiesView: View {
     /// on-disk read when nil), so it can render before this is non-nil.
     private var client: DashboardClient? { windowHarness.dashboardClient }
 
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
+
     @State private var harness: PersonalitiesHarness?
     @State private var soul: SoulEditingState?
     /// A navigation away from the current editor, stashed while the unsaved-edits
@@ -266,6 +284,7 @@ struct SoulAndPersonalitiesView: View {
             }
         }
         .navigationTitle("Soul & Personalities")
+        .dismissesBanner("soul", "personalities", from: banners)
         // Keyed on client availability: the personalities harness is built when
         // the dashboard comes online and dropped when it goes away (so a defunct
         // client never drives the list). The soul editor is built once and owns
@@ -275,12 +294,14 @@ struct SoulAndPersonalitiesView: View {
             let isFirstBuild = soul == nil
             if isFirstBuild {
                 let state = makeSoulState()
+                state.banners = banners
                 soul = state
                 state.load()
             }
             if client != nil {
                 if harness == nil {
                     let h = PersonalitiesHarness(client: { [weak windowHarness] in windowHarness?.dashboardClient })
+                    h.banners = banners
                     harness = h
                     await h.refresh()
                 }
@@ -345,7 +366,8 @@ struct SoulAndPersonalitiesView: View {
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar { toolbar(harness: harness, soul: soul) }
-        .manageBanner(harness.lastError, severity: .error)
+        // Hard errors route to the top-of-window strip; this surface has no
+        // in-surface capability warning, so no `.manageBanner`.
         .confirmationDialog(
             "Unsaved changes",
             isPresented: Binding(
@@ -627,7 +649,7 @@ private struct SoulDetail: View {
             if let banner {
                 Text(banner)
                     .font(.caption)
-                    .foregroundStyle(editor.lastError != nil ? .red : .secondary)
+                    .foregroundStyle(.secondary)
             }
 
             Divider()
@@ -701,7 +723,8 @@ private struct SoulDetail: View {
     }
 
     private var banner: String? {
-        if let error = editor.lastError { return error }
+        // Hard errors route to the top-of-window strip; only the dashboard
+        // unavailable warning stays in-pane.
         if editor.dashboardUnavailable {
             return "Dashboard unavailable - showing the on-disk SOUL.md read-only. Save is disabled."
         }

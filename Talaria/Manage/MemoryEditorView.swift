@@ -17,6 +17,11 @@ final class MemoryFileEditor: Identifiable {
     private(set) var original = ""
     var isLoading = false
     var lastError: String?
+    /// Top-of-window banner hub (window-scoped); optional so a missing host
+    /// degrades to no-op. Each file keys its banners by name so MEMORY.md and
+    /// USER.md errors don't clobber each other.
+    var banners: BannerCenter?
+    private var bannerKey: String { "memory.\(file.fileName)" }
     /// Set when `save()` finds the on-disk file changed since load (the agent
     /// likely rewrote it). The view raises an overwrite confirmation; `saveForced`
     /// proceeds.
@@ -47,8 +52,10 @@ final class MemoryFileEditor: Identifiable {
             original = content
             lastError = nil
             conflictPending = false
+            banners?.dismiss(key: bannerKey)
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
         }
     }
 
@@ -68,8 +75,10 @@ final class MemoryFileEditor: Identifiable {
             try await writeContent(text)
             original = text
             lastError = nil
+            banners?.surfaceSuccess(bannerKey, "\(file.fileName) saved")
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
         }
     }
 
@@ -83,14 +92,22 @@ final class MemoryFileEditor: Identifiable {
             original = text
             lastError = nil
             conflictPending = false
+            banners?.surfaceSuccess(bannerKey, "\(file.fileName) saved")
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
         }
     }
 
     /// Reverts to the persisted state (Discard).
     func discard() {
         text = original
+    }
+
+    /// Clears this file's top-of-window banner — called when the Memory surface
+    /// goes away so a stale error doesn't linger over the next surface.
+    func dismissBanner() {
+        banners?.dismiss(key: bannerKey)
     }
 
     private func readContent() async throws -> String {
@@ -131,6 +148,12 @@ final class MemoryHarness {
 
     func editor(for file: HermesMemoryFile) -> MemoryFileEditor {
         editors.first { $0.file == file } ?? editors[0]
+    }
+
+    /// Clears both files' top-of-window banners — called when the Memory surface
+    /// goes away so a stale error doesn't linger over the next surface.
+    func dismissBanners() {
+        editors.forEach { $0.dismissBanner() }
     }
 
     var selected: MemoryFileEditor? {
@@ -187,6 +210,8 @@ final class MemoryHarness {
 struct MemoryEditorView: View {
     let windowHarness: ServerWindowHarness
 
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
+
     @State private var harness: MemoryHarness?
     @State private var pendingNavigation: PendingNavigation?
 
@@ -206,6 +231,9 @@ struct MemoryEditorView: View {
             }
         }
         .navigationTitle("Memory")
+        // Clear both files' pinned errors when the surface leaves so they don't
+        // linger over the next surface.
+        .onDisappear { harness?.dismissBanners() }
         .task {
             if harness == nil {
                 let h = MemoryHarness(
@@ -215,6 +243,7 @@ struct MemoryEditorView: View {
                     client: { [weak windowHarness] in windowHarness?.dashboardClient }
                 )
                 h.selection = .memory
+                h.editors.forEach { $0.banners = banners }
                 harness = h
                 await h.load()
             }
@@ -235,7 +264,8 @@ struct MemoryEditorView: View {
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar { toolbar(harness: harness) }
-        .manageBanner(harness.lastError, severity: .error)
+        // Load/save errors route to the top-of-window strip (per file); there's
+        // no in-surface capability warning here, so no `.manageBanner`.
         .confirmationDialog(
             "Unsaved changes",
             isPresented: Binding(

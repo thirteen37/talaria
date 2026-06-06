@@ -8,6 +8,9 @@ import SwiftUI
 /// — no `#if`, no `Idiom`.
 struct DesktopProfileEditor: View {
     @Environment(ProfileDirectory.self) private var directory
+    /// Settings-local banner hub (hosted by `SettingsTabs`). Optional so a host
+    /// without one degrades to no-op.
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
     @State private var state = ProfileEditorState()
     /// Drives the trust-on-first-use prompt when a probe meets an unknown host
     /// key (iPad NIO path). Unused on macOS, where the system-ssh probe defers
@@ -38,6 +41,10 @@ struct DesktopProfileEditor: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .task { await reload() }
+        // Clear this editor's pinned save error when the surface goes away (tab
+        // switch / iPad sheet dismiss) so it doesn't linger over an unrelated
+        // Settings tab. Successes are keyless and auto-dismiss, so they're left alone.
+        .dismissesBanner("profile", from: banners)
         .alert(
             "Trust this server?",
             isPresented: Binding(
@@ -340,7 +347,9 @@ struct DesktopProfileEditor: View {
                     try PasswordKeychain.set(reference: reference, password: state.passwordInput)
                     draft.passwordKeychainReference = reference
                 } catch {
-                    directory.lastError = "Couldn't save password to Keychain: \(error.localizedDescription)"
+                    let message = "Couldn't save password to Keychain: \(error.localizedDescription)"
+                    directory.lastError = message
+                    banners?.surfaceError("profile", message)
                     return
                 }
             }
@@ -352,7 +361,15 @@ struct DesktopProfileEditor: View {
         }
         let saved = draft
         Task {
+            // Clear first so the post-upsert check reflects *this* save's outcome,
+            // not a stale failure from a previous attempt.
+            directory.lastError = nil
             await directory.upsert(saved)
+            if let error = directory.lastError {
+                banners?.surfaceError("profile", error)
+                return
+            }
+            banners?.surfaceSuccess("profile", "Server profile saved")
             // Clear pending status once the draft is on disk.
             if state.pendingDraft?.id == saved.id {
                 state.pendingDraft = nil

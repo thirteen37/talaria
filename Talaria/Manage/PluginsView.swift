@@ -24,6 +24,10 @@ final class PluginsHarness {
     var savingProviders: Bool = false
     var installing: Bool = false
     var lastError: String?
+    /// Top-of-window banner hub (window-scoped); optional so a missing host
+    /// degrades to no-op. Hard errors route here keyed by the surface id; a
+    /// successful provider save posts a transient confirmation.
+    var banners: BannerCenter?
     /// Green confirmation line shown under the Install form after a successful
     /// install; cleared when the next install starts.
     var lastInstallMessage: String?
@@ -70,8 +74,10 @@ final class PluginsHarness {
                 draftContext = hub.providers.contextEngine
             }
             lastError = nil
+            banners?.dismiss(key: "plugins")
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("plugins", error.localizedDescription)
         }
     }
 
@@ -81,8 +87,15 @@ final class PluginsHarness {
         do {
             try await client.setPluginProviders(memoryProvider: draftMemory, contextEngine: draftContext)
             await refresh()
+            // Only confirm if the post-write reload also succeeded — otherwise
+            // refresh() has posted its own error and an unconditional success
+            // here would dismiss it, hiding a failed reload over stale data.
+            if lastError == nil {
+                banners?.surfaceSuccess("plugins", "Providers saved")
+            }
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("plugins", error.localizedDescription)
         }
     }
 
@@ -107,6 +120,7 @@ final class PluginsHarness {
             }
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("plugins", error.localizedDescription)
         }
     }
 
@@ -131,6 +145,7 @@ final class PluginsHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("plugins", error.localizedDescription)
         }
     }
 
@@ -142,6 +157,7 @@ final class PluginsHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("plugins", error.localizedDescription)
         }
     }
 
@@ -156,6 +172,7 @@ final class PluginsHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("plugins", error.localizedDescription)
         }
     }
 }
@@ -163,6 +180,8 @@ final class PluginsHarness {
 struct PluginsView: View {
     let client: DashboardClient?
     let hermesVersion: HermesVersion?
+
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
 
     @State private var harness: PluginsHarness?
     // The two config sections collapse by default so the plugin list owns the
@@ -190,6 +209,7 @@ struct PluginsView: View {
             }
         }
         .navigationTitle("Plugins")
+        .dismissesBanner("plugins", from: banners)
         // Keyed on client availability so the harness is built when the
         // dashboard finishes booting and `client` flips non-nil, not only on
         // first appear (a bare `.task` on the Group never re-runs for that flip).
@@ -197,6 +217,7 @@ struct PluginsView: View {
             guard let client else { harness = nil; return }
             if harness != nil { return }
             let h = PluginsHarness(client: client)
+            h.banners = banners
             harness = h
             await h.refresh()
         }
@@ -228,13 +249,15 @@ struct PluginsView: View {
                 .help("Refresh the plugins list")
             }
         }
+        // Hard errors route to the top-of-window strip; only the capability
+        // warning stays in-surface.
         .manageBanner(
-            harness.lastError ?? capabilityBanner(
+            capabilityBanner(
                 .requiresDashboard,
                 feature: "Plugins via Hermes dashboard",
                 version: hermesVersion
             ),
-            severity: harness.lastError != nil ? .error : .warning
+            severity: .warning
         )
     }
 

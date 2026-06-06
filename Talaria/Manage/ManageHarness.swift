@@ -100,6 +100,12 @@ final class ManageListHarness<Row: Identifiable & Sendable & Equatable> where Ro
     var lastError: String?
     var isLoading: Bool = false
     var selectionID: Row.ID?
+    /// Top-of-window banner hub (window-scoped). Hard errors route here keyed by
+    /// ``bannerKey`` so they render full-width across the top. Optional so a
+    /// missing host degrades to no-op.
+    var banners: BannerCenter?
+    /// Surface id used to key this list's banners ("skills" / "tools"), set by the view.
+    var bannerKey: String = "list"
 
     let runner: HermesAdminRunning?
 
@@ -126,8 +132,10 @@ final class ManageListHarness<Row: Identifiable & Sendable & Equatable> where Ro
         do {
             rows = try await lister(runner)
             lastError = nil
+            banners?.dismiss(key: bannerKey)
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
         }
     }
 
@@ -138,6 +146,7 @@ final class ManageListHarness<Row: Identifiable & Sendable & Equatable> where Ro
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
         }
     }
 }

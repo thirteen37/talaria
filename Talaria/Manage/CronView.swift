@@ -12,6 +12,9 @@ struct CronDraft: Equatable {
 final class CronHarness {
     var jobs: [DashboardCronJob] = []
     var lastError: String?
+    /// Top-of-window banner hub (window-scoped); optional so a missing host
+    /// degrades to no-op. Hard errors route here keyed by the surface id.
+    var banners: BannerCenter?
     var isLoading: Bool = false
     var selectionID: DashboardCronJob.ID?
     var draft: CronDraft?
@@ -33,8 +36,10 @@ final class CronHarness {
         do {
             jobs = try await client.listCronJobs()
             lastError = nil
+            banners?.dismiss(key: "cron")
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("cron", error.localizedDescription)
         }
     }
 
@@ -56,6 +61,7 @@ final class CronHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("cron", error.localizedDescription)
         }
     }
 
@@ -74,6 +80,7 @@ final class CronHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("cron", error.localizedDescription)
         }
     }
 
@@ -83,6 +90,7 @@ final class CronHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("cron", error.localizedDescription)
         }
     }
 
@@ -96,6 +104,7 @@ final class CronHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("cron", error.localizedDescription)
         }
     }
 
@@ -105,6 +114,7 @@ final class CronHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("cron", error.localizedDescription)
         }
     }
 }
@@ -112,6 +122,8 @@ final class CronHarness {
 struct CronView: View {
     let client: DashboardClient?
     let hermesVersion: HermesVersion?
+
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
 
     @State private var harness: CronHarness?
 
@@ -135,6 +147,7 @@ struct CronView: View {
             }
         }
         .navigationTitle("Cron")
+        .dismissesBanner("cron", from: banners)
         // Keyed on client availability so the harness is built when the
         // dashboard finishes booting and `client` flips non-nil, not only on
         // first appear (a bare `.task` on the Group never re-runs for that flip).
@@ -142,6 +155,7 @@ struct CronView: View {
             guard let client else { harness = nil; return }
             if harness != nil { return }
             let h = CronHarness(client: client)
+            h.banners = banners
             harness = h
             await h.refresh()
         }
@@ -160,13 +174,15 @@ struct CronView: View {
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar { toolbar(harness: harness) }
+        // Hard errors route to the top-of-window strip; only the capability
+        // warning stays in-surface.
         .manageBanner(
-            harness.lastError ?? capabilityBanner(
+            capabilityBanner(
                 .requiresDashboard,
                 feature: "Cron via Hermes dashboard",
                 version: hermesVersion
             ),
-            severity: harness.lastError != nil ? .error : .warning
+            severity: .warning
         )
     }
 

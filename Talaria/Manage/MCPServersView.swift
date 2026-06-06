@@ -37,6 +37,10 @@ struct MCPServerDraft: Equatable {
 final class MCPServersHarness {
     var servers: [DashboardMCPServer] = []
     var lastError: String?
+    /// Top-of-window banner hub (window-scoped). Hard errors route here keyed by
+    /// the surface id so they render full-width across the top. Optional so a
+    /// missing host degrades to no-op.
+    var banners: BannerCenter?
     var isLoading: Bool = false
     var selectionID: DashboardMCPServer.ID?
     var draft: MCPServerDraft?
@@ -75,8 +79,10 @@ final class MCPServersHarness {
         do {
             servers = try await client.listMCPServers()
             lastError = nil
+            banners?.dismiss(key: "mcp")
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("mcp", error.localizedDescription)
         }
     }
 
@@ -181,6 +187,7 @@ final class MCPServersHarness {
             // otherwise a successful refresh would hide that the edit failed.
             await refresh()
             lastError = message
+            banners?.surfaceError("mcp", message)
         }
     }
 
@@ -190,6 +197,7 @@ final class MCPServersHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("mcp", error.localizedDescription)
         }
     }
 
@@ -200,6 +208,7 @@ final class MCPServersHarness {
             await refresh()
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("mcp", error.localizedDescription)
         }
     }
 
@@ -215,10 +224,16 @@ final class MCPServersHarness {
             // A reachable-but-failing probe returns ok:false with an error —
             // surface it on the banner too so it's visible without the pane.
             lastError = result.ok ? nil : result.error
+            if result.ok {
+                banners?.dismiss(key: "mcp")
+            } else if let error = result.error {
+                banners?.surfaceError("mcp", error)
+            }
         } catch {
             testResult = nil
             testResultName = nil
             lastError = error.localizedDescription
+            banners?.surfaceError("mcp", error.localizedDescription)
         }
     }
 
@@ -228,8 +243,10 @@ final class MCPServersHarness {
         do {
             catalog = try await client.listMCPCatalog()
             lastError = nil
+            banners?.dismiss(key: "mcp")
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("mcp", error.localizedDescription)
         }
     }
 
@@ -265,9 +282,13 @@ final class MCPServersHarness {
             await loadCatalog()
             // Set the failure last: refresh()/loadCatalog() clear lastError on
             // success, which would otherwise hide the install error.
-            if let failure { lastError = failure }
+            if let failure {
+                lastError = failure
+                banners?.surfaceError("mcp", failure)
+            }
         } catch {
             lastError = error.localizedDescription
+            banners?.surfaceError("mcp", error.localizedDescription)
         }
     }
 
@@ -305,6 +326,10 @@ struct MCPServersView: View {
     let client: DashboardClient?
     let hermesVersion: HermesVersion?
 
+    /// Window's top-of-window banner hub. Optional so a host that doesn't supply
+    /// one degrades to no-op (hard errors then simply don't render).
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
+
     @State private var harness: MCPServersHarness?
 
     init(client: DashboardClient?, hermesVersion: HermesVersion? = nil) {
@@ -327,12 +352,14 @@ struct MCPServersView: View {
             }
         }
         .navigationTitle("MCP Servers")
+        .dismissesBanner("mcp", from: banners)
         // Keyed on client availability so the harness is built when the dashboard
         // finishes booting and `client` flips non-nil (matching Cron/Environment).
         .task(id: client != nil) {
             guard let client else { harness = nil; return }
             if harness != nil { return }
             let h = MCPServersHarness(client: client)
+            h.banners = banners
             harness = h
             await h.refresh()
         }
@@ -350,15 +377,16 @@ struct MCPServersView: View {
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar { toolbar(harness: harness) }
+        // Hard errors route to the top-of-window strip; only the capability warning stays in-surface.
         .manageBanner(
-            harness.lastError ?? capabilityBanner(
+            capabilityBanner(
                 .requiresMCPAPI,
                 feature: "MCP servers via Hermes dashboard",
                 // `hermesVersion` is the window's `effectiveHermesVersion` — the
                 // live dashboard status version when known (see ServerWindowHarness).
                 version: hermesVersion
             ),
-            severity: harness.lastError != nil ? .error : .warning
+            severity: .warning
         )
     }
 

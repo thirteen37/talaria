@@ -10,6 +10,10 @@ final class DoctorHarness {
     var report: DoctorReport?
     var isRunning = false
     var lastError: String?
+    /// Top-of-window banner hub (window-scoped). Hard errors route here keyed by
+    /// the surface id so they render full-width across the top. Optional so a
+    /// missing host degrades to no-op.
+    var banners: BannerCenter?
     var expanded: Set<Int> = []
 
     let runner: HermesAdminRunning?
@@ -31,12 +35,14 @@ final class DoctorHarness {
             self.isRunning = true
             defer { self.isRunning = false }
             self.lastError = nil
+            self.banners?.dismiss(key: "doctor")
             do {
                 let r = try await op(runner)
                 self.report = r
                 self.expanded = Set(r.sections.map(\.id))
             } catch {
                 self.lastError = error.localizedDescription
+                self.banners?.surfaceError("doctor", error.localizedDescription)
             }
         }
     }
@@ -53,6 +59,10 @@ struct DoctorView: View {
     let profile: ServerProfile
     let client: DashboardClient?
     let hermesVersion: HermesVersion?
+
+    /// Window's top-of-window banner hub. Optional so a host that doesn't supply
+    /// one degrades to no-op (hard errors then simply don't render).
+    @Environment(BannerCenter.self) private var banners: BannerCenter?
 
     @State private var dashboardReachable: Bool?
     @State private var dashboardReachabilityError: String?
@@ -86,6 +96,10 @@ struct DoctorView: View {
             }
         }
         .navigationTitle("Doctor")
+        .dismissesBanner("doctor", from: banners)
+        // Wire the window banner hub into the window-owned harness so its run
+        // errors route to the top-of-window strip.
+        .onAppear { doctor.banners = banners }
         .task(id: client != nil) {
             await probeDashboard()
         }
@@ -111,7 +125,8 @@ struct DoctorView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .manageBanner(doctor.lastError)
+        // Hard errors now route to the top-of-window strip (via the harness'
+        // `banners`); no in-surface error banner remains here.
     }
 
     @ViewBuilder
