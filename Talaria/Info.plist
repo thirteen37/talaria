@@ -28,6 +28,18 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<!-- Live chat connects to the spawned `hermes dashboard` over a loopback
+		     WebSocket (ws://127.0.0.1:<port>/api/ws). ATS auto-exempts http:// to
+		     loopback (so the dashboard HTTP tabs work), but its loopback exemption
+		     does NOT cover URLSessionWebSocketTask: under default ATS the ws://
+		     handshake fails with NSURLErrorBadServerResponse (-1011). Allowing
+		     local networking permits the insecure loopback ws:// without disabling
+		     ATS for anything else. -->
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSSupportsAutomaticTermination</key>
 	<true/>
 	<key>NSSupportsSuddenTermination</key>
