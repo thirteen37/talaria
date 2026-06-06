@@ -41,9 +41,11 @@ enum GatewayChatBackend {
     /// 401-refresh, so a stale snapshot would be rejected).
     static func resolveCredential(session: DashboardSession) async -> GatewayCredential {
         if let ticket = try? await session.client().mintWSTicket() {
+            HermesLog.gateway.info("using ws ticket (gated dashboard) base=\(session.baseURL.absoluteString, privacy: .public)")
             return .ticket(ticket)
         }
         let token = (try? await session.refresh()) ?? session.tokenSnapshot() ?? ""
+        HermesLog.gateway.info("using session token (loopback) base=\(session.baseURL.absoluteString, privacy: .public) tokenPresent=\(!token.isEmpty, privacy: .public)")
         return .token(token)
     }
 

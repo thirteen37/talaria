@@ -22,4 +22,27 @@ struct GatewayLiveSmokeTests {
         #expect(!response.sessionId.isEmpty)
         await client.close()
     }
+
+    /// A rejected upgrade (wrong token → the dashboard closes with 403) must now
+    /// surface the HTTP status via the delegate, not an opaque URLError.
+    @Test
+    func rejectedHandshakeSurfacesHTTPStatus() async throws {
+        let env = ProcessInfo.processInfo.environment
+        let base = try #require(URL(string: env["HERMES_WS_LIVE_BASE"] ?? ""))
+
+        let socket = try URLSessionGatewayWebSocket(dashboardBaseURL: base, credential: .token("definitely-wrong-token"))
+        var thrown: Error?
+        do {
+            for try await _ in socket.messages { break }
+        } catch {
+            thrown = error
+        }
+        print("LIVE rejection error = \(String(describing: thrown))")
+        guard case let .closedWithCode(code)? = thrown as? GatewayWebSocketError else {
+            Issue.record("expected GatewayWebSocketError.closedWithCode, got \(String(describing: thrown))")
+            return
+        }
+        #expect(code == 403)
+        await socket.close()
+    }
 }
