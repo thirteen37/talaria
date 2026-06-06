@@ -557,9 +557,15 @@ struct ModelsView: View {
 
     @ViewBuilder
     private func content(harness: ModelsHarness) -> some View {
-        PlatformSplit(showsSecondary: harness.pickerTarget != nil) {
+        PlatformSplit(
+            showsSecondary: Binding(
+                get: { harness.pickerTarget != nil },
+                set: { if !$0 { harness.cancelPick() } }
+            ),
+            secondaryTitle: harness.pickerTarget.map(pickerTitle)
+        ) {
             assignmentsForm(harness: harness)
-                .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 360, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             pickerPane(harness: harness)
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)

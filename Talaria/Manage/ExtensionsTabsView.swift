@@ -20,7 +20,11 @@ struct ExtensionsTabsView: View {
                 )
             },
             DestinationTab(id: "tools", title: "Tools", systemImage: "wrench.and.screwdriver") {
-                ToolsView(runner: harness.store.adminRunner, hermesVersion: harness.effectiveHermesVersion)
+                ToolsView(
+                    client: harness.dashboardClient,
+                    runner: harness.store.adminRunner,
+                    hermesVersion: harness.effectiveHermesVersion
+                )
             },
             DestinationTab(id: "mcp", title: "MCP Servers", systemImage: "server.rack") {
                 MCPServersView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)

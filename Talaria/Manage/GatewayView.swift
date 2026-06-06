@@ -288,9 +288,15 @@ struct GatewayView: View {
         VStack(spacing: 0) {
             statusHeader(harness: harness)
             Divider()
-            PlatformSplit(showsSecondary: harness.selectedItem != nil) {
+            PlatformSplit(
+                showsSecondary: Binding(
+                    get: { harness.selectedItem != nil },
+                    set: { if !$0 { harness.selectionID = nil } }
+                ),
+                secondaryTitle: detailTitle(harness)
+            ) {
                 platformList(harness: harness)
-                    .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: Idiom.isPhone ? nil : 360, maxWidth: .infinity, maxHeight: .infinity)
             } secondary: {
                 detailPane(harness: harness)
                     .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
@@ -416,6 +422,16 @@ struct GatewayView: View {
     }
 
     // MARK: - Detail pane (secondary)
+
+    /// Title for the pushed iPhone detail page — the selected platform's name.
+    /// nil when nothing is selected (the pane is hidden).
+    private func detailTitle(_ harness: GatewayHarness) -> String? {
+        switch harness.selectedItem {
+        case let .platform(group): return group.displayName
+        case let .statusOnly(row): return row.name
+        case nil: return nil
+        }
+    }
 
     // Rendered only while a platform is selected — `PlatformSplit`'s
     // `showsSecondary` gate hides this pane entirely otherwise, so there's no

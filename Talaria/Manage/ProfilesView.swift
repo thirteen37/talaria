@@ -275,9 +275,15 @@ struct ProfilesView: View {
 
     @ViewBuilder
     private func content(harness: ProfilesHarness) -> some View {
-        PlatformSplit(showsSecondary: harness.draft != nil) {
+        PlatformSplit(
+            showsSecondary: Binding(
+                get: { harness.draft != nil },
+                set: { if !$0 { harness.cancelEdit() } }
+            ),
+            secondaryTitle: editorTitle(harness)
+        ) {
             profilesTable(harness: harness)
-                .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 360, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             editorPane(harness: harness)
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
@@ -383,6 +389,16 @@ struct ProfilesView: View {
     private func renameDeleteDisabled(_ harness: ProfilesHarness) -> Bool {
         guard let profile = harness.selectedProfile else { return true }
         return profile.isDefault || profile.name == HermesProfiles.defaultProfileName
+    }
+
+    /// Title for the pushed iPhone editor page — "Clone …" / "Rename …" matching
+    /// the active draft. nil when no draft is active (the pane is hidden).
+    private func editorTitle(_ harness: ProfilesHarness) -> String? {
+        switch harness.draft?.mode {
+        case let .clone(source): return "Clone “\(source)”"
+        case let .rename(original): return "Rename “\(original)”"
+        case nil: return nil
+        }
     }
 
     // Rendered only while a clone/rename draft is active — `PlatformSplit`'s

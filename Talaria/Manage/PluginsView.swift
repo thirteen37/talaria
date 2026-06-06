@@ -231,7 +231,13 @@ struct PluginsView: View {
         // macOS and a plain `HStack`+`Divider` on iOS (iPad + iPhone) — no `#if`.
         // Keep the pane minimums modest (matching `SkillsView`) so the two
         // side-by-side panes don't force an over-wide layout on a phone screen.
-        PlatformSplit(showsSecondary: harness.selected != nil) {
+        PlatformSplit(
+            showsSecondary: Binding(
+                get: { harness.selected != nil },
+                set: { if !$0 { harness.selectionID = nil } }
+            ),
+            secondaryTitle: harness.selected?.name
+        ) {
             primaryPane(harness: harness)
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {

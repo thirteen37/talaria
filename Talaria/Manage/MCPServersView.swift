@@ -98,6 +98,16 @@ final class MCPServersHarness {
         editingServer = nil
     }
 
+    /// Clears every state var that opens the secondary pane (draft, selection,
+    /// catalog) in one call — used by the iPhone push to deselect the list when
+    /// the pushed detail/editor/catalog page is popped via Back.
+    func closeSecondary() {
+        draft = nil
+        editingServer = nil
+        selectionID = nil
+        showCatalog = false
+    }
+
     /// Loads a server row into the draft for the delete+re-add "Edit" path.
     /// stdio env values come back **redacted**, so they're intentionally not
     /// prefilled — the editor notes that secrets must be re-entered to keep
@@ -368,10 +378,14 @@ struct MCPServersView: View {
     @ViewBuilder
     private func content(harness: MCPServersHarness) -> some View {
         PlatformSplit(
-            showsSecondary: harness.draft != nil || harness.selectedServer != nil || harness.showCatalog
+            showsSecondary: Binding(
+                get: { harness.draft != nil || harness.selectedServer != nil || harness.showCatalog },
+                set: { if !$0 { harness.closeSecondary() } }
+            ),
+            secondaryTitle: editorTitle(harness)
         ) {
             serversTable(harness: harness)
-                .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 360, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             editorPane(harness: harness)
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
@@ -472,6 +486,14 @@ struct MCPServersView: View {
             .disabled(harness.selectionID == nil)
             .help("Delete the selected MCP server")
         }
+    }
+
+    /// Title for the pushed iPhone secondary page — the draft editor, the
+    /// catalog, or the selected server's name. nil when nothing opens it.
+    private func editorTitle(_ harness: MCPServersHarness) -> String? {
+        if harness.draft != nil { return harness.editingServer != nil ? "Edit MCP server" : "New MCP server" }
+        if harness.showCatalog { return "MCP Catalog" }
+        return harness.selectedServer?.name
     }
 
     @ViewBuilder

@@ -242,6 +242,14 @@ final class KanbanHarness {
 
     func cancelCreate() { draft = nil }
 
+    /// Clears both state vars that open the secondary pane (the create draft and
+    /// the selected card) in one call — used by the iPhone push to deselect the
+    /// board when the pushed create/detail page is popped via Back.
+    func closeSecondary() {
+        draft = nil
+        clearSelection()
+    }
+
     func createTask(_ draft: KanbanDraft) async {
         do {
             let response = try await client.kanbanCreateTask(

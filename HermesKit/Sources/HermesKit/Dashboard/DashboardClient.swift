@@ -590,6 +590,30 @@ public struct DashboardEnvVar: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
+/// One toolset from `GET /api/tools/toolsets`. The dashboard reports only a
+/// single **global** enabled flag per toolset (per-platform enable/disable stays
+/// on the CLI), so this model keeps just the fields Talaria needs: the toolset
+/// `name` (matches the CLI `tools list` id / matrix row) and `tools`, the
+/// toolset's individual function names — the bridge for linking a tool's config
+/// env vars to it. Extra response fields (enabled/available/configured/…) are
+/// ignored on decode.
+public struct DashboardToolset: Codable, Equatable, Sendable, Identifiable {
+    public let name: String
+    public let label: String?
+    /// Individual function names in the toolset, e.g. `["web_extract", "web_search"]`.
+    public let tools: [String]
+
+    public var id: String { name }
+
+    enum CodingKeys: String, CodingKey { case name, label, tools }
+
+    public init(name: String, label: String?, tools: [String]) {
+        self.name = name
+        self.label = label
+        self.tools = tools
+    }
+}
+
 public struct DashboardClient: Sendable {
     public let baseURL: URL
     private let token: @Sendable () -> String?
@@ -1015,6 +1039,18 @@ public struct DashboardClient: Sendable {
             method: "POST", path: "/api/env/reveal", body: EnvVarRevealBody(key: key)
         )
         return response.value
+    }
+
+    // MARK: - Toolsets
+
+    /// Lists toolsets (`GET /api/tools/toolsets`) with their individual function
+    /// names. The dashboard reports only a global enabled flag here (per-platform
+    /// enable/disable stays on the CLI), but the `tools` function list is the
+    /// bridge for mapping a tool's config env vars: a tool var's own `tools`
+    /// array references function names (e.g. `web_search`), not the toolset id
+    /// (`web`), so it's matched to a toolset by intersecting against this list.
+    public func getToolsets() async throws -> [DashboardToolset] {
+        try await get(path: "/api/tools/toolsets")
     }
 
     /// UI grouping order for the env categories Hermes returns. Kept in step
