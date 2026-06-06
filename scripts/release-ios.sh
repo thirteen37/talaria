@@ -63,8 +63,6 @@ fi
 # always monotonic. App Store Connect accepts period-separated integers.
 BUILD_NUMBER="$(date -u +%Y%m%d.%H%M)"
 
-readonly APP_PATH="${ARCHIVE_PATH}/Products/Applications/${APP_NAME}.app"
-
 log()  { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -111,7 +109,10 @@ xcodebuild \
     CURRENT_PROJECT_VERSION="${BUILD_NUMBER}" \
     archive
 
-[[ -d "${APP_PATH}" ]] || fail "archive missing app at ${APP_PATH}"
+# The archive's product is named after the target (TalariaIOS.app), not the
+# display APP_NAME. Resolve the single .app rather than hardcoding the name.
+APP_PATH="$(ls -d "${ARCHIVE_PATH}"/Products/Applications/*.app 2>/dev/null | head -n 1 || true)"
+[[ -n "${APP_PATH}" && -d "${APP_PATH}" ]] || fail "no .app in ${ARCHIVE_PATH}/Products/Applications"
 
 # 4. export / upload ----------------------------------------------------------
 # destination=upload sends the build straight to App Store Connect (TestFlight);
