@@ -34,7 +34,7 @@ struct GatewayChatClientTests {
         // the id the UI registered (the stored id).
         var iterator = client.notifications.makeAsyncIterator()
         fake.pushInbound(eventFrame(type: "message.delta", sessionId: "rt-7", payload: ["text": .string("hi")]))
-        let note = try await #require(iterator.next())
+        let note = try await requireNext(&iterator)
         guard case let .sessionUpdate(update) = note else {
             Issue.record("expected sessionUpdate, got \(note)")
             return
@@ -50,7 +50,7 @@ struct GatewayChatClientTests {
         var iterator = client.notifications.makeAsyncIterator()
 
         fake.pushInbound(eventFrame(type: "message.delta", sessionId: sid, payload: ["text": .string("Hello")]))
-        let note = try await #require(iterator.next())
+        let note = try await requireNext(&iterator)
         #expect(note == .sessionUpdate(SessionNotification(
             sessionId: sid,
             update: .agentMessageChunk(Content(content: .text("Hello")))
@@ -63,7 +63,7 @@ struct GatewayChatClientTests {
         var iterator = client.notifications.makeAsyncIterator()
 
         fake.pushInbound(eventFrame(type: "reasoning.delta", sessionId: sid, payload: ["text": .string("pondering")]))
-        let note = try await #require(iterator.next())
+        let note = try await requireNext(&iterator)
         #expect(note == .sessionUpdate(SessionNotification(
             sessionId: sid,
             update: .agentThoughtChunk(Content(content: .text("pondering")))
@@ -83,11 +83,11 @@ struct GatewayChatClientTests {
         fake.pushInbound(eventFrame(type: "reasoning.available", sessionId: sid, payload: ["text": .string("step one and two")]))
         fake.pushInbound(eventFrame(type: "message.delta", sessionId: sid, payload: ["text": .string("answer")]))
 
-        let first = try await #require(iterator.next())
+        let first = try await requireNext(&iterator)
         #expect(first == .sessionUpdate(SessionNotification(
             sessionId: sid, update: .agentThoughtChunk(Content(content: .text("step ")))
         )))
-        let second = try await #require(iterator.next())
+        let second = try await requireNext(&iterator)
         #expect(second == .sessionUpdate(SessionNotification(
             sessionId: sid, update: .agentMessageChunk(Content(content: .text("answer")))
         )))
@@ -100,7 +100,7 @@ struct GatewayChatClientTests {
         var iterator = client.notifications.makeAsyncIterator()
 
         fake.pushInbound(eventFrame(type: "reasoning.available", sessionId: sid, payload: ["text": .string("full reasoning")]))
-        let note = try await #require(iterator.next())
+        let note = try await requireNext(&iterator)
         #expect(note == .sessionUpdate(SessionNotification(
             sessionId: sid, update: .agentThoughtChunk(Content(content: .text("full reasoning")))
         )))
@@ -115,7 +115,7 @@ struct GatewayChatClientTests {
         // then a real delta, and assert only the real one arrives.
         fake.pushInbound(eventFrame(type: "thinking.delta", sessionId: sid, payload: ["text": .string("spinner")]))
         fake.pushInbound(eventFrame(type: "message.delta", sessionId: sid, payload: ["text": .string("real")]))
-        let note = try await #require(iterator.next())
+        let note = try await requireNext(&iterator)
         #expect(note == .sessionUpdate(SessionNotification(
             sessionId: sid,
             update: .agentMessageChunk(Content(content: .text("real")))
@@ -130,7 +130,7 @@ struct GatewayChatClientTests {
         fake.pushInbound(eventFrame(type: "tool.start", sessionId: sid, payload: [
             "tool_id": .string("call-1"), "name": .string("read_file")
         ]))
-        let startNote = try await #require(iterator.next())
+        let startNote = try await requireNext(&iterator)
         guard case let .sessionUpdate(s1) = startNote, case let .toolCall(toolCall) = s1.update else {
             Issue.record("expected toolCall, got \(startNote)")
             return
@@ -142,7 +142,7 @@ struct GatewayChatClientTests {
         fake.pushInbound(eventFrame(type: "tool.complete", sessionId: sid, payload: [
             "tool_id": .string("call-1"), "name": .string("read_file"), "result": .string("ok")
         ]))
-        let doneNote = try await #require(iterator.next())
+        let doneNote = try await requireNext(&iterator)
         guard case let .sessionUpdate(s2) = doneNote, case let .toolCallUpdate(update) = s2.update else {
             Issue.record("expected toolCallUpdate, got \(doneNote)")
             return
@@ -161,7 +161,7 @@ struct GatewayChatClientTests {
             "name": .string("patch"),
             "inline_diff": .string("- old\n+ new")
         ]))
-        let note = try await #require(iterator.next())
+        let note = try await requireNext(&iterator)
         guard case let .sessionUpdate(s) = note,
               case let .toolCallUpdate(update) = s.update,
               case let .diff(diff)? = update.content?.first else {
@@ -242,7 +242,7 @@ struct GatewayChatClientTests {
         fake.pushInbound(eventFrame(type: "approval.request", sessionId: sid, payload: [
             "command": .string("rm -rf /"), "description": .string("dangerous command")
         ]))
-        let note = try await #require(iterator.next())
+        let note = try await requireNext(&iterator)
         guard case let .permissionRequest(event) = note else {
             Issue.record("expected permissionRequest, got \(note)")
             return
@@ -272,6 +272,17 @@ struct GatewayChatClientTests {
     }
 
     // MARK: - Helpers
+
+    /// Awaits the next notification and requires it to be non-nil. Evaluates
+    /// `next()` outside `#require` on purpose: the macro captures its receiver
+    /// immutably, so `#require(iterator.next())` rejects the mutating
+    /// `AsyncIterator.next()` on stricter swift-testing toolchains (CI).
+    private func requireNext(
+        _ iterator: inout AsyncThrowingStream<HermesNotification, Error>.Iterator
+    ) async throws -> HermesNotification {
+        let value = try await iterator.next()
+        return try #require(value)
+    }
 
     private func makeReadySession() async throws -> (GatewayChatClient, FakeGatewayWebSocket, SessionId) {
         let fake = FakeGatewayWebSocket()
