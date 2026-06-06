@@ -61,7 +61,7 @@ jobs:
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           if [[ -z "$IOS_DISTRIBUTION_P12_BASE64" ]]; then
-            echo "::error::IOS_DISTRIBUTION_P12_BASE64 secret not configured (Apple Distribution cert). See RELEASE_SETUP.md §9h."
+            echo "::error::IOS_DISTRIBUTION_P12_BASE64 secret not configured (Apple Distribution cert). See RELEASE_SETUP.md §9e."
             exit 1
           fi
           echo "$IOS_DISTRIBUTION_P12_BASE64" | base64 --decode > /tmp/ios-dist.p12
@@ -96,8 +96,9 @@ jobs:
       - name: Archive + upload to TestFlight
         # scripts/release-ios.sh archives the TalariaIOS scheme with App Store
         # signing (automatic + -allowProvisioningUpdates via the API key) and
-        # uploads via destination=upload. The ASC API key must carry the
-        # App Manager role for the upload to succeed (RELEASE_SETUP.md §9d).
+        # uploads via destination=upload. The ASC API key must carry the Admin
+        # role: distribution cloud signing creates a certificate, which only
+        # Admin / Account Holder keys may do (RELEASE_SETUP.md §9d).
         env:
           ASC_KEY_ID: ${{ secrets.ASC_API_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_API_ISSUER_ID }}

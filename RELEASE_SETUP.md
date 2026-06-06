@@ -206,31 +206,46 @@ not in App Store Connect, so there is no record collision.
    → New App → Platform **iOS** → the bundle id from 9b → SKU + name
    (confirm "Talaria" is available).
 
-### 9d. App Store Connect API key role — REQUIRED for scripted upload
+### 9d. App Store Connect API key — **Admin role** — REQUIRED
 
-The existing `TalariaNotary` key (RELEASE_SETUP §2) was created with the
-**Developer** role. App Store uploads via the API need at least **App Manager**.
-Either elevate that key's role or mint a second key, then export the `.p8`,
-Key ID, and Issuer ID.
+**The key must be Admin (or Account Holder) — not App Manager, not Developer.**
+Cloud-managed distribution signing (`-allowProvisioningUpdates`) creates a
+distribution *certificate* through the API key, and only Admin / Account Holder
+roles may manage certificates. A Developer- or App-Manager-role key archives
+fine but fails the export step with:
 
-### 9e. Run the upload
-
-Local (uses the keychain Apple Distribution cert + API key for the profile):
-
-```sh
-ASC_KEY_ID=<keyid> ASC_ISSUER_ID=<issuer> ASC_KEY_PATH=~/.private/AuthKey_<keyid>.p8 \
-  scripts/release-ios.sh 1.0
+```
+error: exportArchive Cloud signing permission error
+error: exportArchive No profiles for 'io.lyx.Talaria' were found
 ```
 
-Dry run with no credentials (produces a signed `.ipa` under `build-ios/export/`
-for manual upload via Xcode Organizer / Transporter):
+1. App Store Connect → Users and Access → Integrations → App Store Connect API
+   → **Team Keys** → **+** → Access **Admin** → Generate → download the `.p8`
+   (one-time), note the **Key ID** and **Issuer ID**.
 
-```sh
-scripts/release-ios.sh --export-only
-```
+The macOS notarisation pipeline (§2/§4) shares these `ASC_API_*` secrets; an
+Admin key notarises perfectly well, so replacing the old Developer
+`TalariaNotary` key with this Admin key does **not** break the macOS release.
+Leave the old key active if you still run `scripts/release.sh` locally — its
+local `TalariaNotary` keychain profile points at it.
 
-`-allowProvisioningUpdates` lets `xcodebuild` create the App Store provisioning
-profile automatically the first time, so 9b's App ID must exist first.
+### 9e. GitHub secrets (environment: `release`)
+
+The CI lane (§9g) reuses the macOS pipeline's `KEYCHAIN_PASSWORD` and the three
+`ASC_API_*` secrets — now pointing at the **Admin** key from §9d — plus the iOS
+Distribution cert. Set these in the **`release`** environment (Settings →
+Environments → release → Secrets), matching the existing macOS secrets:
+
+| Secret | How to produce |
+| --- | --- |
+| `IOS_DISTRIBUTION_P12_BASE64` | Keychain Access → expand the **Apple Distribution** cert → select the cert **and** its private key → **Export 2 Items** as `.p12` **with an empty password** → `base64 -i dist.p12 \| pbcopy` |
+| `ASC_API_KEY_BASE64` | `base64 -i ~/.private/AuthKey_<keyid>.p8 \| pbcopy` (the **Admin** key from §9d) |
+| `ASC_API_KEY_ID` | The Admin key's Key ID |
+
+`ASC_API_ISSUER_ID` is the same for every team key, so it does **not** change
+when you swap keys. The `.p12` is exported with an **empty password**, so there
+is no `IOS_DISTRIBUTION_P12_PASSWORD` secret — the workflow imports with
+`-P ""`. (If you prefer a password, set that secret and the workflow uses it.)
 
 ### 9f. Export-compliance declaration — CONFIRM
 
@@ -240,7 +255,37 @@ self-classification to Apple/BIS — confirm it matches your distribution before
 submitting. If it does not, set it `true` and complete the compliance
 documentation App Store Connect prompts for.
 
-### 9g. TestFlight testers
+### 9g. Cutting a release — `.github/workflows/ios-testflight.yml`
+
+The deploy workflow archives, signs, and uploads `TalariaIOS` to TestFlight by
+running `scripts/release-ios.sh`. It runs on a **`macos-26`** runner and selects
+**Xcode 26**, because App Store Connect rejects any upload not built with the
+iOS 26 SDK. It is **`workflow_dispatch` only** — it does *not* fire on `v*`
+tags, so the macOS DMG release and the iOS TestFlight push stay independent.
+(The comment at the top of the file shows how to add a tag trigger later.) The
+workflow must live on the default branch (`main`) for `workflow_dispatch` to be
+available — it already does.
+
+**From the GitHub UI:** Actions → **iOS TestFlight** → **Run workflow** ▾ →
+leave "Use workflow from" on **main** → enter the version (e.g. `1.1`) → **Run
+workflow**.
+
+**From the CLI:**
+
+```sh
+gh workflow run ios-testflight.yml --ref main -f version=1.1
+# then watch the run:
+gh run watch "$(gh run list --workflow=ios-testflight.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+```
+
+You supply only the marketing **version**; `CFBundleVersion` is set from
+`date -u +%Y%m%d.%H%M`, so TestFlight's monotonic build number is satisfied
+automatically. The App ID (§9b), app record (§9c), Admin key (§9d), and secrets
+(§9e) must be in place and the Paid/Free Apps agreement signed. On success the
+build lands in App Store Connect → TestFlight after a few minutes of Apple
+processing.
+
+### 9h. TestFlight testers
 
 - **Internal** testers (your team, ≤100) need no review — fastest first loop.
 - **External** testers require a one-time **Beta App Review** plus a beta
@@ -248,26 +293,33 @@ documentation App Store Connect prompts for.
   Hermes server, add review notes explaining the self-hosted-backend
   requirement (or provide a demo server) — reviewers cannot exercise it blind.
 
-### 9h. CI lane — `.github/workflows/ios-testflight.yml`
+### 9i. Local / manual run (fallback)
 
-`.github/workflows/ios-testflight.yml` archives, signs, and uploads to
-TestFlight by running `scripts/release-ios.sh` on a `macos-15` runner. It is
-**`workflow_dispatch` only** (run it from the Actions tab with a version input);
-it does not fire on `v*` tags, so it won't push an unproven build on every
-macOS release. The comment at the top of the file shows how to add the tag
-trigger once the lane is proven.
+Run the upload from your Mac — needs Xcode 26 selected, the Apple Distribution
+cert in the login keychain, and the Admin `.p8`:
 
-It reuses the existing `KEYCHAIN_PASSWORD` and `ASC_API_KEY_BASE64` /
-`ASC_API_KEY_ID` / `ASC_API_ISSUER_ID` secrets (RELEASE_SETUP §2/§4). The ASC
-key must carry the **App Manager** role (§9d) — the Developer role used for
-notarisation cannot upload to TestFlight. Two **new** secrets are required:
+```sh
+sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer
+ASC_KEY_ID=<keyid> ASC_ISSUER_ID=<issuer> ASC_KEY_PATH=~/.private/AuthKey_<keyid>.p8 \
+  scripts/release-ios.sh 1.1
+```
 
-| Secret | How to produce |
-| --- | --- |
-| `IOS_DISTRIBUTION_P12_BASE64` | Export your **Apple Distribution** cert + private key (§9a) from Keychain Access as `.p12`, then `base64 -i AppleDistribution.p12 \| pbcopy` |
-| `IOS_DISTRIBUTION_P12_PASSWORD` | The password you set during `.p12` export |
+Or build a signed `.ipa` for manual upload via Xcode Organizer / Transporter
+(no API key needed):
 
-Signing is automatic + `-allowProvisioningUpdates`, so the App Store
-provisioning profile is created via the API key on first run — the explicit
-App ID (§9b) and app record (§9c) must already exist, and the Paid/Free Apps
-agreement must be signed, or the upload step fails.
+```sh
+scripts/release-ios.sh --export-only
+```
+
+### 9j. Troubleshooting (lessons from first bring-up)
+
+- **`Cloud signing permission error` / `No profiles for 'io.lyx.Talaria' were found`**
+  at export → the `ASC_API_*` key is not Admin. Distribution cloud signing
+  creates a certificate, which only Admin / Account Holder keys may do (§9d).
+- **`SDK version issue … must be built with the iOS 26 SDK`** at upload → the
+  runner is on an old Xcode. The job must run on `macos-26` with Xcode 26
+  selected (already configured in the workflow).
+- **"Run workflow" button missing / `workflow_dispatch` unavailable** → the
+  workflow file isn't on the default branch; it must be on `main`.
+- **`archive missing app …`** locally → stale checkout; the script resolves the
+  product as `TalariaIOS.app` (the target name), not `Talaria.app`.
