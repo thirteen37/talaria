@@ -10,9 +10,10 @@ public enum HermesCapability: String, CaseIterable, Codable, Sendable {
     /// non-chat surface (Sessions, Skills, Cron, Logs) since dashboard
     /// mode is mandatory in this release — there's no CLI/SQLite scraper
     /// fallback. Not enforced at profile-load: a profile on older Hermes still
-    /// loads and chat still works over ACP, but the dashboard surfaces show a
-    /// `capabilityBanner` warning and remain on their "connecting…" placeholder
-    /// because the spawn fails. (No hard upgrade gate today.)
+    /// loads, but every live surface — including chat, which now rides the
+    /// dashboard `/api/ws` gateway — shows a `capabilityBanner` warning and
+    /// remains on its "connecting…" placeholder because the spawn fails.
+    /// (No hard upgrade gate today.)
     case requiresDashboard
     /// `hermes dashboard`'s `/api/model/*` routes (`options`, `auxiliary`,
     /// `set`) backing the Models management screen. Ships in the same
@@ -38,7 +39,8 @@ public enum HermesCapability: String, CaseIterable, Codable, Sendable {
     /// Talaria run chat through the dashboard instead of a separate `hermes acp`
     /// subprocess. Ships in the same `web_server.py` as the dashboard (it drives
     /// the `tui_gateway.dispatch` surface), so it shares the dashboard pin. Below
-    /// it, a window falls back to the ACP chat backend. See `docs/gateway-chat.md`.
+    /// it, live chat is unavailable — the `hermes acp` subprocess backend it once
+    /// fell back to has been removed. See `docs/gateway-chat.md`.
     case gatewayChat
     /// `hermes skills install/update/uninstall` — the Skills Hub *mutation*
     /// affordances (search is plain public HTTP and is **not** gated by this).
@@ -110,8 +112,8 @@ public struct CapabilityTable: Sendable {
         .requiresMCPAPI: HermesVersion(major: 0, minor: 15, patch: 1),
         // `/api/ws` chat gateway is part of the dashboard server (`web_server.py`,
         // driving `tui_gateway.dispatch`), present in the same builds as the
-        // dashboard. Shares the dashboard's introducing pin; below it a window
-        // stays on the ACP chat backend.
+        // dashboard. Shares the dashboard's introducing pin; below it live chat
+        // is unavailable (no ACP fallback remains).
         .gatewayChat: HermesVersion(major: 0, minor: 14, patch: 0),
         // `hermes skills install/update/uninstall` — verified non-interactive
         // against an installed Hermes v0.14.0 (`--yes` on install/update;

@@ -141,8 +141,8 @@ extension ServerWindowHarness {
     func forceReleaseDashboardSupervisor(_ supervisor: DashboardSupervisor) async {
         // The chat tunnel rides this connection; drop it so a new session doesn't
         // open WS over the connection we're about to tear down (re-acquire refills
-        // the box). Stale-tunnel opens would fall back to ACP anyway, but this
-        // avoids the wasted attempt.
+        // the box). A stale-tunnel open would just throw `sessionNotReady`
+        // anyway, but clearing the box avoids the wasted attempt.
         chatTunnelBox?.set(nil)
         await supervisor.forceShutdown()
     }

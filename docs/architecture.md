@@ -1,19 +1,19 @@
 # Architecture
 
-Talaria is a SwiftUI macOS app backed by a shared `HermesKit` Swift package. The app renders Hermes natively instead of embedding the TUI. Live sessions speak ACP over newline-delimited JSON-RPC frames.
+Talaria is a native SwiftUI front-end for Hermes (macOS and iOS app targets) backed by a shared `HermesKit` Swift package. The app renders Hermes natively instead of embedding the TUI. Live chat speaks **JSON-RPC 2.0 over a WebSocket** to the dashboard's `/api/ws` gateway — the same path Hermes Desktop uses — riding the same `hermes dashboard` the non-chat surfaces use.
 
 ## Core Packages
 
-- `ACP`: Codable JSON-RPC and ACP schema types.
-- `Transport`: bidirectional byte streams for local processes, SSH processes, and in-memory tests; also the pure launch-spec/command builder for `hermes chat --tui` terminal sessions (`TUILaunchSpec.swift`).
-- `Client`: request correlation and session lifecycle orchestration.
-- `Dashboard`: HTTP client, token/session handling, dashboard process supervision, spawn specs, and update polling.
+- `ACP`: Codable JSON-RPC plus the shared chat-event model (`HermesNotification`, `SessionUpdate`, `ToolCall`, …) the chat UI consumes. Named for the original ACP protocol; the gateway client maps gateway events onto these types.
+- `Transport`: shared pure-Swift NIO-SSH primitives (connection factory, credential providers, host-key trust/TOFU, `OneShotProcess`) used by the dashboard connection and command runners; also the pure launch-spec/command builder for `hermes chat --tui` terminal sessions (`TUILaunchSpec.swift`). No longer a chat transport — the chat WebSocket lives in `Dashboard`.
+- `Client`: `SessionManager` (per-session lifecycle + notification fan-out/replay) and the `ChatBackend` seam; live chat uses `GatewayChatClient`.
+- `Dashboard`: HTTP client, token/session handling, dashboard process supervision, spawn specs, update polling, and the chat WebSocket (`GatewayWebSocket` + `URLSessionGatewayWebSocket` / `NIOSSHGatewayWebSocket`).
 - `Hermes`: CLI fallbacks, version parsing, doctor/tool parsers, and capability gates.
 - `Profiles`: local and SSH server profiles.
 
 ## Read And Write Model
 
-Live chat stays on ACP over newline-delimited JSON-RPC. Non-chat surfaces are backed by the Hermes dashboard HTTP API (`hermes dashboard --host 127.0.0.1 --port <port>`). Talaria allocates an ephemeral loopback port by default, but profiles can pin a dashboard port when the automatic choice conflicts with local or remote host policy. Talaria never reads or writes Hermes SQLite files directly.
+Live chat speaks JSON-RPC 2.0 over a WebSocket to the dashboard's `/api/ws` gateway (`GatewayChatClient`), riding the same `hermes dashboard` as the non-chat surfaces. Non-chat surfaces are backed by the Hermes dashboard HTTP API (`hermes dashboard --host 127.0.0.1 --port <port>`). Talaria allocates an ephemeral loopback port by default, but profiles can pin a dashboard port when the automatic choice conflicts with local or remote host policy. Talaria never reads or writes Hermes SQLite files directly.
 
 Each window acquires a dashboard endpoint for its `ServerProfile` through `DashboardSupervisor`. The supervisor starts `hermes dashboard`, polls `/api/status`, caches the session token scraped from the dashboard SPA, reference-counts consumers, and terminates the child when the last window releases it.
 
@@ -49,21 +49,21 @@ A few operations remain on CLI fallbacks because Hermes does not expose dashboar
 
 One more, update check/apply (`hermes update --check`, `hermes update`), uses the CLI *by choice* even though the dashboard routes above exist: only the CLI reports the commits-behind verdict for source installs, which `/api/status` does not.
 
-Remote dashboard access on macOS is provided by spawning system `ssh` with a loopback `-L <local>:127.0.0.1:<remote>` forward and running `hermes dashboard` on the remote host. iOS reaches the dashboard over the pure-Swift NIO-SSH transport instead: one connection both execs `hermes dashboard` on the remote host and tunnels its HTTP over a `direct-tcpip` channel (no local forward), reusing the window's host-key trust so it doesn't re-prompt for a key the chat transport already trusted.
+Remote dashboard access on macOS is provided by spawning system `ssh` with a loopback `-L <local>:127.0.0.1:<remote>` forward and running `hermes dashboard` on the remote host. iOS reaches the dashboard over the pure-Swift NIO-SSH transport instead: one connection both execs `hermes dashboard` on the remote host and tunnels its HTTP — and the live-chat WebSocket — over `direct-tcpip` channels (no local forward), reusing the window's host-key trust so it doesn't re-prompt for a key the dashboard connection already trusted.
 
 ## Terminal (TUI) Sessions (macOS)
 
-Alongside the native ACP chat, a chat can be opened as the real Hermes TUI — the full terminal experience Hermes ships — rendered inline in the detail pane by an embedded terminal emulator (SwiftTerm). It is a per-launch choice: a "New TUI session" button beside "New session", and an "Open as TUI" item on a row in the sessions browser (which resumes that session). There is no global default or setting.
+Alongside the native gateway chat, a chat can be opened as the real Hermes TUI — the full terminal experience Hermes ships — rendered inline in the detail pane by an embedded terminal emulator (SwiftTerm). It is a per-launch choice: a "New TUI session" button beside "New session", and an "Open as TUI" item on a row in the sessions browser (which resumes that session). There is no global default or setting.
 
-A TUI tab bypasses the entire `Transport` / `Client` / `SessionManager` / ACP stack *and* the dashboard. Talaria spawns `hermes chat --tui` directly in a PTY (resume adds `-r <id>`; the `-p <name>` profile flag precedes the subcommand, as for `acp`) and renders its raw terminal output:
+A TUI tab bypasses both the gateway chat path *and* the dashboard. Talaria spawns `hermes chat --tui` directly in a PTY (resume adds `-r <id>`; the `-p <name>` profile flag precedes the subcommand) and renders its raw terminal output:
 
-- **Local** profiles run `env hermes [-p <name>] chat --tui` with the login-shell PATH and `HERMES_HOME` (the same env story as the local ACP transport), and the session cwd as the process working directory.
-- **Remote** profiles always use system `ssh -tt` (a local PTY process the terminal can drive), even when the macOS NIO-SSH opt-in is enabled — the NIO path cannot feed a local-process terminal view. The remote command line is byte-identical in shape to the ACP one but runs `chat --tui` instead of `acp`.
+- **Local** profiles run `env hermes [-p <name>] chat --tui` with the login-shell PATH and `HERMES_HOME` (the same env story as the local dashboard launch), and the session cwd as the process working directory.
+- **Remote** profiles always use system `ssh -tt` (a local PTY process the terminal can drive), even when the macOS NIO-SSH opt-in is enabled — the NIO path cannot feed a local-process terminal view. The remote command runs over `ssh -tt` like the remote dashboard launch, but invokes `chat --tui` rather than `dashboard`.
 
 The launch command is assembled in `HermesKit` (`Transport/TUILaunchSpec.swift`, pure and unit-tested for exact command shape). The SwiftTerm view, the per-process lifetime, and a process-wide registry that keeps a terminal alive across tab switches (and reaps it on tab close and window teardown) live in a macOS-only app seam (`Chat/macOS/HermesTerminalView.swift`). SwiftTerm is a dependency of the macOS app target only — not the iOS target and not `HermesKit`, which stays UI-free. iOS has no local-process / PTY path, so TUI tabs cannot be created there; the shared code compiles via a seam stub.
 
-Only one mode runs per session id at a time: opening a session as a TUI is disabled while it is open inline (ACP), and opening a session inline focuses an existing TUI tab instead of starting a second `hermes` resuming the same session.
+Only one mode runs per session id at a time: opening a session as a TUI is disabled while it is open inline (gateway chat), and opening a session inline focuses an existing TUI tab instead of starting a second `hermes` resuming the same session.
 
 ## Window Model
 
-Each app window is scoped to one `ServerProfile`. The window owns its ACP session clients, dashboard client reference, CLI fallback runner, version cache, and capability table. `DashboardCoordinator` caches one dashboard supervisor per `(ServerProfile, Hermes profile)` pair: every window shares the default-profile dashboard, while the Profiles editor acquires a separate, profile-scoped supervisor (its own port + process) when editing a named profile, releasing it on profile switch or teardown.
+Each app window is scoped to one `ServerProfile`. The window owns its chat session clients (over the dashboard gateway), dashboard client reference, CLI fallback runner, version cache, and capability table. `DashboardCoordinator` caches one dashboard supervisor per `(ServerProfile, Hermes profile)` pair: every window shares the default-profile dashboard, while the Profiles editor acquires a separate, profile-scoped supervisor (its own port + process) when editing a named profile, releasing it on profile switch or teardown.

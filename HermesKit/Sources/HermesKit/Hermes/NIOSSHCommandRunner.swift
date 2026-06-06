@@ -30,7 +30,7 @@ extension RemoteCommandRunning {
 }
 
 /// Builds the SSH client configuration shared by every NIO-SSH consumer
-/// (the ACP transport, the snapshot `cat` transfer, and the command
+/// (the dashboard connection, the snapshot `cat` transfer, and the command
 /// runner). Centralizing credential resolution + the auth/host-key
 /// delegates here keeps the security-critical wiring from drifting between
 /// call sites.
@@ -61,7 +61,7 @@ enum NIOSSHConnectionFactory {
         let hostKeyDelegate = NIOSSHHostKeyVerifier(store: hostKeyStore, host: host, port: port, confirmUnknown: hostKeyConfirmer)
 
         let bootstrap = ClientBootstrap(group: group)
-            // Match the ACP transport's connect bound so a stalled SYN
+            // Match the dashboard connection's connect bound so a stalled SYN
             // doesn't pin the UI for ~75s on macOS's default TCP backoff.
             .connectTimeout(.seconds(15))
             // Build the (non-Sendable) `SSHClientConfiguration` and install the

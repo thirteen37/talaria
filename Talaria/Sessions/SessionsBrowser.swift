@@ -62,7 +62,7 @@ struct SessionsBrowser: View {
                             onOpen?()
                         },
                         // Resume this session as the real Hermes TUI (embedded
-                        // terminal) instead of the native ACP view. `nil` hides
+                        // terminal) instead of the native chat view. `nil` hides
                         // the button on platforms without TUI support (iOS);
                         // `tuiDisabled` enforces one mode per session id at a
                         // time (disabled when already open inline).

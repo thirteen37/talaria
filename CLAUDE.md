@@ -47,7 +47,7 @@ There are two distinct data paths, and code must use the right one:
 
 ### Window model
 
-Each app window is scoped to one `ServerProfile` and owns its ACP session clients, dashboard client reference, CLI fallback runner, version cache, and capability table. Features gate on the connected Hermes version (e.g. dashboard cron requires `>= 0.14.0`); below the gate, surfaces show a "dashboard required" banner rather than breaking.
+Each app window is scoped to one `ServerProfile` and owns its chat session clients (over the dashboard gateway), dashboard client reference, CLI fallback runner, version cache, and capability table. Features gate on the connected Hermes version (e.g. dashboard cron requires `>= 0.14.0`); below the gate, surfaces show a "dashboard required" banner rather than breaking.
 
 ### HermesKit modules (`HermesKit/Sources/HermesKit/`)
 

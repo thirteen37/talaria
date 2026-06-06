@@ -45,7 +45,7 @@ extension ServerWindowHarness {
             hermesProfileName: hermesProfileName
         )
         // TUI factory: spawn `env hermes [-p <name>] chat --tui [-r <id>]` under
-        // a PTY, mirroring the ACP transport's binary/PATH/env story. The
+        // a PTY, mirroring the dashboard launch's binary/PATH/env story. The
         // session's cwd is applied as the process working directory (hermes
         // chat uses it as the session cwd); PATH comes from the login-shell
         // resolver so a Finder-launched app still finds `hermes`.

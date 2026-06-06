@@ -2,9 +2,9 @@ import HermesKit
 import SwiftUI
 
 /// Bundles the per-window state so we can rebuild it cleanly when the
-/// window swaps profiles. The `SessionsStore` holds the live ACP transport;
-/// making a fresh harness guarantees the previous profile's one tears down
-/// before the new one boots.
+/// window swaps profiles. The `SessionsStore` holds the live chat session
+/// clients; making a fresh harness guarantees the previous profile's one tears
+/// down before the new one boots.
 ///
 /// Platform behavior (transport selection, admin runner, dashboard lifecycle,
 /// host-key store) lives in `ServerWindowHarness+macOS` / `+iOS`, selected by
@@ -16,8 +16,8 @@ final class ServerWindowHarness {
     let profile: ServerProfile
     /// The active Hermes profile (`hermes -p <name>`) this window is scoped to.
     /// `default` for the unscoped install. Every consumer the harness bundles
-    /// (ACP transport, admin runner, dashboard supervisor) is built for this
-    /// name, so a switch tears the harness down and rebuilds — the same
+    /// (chat session clients, admin runner, dashboard supervisor) is built for
+    /// this name, so a switch tears the harness down and rebuilds — the same
     /// machinery a server switch uses. Does not persist: resets to `default`
     /// on launch and on every server switch.
     let hermesProfileName: String
@@ -142,9 +142,10 @@ final class ServerWindowHarness {
         }
     }
 
-    /// `UserDefaults` key honored on macOS to opt the ACP transport into
-    /// the pure-Swift NIO-SSH path instead of the default system-ssh
-    /// subprocess. Host-key trust consults `HostKeyStore` for the NIO
+    /// `UserDefaults` key honored on macOS to opt the remote dashboard transport
+    /// (which the live-chat WebSocket rides) into the pure-Swift NIO-SSH path
+    /// instead of the default system-ssh `-L` forward. Host-key trust consults
+    /// `HostKeyStore` for the NIO
     /// path; system-ssh defers to `~/.ssh/known_hosts`. See
     /// `docs/security.md`. iOS always uses NIO regardless of this flag —
     /// system-ssh isn't available there. Flip the default in a later

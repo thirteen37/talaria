@@ -14,8 +14,8 @@ struct GatewayChatTunnel: Sendable {
 
 /// Thread-safe holder for the iOS gateway tunnel, filled by the harness once the
 /// dashboard is live (`acquireDashboard()`) and read by the chat backend factory
-/// at session-open time. nil until the dashboard connects (factory falls back to
-/// ACP), and on macOS.
+/// at session-open time. nil until the dashboard connects (the factory throws
+/// `GatewayChatError.sessionNotReady` so the user can retry), and on macOS.
 final class GatewayChatTunnelBox: @unchecked Sendable {
     private let lock = NSLock()
     private var tunnel: GatewayChatTunnel?
