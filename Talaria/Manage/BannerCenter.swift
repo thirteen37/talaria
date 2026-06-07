@@ -231,21 +231,32 @@ extension View {
     /// Attaches the banner strip to the top of the view as a safe-area inset —
     /// the same pattern `manageBanner` uses, so the strip lands in the content
     /// region below the window toolbar rather than bleeding behind it.
-    func bannerHost(_ center: BannerCenter) -> some View {
+    ///
+    /// `active` gates whether the strip renders. The inset modifier is applied
+    /// unconditionally (stable view identity across `active` flips — a compact
+    /// iPad entering/leaving Slide Over doesn't tear down the hosted subtree);
+    /// when `active` is false it just reserves nothing. The split-view layout
+    /// uses this to host on the sidebar only in compact width, where the
+    /// detail-pane host isn't on screen.
+    func bannerHost(_ center: BannerCenter, active: Bool = true) -> some View {
         safeAreaInset(edge: .top, spacing: 0) {
-            BannerHost(center: center)
+            if active {
+                BannerHost(center: center)
+            }
         }
     }
 
-    /// One shared modifier that hosts the window banner strip, publishes the
-    /// center into the environment (so detail surfaces + sheets read it), and
-    /// bridges the three pieces of window state that used to render as sidebar
-    /// rows. The window state stays the source of truth — these bridges only
-    /// mirror it into the center — so the existing `.onChange` gates that drive
-    /// `hermesProfilesLoading` keep working untouched.
+    /// One shared modifier that publishes the center into the environment (so
+    /// detail surfaces + sheets read it) and bridges the three pieces of window
+    /// state that used to render as sidebar rows. It no longer hosts the visible
+    /// strip — each window hosts that itself via `bannerHost` at the right
+    /// altitude (the detail pane on the split-view layout, the full-width root on
+    /// iPhone) so the strip never lands over the sidebar. The window state stays
+    /// the source of truth — these bridges only mirror it into the center — so
+    /// the existing `.onChange` gates that drive `hermesProfilesLoading` keep
+    /// working untouched.
     func bridgeWindowBanners(harness: ServerWindowHarness) -> some View {
         self
-            .bannerHost(harness.banners)
             .environment(harness.banners)
             // The ✕ on each bridged banner clears its backing state (not just the
             // row) so a recurring failure with the identical error string still
