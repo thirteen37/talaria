@@ -22,10 +22,7 @@ struct Composer: View {
         }
 
         let query = String(prompt.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if query.isEmpty {
-            return availableCommands
-        }
-        return availableCommands.filter { $0.name.lowercased().contains(query) }
+        return rankedSlashCommands(availableCommands, matching: query)
     }
 
     private var visibleCommands: [AvailableCommand] {
@@ -155,4 +152,31 @@ private struct SlashMenuHeightKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
     }
+}
+
+/// Match quality of `query` against a command `name`, lower = better.
+/// Returns nil when the name does not contain the query at all.
+/// Both arguments are expected lowercased.
+func slashCommandMatchTier(name: String, query: String) -> Int? {
+    if name == query { return 0 }
+    if name.hasPrefix(query) { return 1 }
+    guard let range = name.range(of: query) else { return nil }
+    let before = name[name.index(before: range.lowerBound)]
+    return "-_:./ ".contains(before) ? 2 : 3
+}
+
+/// Filter `commands` to those whose name matches `query` (case-insensitive
+/// substring) and order them by match quality (exact > prefix > word-boundary
+/// > interior). Ties preserve original server order. `query` should already be
+/// lowercased and trimmed; an empty query returns `commands` unchanged.
+func rankedSlashCommands(_ commands: [AvailableCommand], matching query: String) -> [AvailableCommand] {
+    guard !query.isEmpty else { return commands }
+    return commands.enumerated()
+        .compactMap { index, command -> (tier: Int, index: Int, command: AvailableCommand)? in
+            guard let tier = slashCommandMatchTier(name: command.name.lowercased(), query: query)
+            else { return nil }
+            return (tier, index, command)
+        }
+        .sorted { $0.tier != $1.tier ? $0.tier < $1.tier : $0.index < $1.index }
+        .map(\.command)
 }
