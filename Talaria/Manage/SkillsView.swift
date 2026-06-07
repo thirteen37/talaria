@@ -220,6 +220,10 @@ struct SkillsView: View {
     /// Window's top-of-window banner hub. Optional so a host that doesn't supply
     /// one degrades to no-op (hard errors then simply don't render).
     @Environment(BannerCenter.self) private var banners: BannerCenter?
+    /// Window navigator: a skill `EntityLink` (e.g. from a chat permission
+    /// prompt) selects its row when this tab lands. Optional so the view renders
+    /// without one.
+    @Environment(WindowNavigator.self) private var navigator: WindowNavigator?
 
     @State private var harness: SkillsHarness?
     // Both hub sections collapse by default so the installed list owns the
@@ -266,13 +270,28 @@ struct SkillsView: View {
         // first appear (a bare `.task` on the Group never re-runs for that flip).
         .task(id: client != nil) {
             guard let client else { harness = nil; return }
-            if harness != nil { return }
+            if harness != nil { consumeFocus(harness: harness!); return }
             let h = SkillsHarness(client: client, runner: runner)
             h.banners = banners
             h.bannerKey = "skills"
             harness = h
             await h.refresh()
+            consumeFocus(harness: h)
         }
+        .onAppear { if let harness { consumeFocus(harness: harness) } }
+        .onChange(of: navigator?.pendingFocus) { _, _ in
+            if let harness { consumeFocus(harness: harness) }
+        }
+    }
+
+    /// Selects the row named by a pending skill focus, then clears it. Ignores
+    /// focus aimed at another tab/page.
+    private func consumeFocus(harness: SkillsHarness) {
+        guard let ref = navigator?.pendingFocus, case let .skill(id) = ref else { return }
+        if harness.rows.contains(where: { $0.name == id }) {
+            harness.selectionID = id
+        }
+        Task { @MainActor in navigator?.pendingFocus = nil }
     }
 
     @ViewBuilder

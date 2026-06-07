@@ -195,6 +195,9 @@ struct EnvironmentView: View {
     /// Window's top-of-window banner hub. Optional so a host that doesn't supply
     /// one degrades to no-op (hard errors then simply don't render).
     @Environment(BannerCenter.self) private var banners: BannerCenter?
+    /// Window navigator: an env-var `EntityLink` selects its row when this tab
+    /// lands. Optional so the view renders without one.
+    @Environment(WindowNavigator.self) private var navigator: WindowNavigator?
 
     @State private var harness: EnvironmentHarness?
     @State private var searchText: String = ""
@@ -252,7 +255,7 @@ struct EnvironmentView: View {
         // other dashboard surfaces).
         .task(id: client != nil) {
             guard let client else { harness = nil; return }
-            if harness != nil { return }
+            if harness != nil { consumeFocus(harness: harness!); return }
             // Only build a file reader when the read path is actually available
             // (see `canEnumerateCustomVars`). Without it the screen shows known
             // vars only — no persistent "no SSH transfer" banner.
@@ -268,7 +271,22 @@ struct EnvironmentView: View {
             h.banners = banners
             harness = h
             await h.refresh()
+            consumeFocus(harness: h)
         }
+        .onAppear { if let harness { consumeFocus(harness: harness) } }
+        .onChange(of: navigator?.pendingFocus) { _, _ in
+            if let harness { consumeFocus(harness: harness) }
+        }
+    }
+
+    /// Selects the row named by a pending env-var focus, then clears it. Ignores
+    /// focus aimed at another tab/page.
+    private func consumeFocus(harness: EnvironmentHarness) {
+        guard let ref = navigator?.pendingFocus, case let .envVar(name) = ref else { return }
+        if harness.vars.contains(where: { $0.name == name }) {
+            harness.selectionID = name
+        }
+        Task { @MainActor in navigator?.pendingFocus = nil }
     }
 
     @ViewBuilder

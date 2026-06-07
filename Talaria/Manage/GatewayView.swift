@@ -839,7 +839,9 @@ private struct MessagingFieldRow: View {
     @ViewBuilder
     private var caption: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(envVar.name)
+            // The same var lives on the Config & Env → Environment tab; link
+            // there rather than restating it as inert text.
+            EntityLink(envVar.name, ref: .envVar(name: envVar.name), style: .subtle)
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(.secondary)
             if !envVar.description.isEmpty {

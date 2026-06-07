@@ -296,6 +296,7 @@ struct SessionsSidebar: View {
         let profiles: [HermesProfileInfo]
         let onSelect: (String) -> Void
 
+        @Environment(WindowNavigator.self) private var navigator: WindowNavigator?
         @State private var isHovering = false
 
         var body: some View {
@@ -311,6 +312,16 @@ struct SessionsSidebar: View {
                         } else {
                             Text(p.name)
                         }
+                    }
+                }
+                // Jump to the Profiles page (with the active profile selected),
+                // separate from switching the window's active profile above.
+                if navigator != nil {
+                    Divider()
+                    Button {
+                        navigator?.open(.hermesProfile(name: active))
+                    } label: {
+                        Label("Manage Profiles…", systemImage: "square.stack.3d.up")
                     }
                 }
             } label: {

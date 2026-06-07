@@ -226,6 +226,9 @@ struct ProfilesView: View {
     /// Window's top-of-window banner hub. Optional so a host that doesn't supply
     /// one degrades to no-op (hard errors then simply don't render).
     @Environment(BannerCenter.self) private var banners: BannerCenter?
+    /// Window navigator: an `EntityLink` to a Hermes profile selects its row when
+    /// this page lands. Optional so the page renders without one.
+    @Environment(WindowNavigator.self) private var navigator: WindowNavigator?
 
     @State private var harness: ProfilesHarness?
     @State private var profileToDelete: HermesProfileInfo?
@@ -265,12 +268,29 @@ struct ProfilesView: View {
         // first appear (matching Cron).
         .task(id: client != nil) {
             guard let client else { harness = nil; return }
-            if harness != nil { return }
+            if harness != nil { consumeFocus(harness: harness!); return }
             let h = ProfilesHarness(client: client, runner: runner, onProfilesChanged: onProfilesChanged)
             h.banners = banners
             harness = h
             await h.refresh()
+            consumeFocus(harness: h)
         }
+        // Re-entering this page (focus set before it appeared) and a profile
+        // EntityLink tapped while already on it both select the row.
+        .onAppear { if let harness { consumeFocus(harness: harness) } }
+        .onChange(of: navigator?.pendingFocus) { _, _ in
+            if let harness { consumeFocus(harness: harness) }
+        }
+    }
+
+    /// Selects the row named by a pending Hermes-profile focus, then clears it.
+    /// Ignores focus aimed at another page.
+    private func consumeFocus(harness: ProfilesHarness) {
+        guard let ref = navigator?.pendingFocus, case let .hermesProfile(name) = ref else { return }
+        if let match = harness.profiles.first(where: { $0.name == name }) {
+            harness.selectionID = match.id
+        }
+        Task { @MainActor in navigator?.pendingFocus = nil }
     }
 
     @ViewBuilder
@@ -341,10 +361,14 @@ struct ProfilesView: View {
             }
             .width(60)
             TableColumn("Model") { profile in
-                Text(profile.model ?? "—")
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if let model = profile.model, !model.isEmpty {
+                    EntityLink(model, ref: .modelMain, style: .prominent)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else {
+                    Text("—")
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .overlay {

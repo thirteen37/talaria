@@ -28,6 +28,9 @@ struct PhoneBrowseSheet: View {
     var onDismiss: () -> Void
 
     @Environment(SidebarLayout.self) private var sidebarLayout
+    /// Window navigator: re-injected by the host window so `EntityLink` taps
+    /// *inside* a browse page re-navigate this sheet's stack to the target page.
+    @Environment(WindowNavigator.self) private var navigator: WindowNavigator?
     @State private var path: [BrowseDestination] = []
 
     var body: some View {
@@ -79,6 +82,14 @@ struct PhoneBrowseSheet: View {
         .onAppear {
             if let initial, path.isEmpty {
                 path = [initial]
+            }
+        }
+        // An EntityLink tapped inside a browse page (sheet already open) re-points
+        // the stack at the target page; the page itself consumes the focus.
+        .onChange(of: navigator?.pendingFocus) { _, newValue in
+            guard let ref = newValue ?? nil, ref.sessionId == nil else { return }
+            if path.last != ref.destination {
+                path = [ref.destination]
             }
         }
     }

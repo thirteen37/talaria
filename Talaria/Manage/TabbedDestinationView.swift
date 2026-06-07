@@ -20,10 +20,20 @@ struct DestinationTab: Identifiable {
 /// title tracks the active tab (same behavior the bespoke wrappers had).
 struct TabbedDestinationView: View {
     let tabs: [DestinationTab]
+    /// Maps a pending `EntityRef` focus to the tab id that hosts it, or nil if
+    /// the ref isn't one of these tabs. When a focus lands, the container selects
+    /// that tab so the right child is visible; the child then selects its row.
+    var tabForFocus: ((EntityRef) -> String?)?
+    @Environment(WindowNavigator.self) private var navigator: WindowNavigator?
     @State private var selection: String
 
-    init(initialTabID: String? = nil, tabs: [DestinationTab]) {
+    init(
+        initialTabID: String? = nil,
+        tabForFocus: ((EntityRef) -> String?)? = nil,
+        tabs: [DestinationTab]
+    ) {
         self.tabs = tabs
+        self.tabForFocus = tabForFocus
         _selection = State(initialValue: initialTabID ?? tabs.first?.id ?? "")
     }
 
@@ -35,5 +45,17 @@ struct TabbedDestinationView: View {
                     .tag(tab.id)
             }
         }
+        // Switch to the tab that owns a pending focus. `.onAppear` covers a focus
+        // set before this container appeared (the common cross-page case);
+        // `.onChange` covers a tap while it's already on screen. The inner child
+        // consumes the focus (selects the row, then clears it).
+        .onAppear { selectTabForFocus() }
+        .onChange(of: navigator?.pendingFocus) { _, _ in selectTabForFocus() }
+    }
+
+    private func selectTabForFocus() {
+        guard let ref = navigator?.pendingFocus,
+              let id = tabForFocus?(ref) else { return }
+        if selection != id { selection = id }
     }
 }

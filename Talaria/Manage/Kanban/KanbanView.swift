@@ -10,6 +10,9 @@ struct KanbanView: View {
     let hermesVersion: HermesVersion?
 
     @Environment(BannerCenter.self) private var banners: BannerCenter?
+    /// Window navigator: a kanban-board `EntityLink` switches to that board when
+    /// this page lands. Optional so the view renders without one.
+    @Environment(WindowNavigator.self) private var navigator: WindowNavigator?
 
     @State private var harness: KanbanHarness?
     @State private var showManageSheet = false
@@ -59,6 +62,11 @@ struct KanbanView: View {
                 h.banners = banners
                 harness = h
             }
+            if let harness { consumeFocus(harness: harness) }
+        }
+        .onAppear { if let harness { consumeFocus(harness: harness) } }
+        .onChange(of: navigator?.pendingFocus) { _, _ in
+            if let harness { consumeFocus(harness: harness) }
         }
         // Polling lives here, not in the harness: SwiftUI auto-cancels on
         // disappear and restarts on board/filter change. ~4s cadence, no
@@ -83,6 +91,16 @@ struct KanbanView: View {
                 try? await Task.sleep(for: harness.pluginUnavailable ? .seconds(60) : .seconds(4))
             }
         }
+    }
+
+    /// Switches to the board named by a pending kanban focus, then clears it.
+    /// Ignores focus aimed at another page.
+    private func consumeFocus(harness: KanbanHarness) {
+        guard let ref = navigator?.pendingFocus, case let .kanbanBoard(slug) = ref else { return }
+        if harness.selectedBoardSlug != slug {
+            Task { await harness.switchBoard(slug: slug) }
+        }
+        Task { @MainActor in navigator?.pendingFocus = nil }
     }
 
     @ViewBuilder

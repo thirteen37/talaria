@@ -7,6 +7,9 @@ struct ToolsView: View {
     let hermesVersion: HermesVersion?
 
     @Environment(BannerCenter.self) private var banners: BannerCenter?
+    /// Window navigator: a tool `EntityLink` opens that tool's config when this
+    /// tab lands. Optional so the view renders without one.
+    @Environment(WindowNavigator.self) private var navigator: WindowNavigator?
 
     @State private var harness: ToolsMatrixHarness?
 
@@ -43,11 +46,16 @@ struct ToolsView: View {
                 harness = nil
                 return
             }
-            if harness != nil { return }
+            if harness != nil { consumeFocus(harness: harness!); return }
             let h = ToolsMatrixHarness(client: client, runner: runner)
             h.banners = banners
             harness = h
             await h.refresh()
+            consumeFocus(harness: h)
+        }
+        .onAppear { if let harness { consumeFocus(harness: harness) } }
+        .onChange(of: navigator?.pendingFocus) { _, _ in
+            if let harness { consumeFocus(harness: harness) }
         }
         .toolbar {
             ToolbarItem {
@@ -60,6 +68,17 @@ struct ToolsView: View {
                 .help("Refresh the tools matrix")
             }
         }
+    }
+
+    /// Opens the config pane for the tool named by a pending tool focus (when it
+    /// has one), then clears the focus. Ignores focus aimed at another tab/page.
+    private func consumeFocus(harness: ToolsMatrixHarness) {
+        guard let ref = navigator?.pendingFocus, case let .tool(name) = ref else { return }
+        if harness.hasConfig(for: name),
+           harness.matrix?.rows.contains(where: { $0.name == name }) == true {
+            harness.selectedToolID = name
+        }
+        Task { @MainActor in navigator?.pendingFocus = nil }
     }
 
     @ViewBuilder

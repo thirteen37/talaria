@@ -14,7 +14,10 @@ struct ConfigEnvironmentTabsView: View {
     var hermesProfiles: [HermesProfileInfo] = []
 
     var body: some View {
-        TabbedDestinationView(tabs: [
+        TabbedDestinationView(tabForFocus: { ref in
+            if case .envVar = ref { return "environment" }
+            return nil
+        }, tabs: [
             DestinationTab(id: "configuration", title: "Configuration", systemImage: "slider.horizontal.3") {
                 ConfigEditorContainer(windowHarness: harness, profiles: hermesProfiles)
             },

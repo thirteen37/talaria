@@ -26,8 +26,10 @@ struct StatusBar: View {
             Spacer(minLength: 8)
 
             if let model, !model.isEmpty {
-                Label(model, systemImage: "cpu")
-                    .foregroundStyle(.secondary)
+                EntityLink(ref: .modelMain, style: .subtle) {
+                    Label(model, systemImage: "cpu")
+                }
+                .foregroundStyle(.secondary)
             }
 
             if let contextText {
