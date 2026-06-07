@@ -10,6 +10,7 @@ struct Composer: View {
     var cancel: () -> Void
     @State private var isSlashMenuDismissed = false
     @State private var slashMenuHeight: CGFloat = 0
+    @State private var selectedCommandIndex = 0
 
     private var trimmedPrompt: String {
         prompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -31,6 +32,17 @@ struct Composer: View {
         isSlashMenuDismissed ? [] : matchingCommands
     }
 
+    /// The currently highlighted command, falling back to the first row if the
+    /// tracked index has drifted out of bounds (defensive; the index is reset to
+    /// 0 on every re-filter, which is always valid for a non-empty list).
+    private var selectedCommand: AvailableCommand? {
+        let commands = visibleCommands
+        guard !commands.isEmpty else { return nil }
+        return commands.indices.contains(selectedCommandIndex)
+            ? commands[selectedCommandIndex]
+            : commands.first
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             TextField(isBlocked ? "Waiting for permission" : "Message Hermes", text: $prompt, axis: .vertical)
@@ -41,12 +53,27 @@ struct Composer: View {
                     if !newValue.hasPrefix("/") {
                         isSlashMenuDismissed = false
                     }
+                    // Each keystroke re-filters the list; reset the highlight to
+                    // the top (index 0 is always valid for a non-empty list).
+                    selectedCommandIndex = 0
+                }
+                .onKeyPress(.upArrow, phases: .down) { _ in
+                    let count = visibleCommands.count
+                    guard count > 0 else { return .ignored }
+                    selectedCommandIndex = (selectedCommandIndex - 1 + count) % count
+                    return .handled
+                }
+                .onKeyPress(.downArrow, phases: .down) { _ in
+                    let count = visibleCommands.count
+                    guard count > 0 else { return .ignored }
+                    selectedCommandIndex = (selectedCommandIndex + 1) % count
+                    return .handled
                 }
                 .onKeyPress(.return, phases: .down) { press in
                     if press.modifiers.contains(.shift) {
                         return .ignored
                     }
-                    if let command = visibleCommands.first {
+                    if let command = selectedCommand {
                         accept(command)
                         return .handled
                     }
@@ -54,7 +81,7 @@ struct Composer: View {
                     return .handled
                 }
                 .onKeyPress(.tab, phases: .down) { _ in
-                    guard let command = visibleCommands.first else {
+                    guard let command = selectedCommand else {
                         return .ignored
                     }
                     accept(command)
@@ -96,7 +123,7 @@ struct Composer: View {
         // pass before its height is known, avoiding a flash at the un-offset spot.)
         .overlay(alignment: .topLeading) {
             if !visibleCommands.isEmpty, !isBlocked {
-                SlashMenu(commands: visibleCommands) { command in
+                SlashMenu(commands: visibleCommands, selectedIndex: selectedCommandIndex) { command in
                     accept(command)
                 }
                 .background(
