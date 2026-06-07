@@ -24,7 +24,14 @@ struct TalariaApp: App {
             // synchronous-read rationale).
             recents.ids.first ?? ProfileDirectory.localProfileID
         }
-        // No Sparkle / menu commands / Settings scene on iOS: editing is
-        // surfaced inside the window (gear toolbar / compact Settings sheet).
+        // iPad (hardware keyboard) gets the section/new-session/profile menu
+        // commands; they read the focused `DesktopServerWindow`'s model. iPhone
+        // runs `PhoneServerWindow`, which publishes none, so its items stay the
+        // disabled fallback — harmless (iPhone has no menu bar). No Sparkle /
+        // Settings scene on iOS: editing is surfaced inside the window (gear
+        // toolbar / compact Settings sheet).
+        .commands {
+            WindowCommands(recents: recents)
+        }
     }
 }
