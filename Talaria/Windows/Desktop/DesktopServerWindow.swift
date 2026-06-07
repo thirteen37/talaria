@@ -15,6 +15,10 @@ struct DesktopServerWindow: View {
     @Environment(NotificationSettings.self) private var notificationSettings
     @State private var harness: ServerWindowHarness?
     @State private var browse: BrowseDestination? = .sessions
+    /// Window-scoped navigation intent for `EntityLink` taps. Injected into the
+    /// content so chat + browse surfaces can route to an entity's page; this
+    /// window observes `pendingFocus` to switch pages, the target page clears it.
+    @State private var navigator = WindowNavigator()
     @State private var showingSettings = false
     /// Sidebar visibility, driven by our custom toggle. We manage it ourselves
     /// (rather than letting the system own the sidebar button) so the toggle can
@@ -217,12 +221,32 @@ struct DesktopServerWindow: View {
         activeHermesProfile = name
     }
 
+    /// Routes an `EntityLink` tap. A `.session` ref opens the chat (and clears
+    /// the focus); any other ref switches the detail column to the entity's
+    /// browse page and leaves `pendingFocus` set for the target page to consume
+    /// (select the row, then clear).
+    private func routeFocus(_ ref: EntityRef?, harness: ServerWindowHarness) {
+        guard let ref else { return }
+        if let id = ref.sessionId {
+            harness.store.selection = id
+            navigator.pendingFocus = nil
+        } else {
+            harness.store.selection = nil
+            browse = ref.destination
+        }
+    }
+
     @ViewBuilder
     private func content(harness: ServerWindowHarness) -> some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar(harness: harness)
         } detail: {
             detail(harness: harness)
+        }
+        // Window-scoped navigation for EntityLink taps in chat + browse surfaces.
+        .environment(navigator)
+        .onChange(of: navigator.pendingFocus) { _, ref in
+            routeFocus(ref, harness: harness)
         }
         .alert(
             "Trust this server?",

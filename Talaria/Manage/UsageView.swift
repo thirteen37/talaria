@@ -299,7 +299,7 @@ struct UsageView: View {
     private func byModelRow(_ row: DashboardUsageByModel) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(row.model)
+                EntityLink(row.model, ref: .modelMain, style: .prominent)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 Text("\(row.sessions ?? 0) session\((row.sessions ?? 0) == 1 ? "" : "s") · \(row.apiCalls ?? 0) API calls")

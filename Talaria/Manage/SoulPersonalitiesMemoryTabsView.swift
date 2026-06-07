@@ -9,7 +9,10 @@ struct SoulPersonalitiesMemoryTabsView: View {
     let harness: ServerWindowHarness
 
     var body: some View {
-        TabbedDestinationView(tabs: [
+        TabbedDestinationView(tabForFocus: { ref in
+            if case .personality = ref { return "soul" }
+            return nil
+        }, tabs: [
             DestinationTab(id: "soul", title: "Soul & Personalities", systemImage: "theatermasks") {
                 SoulAndPersonalitiesView(windowHarness: harness)
             },

@@ -522,6 +522,9 @@ struct ModelsView: View {
     /// Window's top-of-window banner hub. Optional so a host that doesn't supply
     /// one degrades to no-op (hard errors then simply don't render).
     @Environment(BannerCenter.self) private var banners: BannerCenter?
+    /// Window navigator: an `EntityLink` to a model focuses the matching picker
+    /// slot when this page lands. Optional so the page renders without one.
+    @Environment(WindowNavigator.self) private var navigator: WindowNavigator?
 
     @State private var harness: ModelsHarness?
     /// Drives the confirm dialog for the destructive "Reset auxiliary" action —
@@ -573,12 +576,40 @@ struct ModelsView: View {
         // other dashboard surfaces).
         .task(id: client != nil) {
             guard let client else { harness = nil; return }
-            if harness != nil { return }
+            if harness != nil {
+                // Harness already live (re-entered the page): consume a focus
+                // that arrived while building.
+                consumeFocus(harness: harness!)
+                return
+            }
             let h = ModelsHarness(client: client)
             h.banners = banners
             harness = h
             await h.refresh()
+            consumeFocus(harness: h)
         }
+        // Re-entering this page (focus set before it appeared) and a model
+        // EntityLink tapped while already on it both focus the slot.
+        .onAppear { if let harness { consumeFocus(harness: harness) } }
+        .onChange(of: navigator?.pendingFocus) { _, _ in
+            if let harness { consumeFocus(harness: harness) }
+        }
+    }
+
+    /// Opens the picker for the slot named by a pending model focus, then clears
+    /// it. Ignores focus aimed at another page.
+    private func consumeFocus(harness: ModelsHarness) {
+        guard let ref = navigator?.pendingFocus, ref.destination == .models,
+              let target = ref.modelPickerTarget else { return }
+        harness.beginPick(target)
+        clearPendingFocus()
+    }
+
+    /// Clears the consumed focus on the next runloop tick so any sibling
+    /// observers of the same change (e.g. a tab container switching tabs) run
+    /// first. See `TabbedDestinationView`.
+    private func clearPendingFocus() {
+        Task { @MainActor in navigator?.pendingFocus = nil }
     }
 
     @ViewBuilder
@@ -698,7 +729,7 @@ struct ModelsView: View {
         let main = harness.assignments?.main
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(mainDisplay(main))
+                EntityLink(mainDisplay(main), ref: .modelMain, style: .subtle)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if let provider = main?.provider, !provider.isEmpty {
@@ -719,7 +750,7 @@ struct ModelsView: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(AuxiliaryModelSlot.label(for: slot.task))
-                Text(auxiliaryDisplay(slot))
+                EntityLink(auxiliaryDisplay(slot), ref: .modelAuxiliary(task: slot.task), style: .subtle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

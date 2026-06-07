@@ -20,6 +20,12 @@ struct DashboardClientCronTests {
         #expect(dream.schedule.kind == "cron")
         #expect(dream.enabled == true)
         #expect(dream.state == "scheduled")
+        #expect(dream.profile == "default")
+
+        // A job bound to a non-default profile surfaces that profile's name so
+        // the cron table can hot-link it to the Profiles page.
+        let dining = try #require(jobs.first { $0.id == "d4d094ba9866" })
+        #expect(dining.profile == "dining")
     }
 
     @Test

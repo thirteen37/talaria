@@ -132,6 +132,9 @@ struct CronView: View {
     let hermesVersion: HermesVersion?
 
     @Environment(BannerCenter.self) private var banners: BannerCenter?
+    /// Window navigator: a cron-job `EntityLink` selects its row when this page
+    /// lands. Optional so the view renders without one.
+    @Environment(WindowNavigator.self) private var navigator: WindowNavigator?
 
     @State private var harness: CronHarness?
 
@@ -161,12 +164,27 @@ struct CronView: View {
         // first appear (a bare `.task` on the Group never re-runs for that flip).
         .task(id: client != nil) {
             guard let client else { harness = nil; return }
-            if harness != nil { return }
+            if harness != nil { consumeFocus(harness: harness!); return }
             let h = CronHarness(client: client)
             h.banners = banners
             harness = h
             await h.refresh()
+            consumeFocus(harness: h)
         }
+        .onAppear { if let harness { consumeFocus(harness: harness) } }
+        .onChange(of: navigator?.pendingFocus) { _, _ in
+            if let harness { consumeFocus(harness: harness) }
+        }
+    }
+
+    /// Selects the row named by a pending cron-job focus, then clears it. Ignores
+    /// focus aimed at another page.
+    private func consumeFocus(harness: CronHarness) {
+        guard let ref = navigator?.pendingFocus, case let .cronJob(id) = ref else { return }
+        if harness.jobs.contains(where: { $0.id == id }) {
+            harness.selectionID = id
+        }
+        Task { @MainActor in navigator?.pendingFocus = nil }
     }
 
     @ViewBuilder
@@ -209,6 +227,16 @@ struct CronView: View {
             TableColumn("Name") { job in
                 Text(job.name ?? job.id)
             }
+            TableColumn("Profile") { job in
+                if let profile = job.profile, !profile.isEmpty {
+                    EntityLink(profile, ref: .hermesProfile(name: profile), style: .prominent)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else {
+                    Text("—").foregroundStyle(.secondary)
+                }
+            }
+            .width(120)
             TableColumn("Schedule") { job in
                 Text(scheduleDisplay(job.schedule))
                     .font(.system(.body, design: .monospaced))

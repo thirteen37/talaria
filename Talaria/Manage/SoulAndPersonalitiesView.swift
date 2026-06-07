@@ -246,6 +246,9 @@ struct SoulAndPersonalitiesView: View {
     private var client: DashboardClient? { windowHarness.dashboardClient }
 
     @Environment(BannerCenter.self) private var banners: BannerCenter?
+    /// Window navigator: a personality `EntityLink` selects its row when this tab
+    /// lands. Optional so the view renders without one.
+    @Environment(WindowNavigator.self) private var navigator: WindowNavigator?
 
     @State private var harness: PersonalitiesHarness?
     @State private var soul: SoulEditingState?
@@ -304,6 +307,9 @@ struct SoulAndPersonalitiesView: View {
                     h.banners = banners
                     harness = h
                     await h.refresh()
+                    consumeFocus(harness: h)
+                } else {
+                    consumeFocus(harness: harness!)
                 }
             } else {
                 // Dashboard went away (or never came online): drop the harness so
@@ -320,6 +326,10 @@ struct SoulAndPersonalitiesView: View {
         .onChange(of: windowHarness.dashboardClient != nil) { _, hasClient in
             guard hasClient else { return }
             soul?.reloadIfDashboardAppeared()
+        }
+        .onAppear { if let harness { consumeFocus(harness: harness) } }
+        .onChange(of: navigator?.pendingFocus) { _, _ in
+            if let harness { consumeFocus(harness: harness) }
         }
         .onDisappear {
             let state = soul
@@ -522,6 +532,18 @@ struct SoulAndPersonalitiesView: View {
     }
 
     // MARK: - Navigation guard
+
+    /// Selects the personality named by a pending focus, then clears it. Ignores
+    /// focus aimed at another tab/page. Routes through `select` (not the dirty
+    /// guard) — a deliberate cross-surface jump shouldn't be silently blocked,
+    /// matching how it lands on the page.
+    private func consumeFocus(harness: PersonalitiesHarness) {
+        guard let ref = navigator?.pendingFocus, case let .personality(name) = ref else { return }
+        if harness.items.contains(where: { $0.name == name }) {
+            harness.select(.personality(name))
+        }
+        Task { @MainActor in navigator?.pendingFocus = nil }
+    }
 
     /// Routes a navigation away from the current editor through the dirty check:
     /// performs it immediately when clean, otherwise raises the confirmation.

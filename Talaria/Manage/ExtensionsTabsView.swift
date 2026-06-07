@@ -11,7 +11,15 @@ struct ExtensionsTabsView: View {
     let harness: ServerWindowHarness
 
     var body: some View {
-        TabbedDestinationView(tabs: [
+        TabbedDestinationView(tabForFocus: { ref in
+            switch ref {
+            case .skill: return "skills"
+            case .tool: return "tools"
+            case .mcpServer: return "mcp"
+            case .plugin: return "plugins"
+            default: return nil
+            }
+        }, tabs: [
             DestinationTab(id: "skills", title: "Skills", systemImage: "sparkles") {
                 SkillsView(
                     client: harness.dashboardClient,

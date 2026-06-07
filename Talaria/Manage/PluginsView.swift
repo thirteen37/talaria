@@ -182,6 +182,9 @@ struct PluginsView: View {
     let hermesVersion: HermesVersion?
 
     @Environment(BannerCenter.self) private var banners: BannerCenter?
+    /// Window navigator: a plugin `EntityLink` selects its row when this tab
+    /// lands. Optional so the view renders without one.
+    @Environment(WindowNavigator.self) private var navigator: WindowNavigator?
 
     @State private var harness: PluginsHarness?
     // The two config sections collapse by default so the plugin list owns the
@@ -215,12 +218,27 @@ struct PluginsView: View {
         // first appear (a bare `.task` on the Group never re-runs for that flip).
         .task(id: client != nil) {
             guard let client else { harness = nil; return }
-            if harness != nil { return }
+            if harness != nil { consumeFocus(harness: harness!); return }
             let h = PluginsHarness(client: client)
             h.banners = banners
             harness = h
             await h.refresh()
+            consumeFocus(harness: h)
         }
+        .onAppear { if let harness { consumeFocus(harness: harness) } }
+        .onChange(of: navigator?.pendingFocus) { _, _ in
+            if let harness { consumeFocus(harness: harness) }
+        }
+    }
+
+    /// Selects the row named by a pending plugin focus, then clears it. Ignores
+    /// focus aimed at another tab/page.
+    private func consumeFocus(harness: PluginsHarness) {
+        guard let ref = navigator?.pendingFocus, case let .plugin(name) = ref else { return }
+        if harness.plugins.contains(where: { $0.name == name }) {
+            harness.selectionID = name
+        }
+        Task { @MainActor in navigator?.pendingFocus = nil }
     }
 
     @ViewBuilder

@@ -12,6 +12,10 @@ struct PhoneServerWindow: View {
     @Environment(SidebarLayout.self) private var sidebarLayout
     @Environment(NotificationSettings.self) private var notificationSettings
     @State private var harness: ServerWindowHarness?
+    /// Window-scoped navigation intent for `EntityLink` taps. Injected into the
+    /// content and the Browse sheet; this window observes `pendingFocus` to open
+    /// the chat or the Browse sheet seeded to the entity's page.
+    @State private var navigator = WindowNavigator()
     @State private var showingSettings = false
     @State private var showingAllSessions = false
     @State private var showingLogs = false
@@ -204,6 +208,21 @@ struct PhoneServerWindow: View {
         activeHermesProfile = name
     }
 
+    /// Routes an `EntityLink` tap. A `.session` ref opens the chat (and clears
+    /// the focus); any other ref opens the Browse sheet seeded to the entity's
+    /// page, leaving `pendingFocus` set for the target page to consume. When the
+    /// sheet is already open, its own observer re-navigates the stack.
+    private func routeFocus(_ ref: EntityRef?, harness: ServerWindowHarness) {
+        guard let ref else { return }
+        if let id = ref.sessionId {
+            harness.store.selection = id
+            navigator.pendingFocus = nil
+        } else if !showingBrowse {
+            browseDeepLink = ref.destination
+            showingBrowse = true
+        }
+    }
+
     @ViewBuilder
     private func content(harness: ServerWindowHarness) -> some View {
         // Explicit push stack: the collapsed NavigationSplitView's programmatic
@@ -215,6 +234,11 @@ struct PhoneServerWindow: View {
                 .navigationDestination(for: SessionId.self) { id in
                     chatDestination(harness: harness, id: id)
                 }
+        }
+        // Window-scoped navigation for EntityLink taps in chat + browse surfaces.
+        .environment(navigator)
+        .onChange(of: navigator.pendingFocus) { _, ref in
+            routeFocus(ref, harness: harness)
         }
         .onChange(of: harness.store.selection) { _, newValue in
             chatPath = newValue.map { [$0] } ?? []
@@ -341,6 +365,7 @@ struct PhoneServerWindow: View {
                 onDismiss: { showingBrowse = false }
             )
             .environment(sidebarLayout)
+            .environment(navigator)
         }
         .sheet(isPresented: $showingLogs) {
             LogConsoleView(onDismiss: { showingLogs = false })

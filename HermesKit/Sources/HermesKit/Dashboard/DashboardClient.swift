@@ -243,9 +243,14 @@ public struct DashboardCronJob: Codable, Equatable, Sendable, Identifiable {
     public let nextRunAt: String?
     public let lastStatus: String?
     public let lastError: String?
+    /// Hermes profile the job runs under (e.g. `"default"`, `"dining"`). The
+    /// scheduler always reports a concrete profile per job; optional only to
+    /// tolerate older hosts. Matches `DashboardProfile.name`, so the cron table
+    /// hot-links it to the Profiles page.
+    public let profile: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, prompt, schedule, enabled, state
+        case id, name, prompt, schedule, enabled, state, profile
         case lastRunAt = "last_run_at"
         case nextRunAt = "next_run_at"
         case lastStatus = "last_status"
