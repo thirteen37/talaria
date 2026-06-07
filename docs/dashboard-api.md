@@ -88,6 +88,13 @@ bodies are JSON; the "Body" column lists the wrapping the dashboard's Pydantic m
 
 > Session **rename** has no dashboard route — Talaria falls back to `hermes sessions rename` (CLI).
 
+> `DashboardSessionSummary` decodes the high-value per-session fields the browser
+> surfaces — `model`, `message_count`, `tool_call_count`, `last_active`,
+> `is_active`, `preview`, token counts, and cost (`estimated_cost_usd` /
+> `actual_cost_usd` / `cost_status`) — plus `total` on the response (server-wide
+> session count). All optional, so older servers that omit them still decode.
+> The leaner `/api/sessions/search` shape carries none of these.
+
 ### Skills
 
 | Method | Path                  | Body                          | Returns / notes |

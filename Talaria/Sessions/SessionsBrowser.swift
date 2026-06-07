@@ -28,6 +28,10 @@ struct SessionsBrowser: View {
     @State private var sessions: [HermesSessionSummary] = []
     @State private var errorMessage: String?
     @State private var isLoading = false
+    /// Server-reported total session count from the unfiltered browse path,
+    /// shown in the header. Nil while searching (search has no total) or when an
+    /// older server omits it.
+    @State private var total: Int?
 
     var body: some View {
         Group {
@@ -76,13 +80,24 @@ struct SessionsBrowser: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-                    .padding(8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(.bar)
+            VStack(spacing: 0) {
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.callout)
+                        .foregroundStyle(.red)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.bar)
+                }
+                if let total {
+                    Text("^[\(total) session](inflect: true)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.bar)
+                }
             }
         }
         .searchable(text: $query, prompt: "Search sessions")
@@ -120,7 +135,9 @@ struct SessionsBrowser: View {
             if trimmed.isEmpty {
                 let response = try await client.listSessions(limit: 200)
                 results = response.sessions.map(HermesSessionSummary.init)
+                total = response.total
             } else {
+                total = nil
                 let response = try await client.searchSessions(query: trimmed, limit: 200)
                 // `/api/sessions/search` returns one hit per matching message, so
                 // a session matching in several messages appears multiple times.
@@ -148,6 +165,7 @@ struct SessionsBrowser: View {
             errorMessage = nil
         } catch {
             sessions = []
+            total = nil
             errorMessage = error.localizedDescription
         }
     }
@@ -171,14 +189,24 @@ private struct SessionRow: View {
         HStack(spacing: 8) {
             Button(action: open) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(summary.title.isEmpty ? SessionIdFormatter.short(summary.id) : summary.title)
-                        .font(.body)
-                        .lineLimit(2)
-                    if let updatedAt = summary.updatedAt {
-                        Text(updatedAt, style: .relative)
+                    HStack(spacing: 6) {
+                        if summary.isActive {
+                            Circle()
+                                .fill(.green)
+                                .frame(width: 7, height: 7)
+                                .accessibilityLabel("Active")
+                        }
+                        Text(summary.title.isEmpty ? SessionIdFormatter.short(summary.id) : summary.title)
+                            .font(.body)
+                            .lineLimit(2)
+                    }
+                    if let preview = summary.preview {
+                        Text(preview)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(2)
                     }
+                    metadata
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -203,5 +231,63 @@ private struct SessionRow: View {
         #if os(macOS)
         .onHover { isHovering = $0 }
         #endif
+    }
+
+    /// Compact, secondary metadata strip under the title/preview. Identity
+    /// (time, source, model) sits on the left; the numeric stats (message/tool
+    /// counts, tokens, cost) are pushed to the trailing edge so the row reads as
+    /// two balanced groups instead of one long left-stacked run. Every element
+    /// is conditional, so the lean search-result shape (all new fields nil) and
+    /// older servers render exactly the title + time as before.
+    @ViewBuilder
+    private var metadata: some View {
+        HStack(spacing: 6) {
+            if let time = summary.displayTime {
+                Text(time, style: .relative)
+            }
+            if let source = summary.source, !source.isEmpty {
+                chip(source)
+            }
+            if let model = summary.model, !model.isEmpty {
+                chip(model)
+            }
+
+            Spacer(minLength: 12)
+
+            if let count = summary.messageCount, count > 0 {
+                Label("\(count)", systemImage: "bubble.left.and.bubble.right")
+            }
+            if let tools = summary.toolCallCount, tools > 0 {
+                Label("\(tools)", systemImage: "wrench.and.screwdriver")
+            }
+            if let tokens = summary.tokenTotal, tokens > 0 {
+                Text(Self.tokenLabel(tokens))
+            }
+            if let cost = summary.costDisplay {
+                Text(cost)
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+    }
+
+    private func chip(_ text: String) -> some View {
+        Text(text)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(.quaternary))
+    }
+
+    /// Compacts a token total for the chip: `1234 → "1.2K"`, `187884 → "188K"`.
+    private static func tokenLabel(_ tokens: Int) -> String {
+        if tokens < 1000 {
+            return "\(tokens) tok"
+        }
+        let thousands = Double(tokens) / 1000
+        if thousands < 10 {
+            return String(format: "%.1fK tok", thousands)
+        }
+        return "\(Int(thousands.rounded()))K tok"
     }
 }

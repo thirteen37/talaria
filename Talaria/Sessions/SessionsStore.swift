@@ -13,13 +13,49 @@ struct HermesSessionSummary: Identifiable, Equatable {
     var updatedAt: Date?
     var cwd: String?
     var source: String?
+    /// Real last-activity time from the dashboard (vs `updatedAt`, which is
+    /// seeded from creation time). The browser prefers this when present.
+    var lastActive: Date?
+    var isActive: Bool
+    /// Conversation excerpt for the row. Nil/empty for the lean search path.
+    var preview: String?
+    var model: String?
+    var messageCount: Int?
+    var toolCallCount: Int?
+    /// Input + output tokens for the session, or nil when neither is reported.
+    var tokenTotal: Int?
+    /// Pre-formatted cost chip text (e.g. `$0.12`, `~$0.34`), or nil when the
+    /// server reports no meaningful cost. Computed once at the boundary.
+    var costDisplay: String?
 
-    init(id: String, title: String, updatedAt: Date? = nil, cwd: String? = nil, source: String? = nil) {
+    init(
+        id: String,
+        title: String,
+        updatedAt: Date? = nil,
+        cwd: String? = nil,
+        source: String? = nil,
+        lastActive: Date? = nil,
+        isActive: Bool = false,
+        preview: String? = nil,
+        model: String? = nil,
+        messageCount: Int? = nil,
+        toolCallCount: Int? = nil,
+        tokenTotal: Int? = nil,
+        costDisplay: String? = nil
+    ) {
         self.id = id
         self.title = title
         self.updatedAt = updatedAt
         self.cwd = cwd
         self.source = source
+        self.lastActive = lastActive
+        self.isActive = isActive
+        self.preview = preview
+        self.model = model
+        self.messageCount = messageCount
+        self.toolCallCount = toolCallCount
+        self.tokenTotal = tokenTotal
+        self.costDisplay = costDisplay
     }
 
     init(_ summary: DashboardSessionSummary) {
@@ -32,6 +68,39 @@ struct HermesSessionSummary: Identifiable, Equatable {
         self.updatedAt = summary.startedAt.map { Date(timeIntervalSince1970: $0) }
         self.cwd = nil
         self.source = summary.source
+        self.lastActive = summary.lastActive.map { Date(timeIntervalSince1970: $0) }
+        self.isActive = summary.isActive ?? false
+        // Treat a blank preview as none so the row doesn't render an empty line.
+        let trimmedPreview = summary.preview?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.preview = (trimmedPreview?.isEmpty == false) ? trimmedPreview : nil
+        self.model = summary.model
+        self.messageCount = summary.messageCount
+        self.toolCallCount = summary.toolCallCount
+        let tokenParts = [summary.inputTokens, summary.outputTokens].compactMap { $0 }
+        self.tokenTotal = tokenParts.isEmpty ? nil : tokenParts.reduce(0, +)
+        self.costDisplay = Self.costDisplay(
+            estimated: summary.estimatedCostUsd,
+            actual: summary.actualCostUsd,
+            status: summary.costStatus
+        )
+    }
+
+    /// The time the row should display: real last activity when the server
+    /// reports it, else the creation-derived `updatedAt`.
+    var displayTime: Date? { lastActive ?? updatedAt }
+
+    /// Builds the cost chip text, or nil when no meaningful cost is available.
+    /// Many setups report `cost_status: "unknown"` with `0.0`, which stays
+    /// hidden. A real `actual_cost_usd` shows verbatim; an estimate is prefixed
+    /// with `~`.
+    private static func costDisplay(estimated: Double?, actual: Double?, status: String?) -> String? {
+        if let actual, actual > 0 {
+            return String(format: "$%.2f", actual)
+        }
+        if let estimated, estimated > 0, status?.lowercased() != "unknown" {
+            return String(format: "~$%.2f", estimated)
+        }
+        return nil
     }
 }
 
