@@ -27,6 +27,19 @@ struct GatewayHarnessTests {
     {"version":"0.14.0","gateway_running":true,"gateway_platforms":{"telegram":{"state":"connected"},"signal":{"state":"error","error_message":"not linked"}}}
     """#.utf8)
 
+    /// Home Assistant env var (HASS_*) plus the gateway-reported `homeassistant`
+    /// platform — the curated catalog entry must collapse these into one card,
+    /// never an editable "Hass" group beside a status-only "homeassistant" row.
+    private static let envHassJSON = Data(#"""
+    {
+      "HASS_TOKEN": {"is_set":true,"redacted_value":"abc…xyz","description":"Long-lived token.","url":null,"category":"messaging","is_password":true,"tools":["homeassistant"],"advanced":false}
+    }
+    """#.utf8)
+
+    private static let statusHassJSON = Data(#"""
+    {"version":"0.14.0","gateway_running":true,"gateway_platforms":{"homeassistant":{"state":"connected"}}}
+    """#.utf8)
+
     private static let okJSON = Data(#"{"ok":true}"#.utf8)
 
     @Test
@@ -82,6 +95,25 @@ struct GatewayHarnessTests {
         let signal = try #require(harness.statusOnlyRows.first)
         #expect(signal.platform.state == "error")
         #expect(signal.platform.errorMessage == "not linked")
+    }
+
+    @Test
+    func homeAssistantHasNoDuplicateStatusOnlyRow() async throws {
+        let http = MessagingStubHTTP(responses: [
+            .init(path: "/api/env", body: Self.envHassJSON),
+            .init(path: "/api/status", body: Self.statusHassJSON),
+        ])
+        let harness = GatewayHarness(client: makeClient(http), runner: nil)
+
+        await harness.refresh()
+
+        // One editable Home Assistant card keyed to the gateway status key…
+        let ha = try #require(harness.groups.first { $0.id == "homeassistant" })
+        #expect(ha.displayName == "Home Assistant")
+        #expect(ha.connection?.state == "connected")
+        // …and no "Hass" auto-group nor a duplicate status-only row.
+        #expect(harness.groups.contains { $0.id == "hass" } == false)
+        #expect(harness.statusOnlyRows.contains { $0.id == "homeassistant" } == false)
     }
 
     @Test

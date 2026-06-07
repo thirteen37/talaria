@@ -198,6 +198,32 @@ struct MessagingPlatformCatalogTests {
     }
 
     @Test
+    func homeAssistantGroupsUnderCuratedKeyNotHassAutoGroup() {
+        let vars = [
+            envVar("HASS_TOKEN", isSet: true, isPassword: true),
+            envVar("HASS_URL", isSet: true),
+        ]
+
+        let groups = groupMessagingPlatforms(
+            envVars: vars,
+            catalog: catalog,
+            gatewayPlatforms: ["homeassistant": platform("connected")]
+        )
+
+        // Exactly one Home Assistant card, keyed to the gateway status key.
+        let ha = try! #require(groups.first { $0.id == "homeassistant" })
+        #expect(ha.displayName == "Home Assistant")
+        #expect(ha.fields.map(\.envVar.name) == ["HASS_TOKEN", "HASS_URL"])
+        #expect(ha.fields.map(\.label) == ["Long-Lived Access Token", "Server URL"])
+        #expect(ha.fields.first?.required == true)
+        // Connection pill wires from gateway_platforms["homeassistant"].
+        #expect(ha.connection?.state == "connected")
+        // No stray "hass" auto-group / "Hass" card.
+        #expect(groups.contains { $0.id == "hass" } == false)
+        #expect(groups.contains { $0.displayName == "Hass" } == false)
+    }
+
+    @Test
     func qqUsesBothPrefixesForExtras() {
         let vars = [
             envVar("QQ_APP_ID", isSet: true),
