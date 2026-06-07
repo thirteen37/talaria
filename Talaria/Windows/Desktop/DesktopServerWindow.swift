@@ -13,6 +13,10 @@ struct DesktopServerWindow: View {
     @Environment(RecentServers.self) private var recents
     @Environment(SidebarLayout.self) private var sidebarLayout
     @Environment(NotificationSettings.self) private var notificationSettings
+    /// Compact width = the NavigationSplitView is collapsed to a single column
+    /// (iPad Slide Over / narrow Split View; always `.regular` on macOS). Drives
+    /// where the banner strip is hosted — see `content`.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var harness: ServerWindowHarness?
     @State private var browse: BrowseDestination? = .sessions
     @State private var showingSettings = false
@@ -221,8 +225,21 @@ struct DesktopServerWindow: View {
     private func content(harness: ServerWindowHarness) -> some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar(harness: harness)
+                // In compact width the split view collapses to a single column
+                // and shows the sidebar first (no detail on screen), so the
+                // detail-pane host below can't surface startup/connection
+                // banners while the user is on the sidebar. Host them here in
+                // that case only — and never in regular width, where it would
+                // reintroduce the over-the-sidebar overlap this layout fixes.
+                .bannerHost(harness.banners, active: horizontalSizeClass == .compact)
         } detail: {
             detail(harness: harness)
+                // Regular width: host the strip over the detail pane only, so
+                // the red error / green success strip never lands on top of the
+                // sidebar header. (In compact, only one column is on screen at a
+                // time, so the sidebar host above never double-shows.) The
+                // bridge below publishes the center this reads.
+                .bannerHost(harness.banners)
         }
         .alert(
             "Trust this server?",
@@ -247,9 +264,10 @@ struct DesktopServerWindow: View {
         // Track this window's foreground state (to gate notifications) and
         // consume a tapped-notification route addressed to this profile.
         .chatNotificationRouting(store: harness.store, profileId: harness.profile.id)
-        // Full-width banner strip across the top of the window: bridges
-        // session/dashboard errors + the web-UI progress note from the sidebar,
-        // and publishes the center so detail surfaces emit save successes here.
+        // Bridges session/dashboard errors + the web-UI progress note from the
+        // sidebar into the center, and publishes the center so detail surfaces
+        // emit save successes here. The visible strip is hosted over the detail
+        // pane only (see `bannerHost` above) so it never covers the sidebar.
         .bridgeWindowBanners(harness: harness)
     }
 

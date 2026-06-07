@@ -248,6 +248,10 @@ struct PhoneServerWindow: View {
         .chatNotificationRouting(store: harness.store, profileId: harness.profile.id)
         // Full-width banner strip across the top of the window: bridges
         // session/dashboard errors + the web-UI progress note from the sidebar.
+        // iPhone has no side-by-side sidebar, so hosting the strip at the
+        // NavigationStack root keeps it correctly full-width (the bridge no
+        // longer hosts it).
+        .bannerHost(harness.banners)
         .bridgeWindowBanners(harness: harness)
     }
 
