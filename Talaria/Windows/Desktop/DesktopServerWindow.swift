@@ -269,6 +269,23 @@ struct DesktopServerWindow: View {
         // emit save successes here. The visible strip is hosted over the detail
         // pane only (see `bannerHost` above) so it never covers the sidebar.
         .bridgeWindowBanners(harness: harness)
+        // Publish this window's actions to the menu bar (macOS) / hardware-keyboard
+        // menu (iPad). Recomputed each body eval, so it tracks state; the closures
+        // mutate `@State` / call the switch methods exactly as the sidebar does.
+        // The frontmost window wins via `.focusedSceneValue`.
+        .focusedSceneValue(\.windowMenu, WindowMenuModel(
+            browseDestinations: [.sessions] + sidebarLayout.visibleManageDestinations(),
+            currentBrowse: harness.store.selection == nil ? (browse ?? .sessions) : nil,
+            selectBrowse: { dest in harness.store.selection = nil; browse = dest },
+            isOpeningSession: harness.store.isOpening,
+            newSession: { Task { await harness.store.openNew() } },
+            serverProfiles: directory.allProfiles,
+            currentServerId: currentProfileId,
+            switchServer: { id in switchProfile(to: id) },
+            hermesProfiles: hermesProfiles,
+            activeHermesProfile: activeHermesProfile,
+            isLoadingHermesProfiles: hermesProfilesLoading,
+            switchHermes: { name in switchHermesProfile(to: name) }))
     }
 
     @ViewBuilder

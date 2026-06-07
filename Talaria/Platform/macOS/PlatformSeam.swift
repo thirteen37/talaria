@@ -19,6 +19,16 @@ enum Pasteboard {
     }
 }
 
+enum MenuModifiers {
+    /// True when a "Switch Server" menu item is clicked with ⇧ or ⌘ held — the
+    /// Profiles menu reads this to open the chosen profile in a new window
+    /// instead of switching in place. macOS reads the live event flags.
+    @MainActor static var wantsNewWindow: Bool {
+        let flags = NSEvent.modifierFlags
+        return flags.contains(.shift) || flags.contains(.command)
+    }
+}
+
 enum Platform {
     /// macOS can run the bundled local Hermes (`Process` / `OneShotProcess`).
     static var supportsLocalProfile: Bool { true }

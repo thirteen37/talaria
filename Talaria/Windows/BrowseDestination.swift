@@ -53,4 +53,9 @@ enum BrowseDestination: String, Hashable {
     static let manageOrder: [BrowseDestination] = [
         .extensions, .cron, .kanban, .gateway, .hermesProfiles, .profiles, .personalities, .models, .system,
     ]
+
+    /// Full desktop-sidebar order (`.sessions` pinned first, then the manage
+    /// pages). The View menu's no-focus fallback list, so its structure +
+    /// shortcuts stay present even when no window is focused.
+    static let sidebarOrder: [BrowseDestination] = [.sessions] + manageOrder
 }

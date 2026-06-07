@@ -20,6 +20,12 @@ enum Pasteboard {
     }
 }
 
+enum MenuModifiers {
+    /// iPad's Profiles menu switches the server in place only — there's no
+    /// "open in a new window" modifier path — so this is always false.
+    @MainActor static var wantsNewWindow: Bool { false }
+}
+
 enum Platform {
     /// iOS can't run local hermes (no `Process` / `OneShotProcess`); it is
     /// remote-only, so the bundled local profile is hidden.

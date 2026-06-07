@@ -34,6 +34,7 @@ struct TalariaApp: App {
                 CheckForUpdatesView(updater: updater.updater)
             }
             ServerCommands(directory: directory, recents: recents)
+            WindowCommands(recents: recents)
         }
 
         Settings {
