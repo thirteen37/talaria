@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SlashMenu: View {
     let commands: [AvailableCommand]
+    let selectedIndex: Int
     let select: (AvailableCommand) -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var contentHeight: CGFloat = 0
@@ -37,8 +38,15 @@ struct SlashMenu: View {
     }
 
     var body: some View {
-        ScrollView {
-            commandRows
+        ScrollViewReader { proxy in
+            ScrollView {
+                commandRows
+            }
+            .onChange(of: selectedIndex) { _, index in
+                if commands.indices.contains(index) {
+                    proxy.scrollTo(commands[index].name, anchor: .center)
+                }
+            }
         }
         .scrollBounceBehavior(.basedOnSize)
         .frame(maxWidth: menuWidth, alignment: .leading)
@@ -60,13 +68,18 @@ struct SlashMenu: View {
 
     private var commandRows: some View {
         VStack(alignment: .leading, spacing: rowSpacing) {
-            ForEach(commands, id: \.name) { command in
+            ForEach(Array(commands.enumerated()), id: \.element.name) { index, command in
                 Button {
                     select(command)
                 } label: {
                     rowContent(for: command)
                 }
                 .buttonStyle(.plain)
+                .background(
+                    index == selectedIndex ? Color.accentColor.opacity(0.18) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                )
+                .id(command.name)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
