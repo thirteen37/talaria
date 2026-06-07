@@ -98,6 +98,25 @@ struct DashboardSessionTests {
         )
     }
 
+    @Test
+    func sessionsListDecodesRichFields() throws {
+        let data = try loadFixtureData("sessions-list.json")
+        let response = try JSONDecoder().decode(DashboardSessionsResponse.self, from: data)
+
+        #expect(response.total == 222)
+        let first = try #require(response.sessions.first)
+        #expect(first.id == "20260528_142010_e9dd2892")
+        #expect(first.model == "high")
+        #expect(first.messageCount == 18)
+        #expect(first.toolCallCount == 6)
+        #expect(first.isActive == false)
+        #expect(first.lastActive == 1779961285.619833)
+        #expect(first.preview?.isEmpty == false)
+        #expect(first.costStatus == "unknown")
+        #expect(first.estimatedCostUsd == 0.0)
+        #expect(first.inputTokens == 180751)
+    }
+
     // MARK: - Helpers
 
     private func loadFixtureString(_ name: String) throws -> String {

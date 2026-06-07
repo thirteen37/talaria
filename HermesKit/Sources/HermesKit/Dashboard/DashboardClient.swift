@@ -101,16 +101,48 @@ public struct DashboardSessionSummary: Codable, Equatable, Sendable {
     public let startedAt: Double?
     public let endedAt: Double?
     public let source: String?
+    /// All optional so this still decodes against an older Hermes that omits
+    /// them, and the leaner search-result path (which never carries them) can
+    /// reuse the same UI model with these left nil.
+    public let model: String?
+    public let messageCount: Int?
+    public let toolCallCount: Int?
+    public let lastActive: Double?
+    public let isActive: Bool?
+    public let preview: String?
+    public let inputTokens: Int?
+    public let outputTokens: Int?
+    public let cacheReadTokens: Int?
+    public let cacheWriteTokens: Int?
+    public let reasoningTokens: Int?
+    public let estimatedCostUsd: Double?
+    public let actualCostUsd: Double?
+    public let costStatus: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, title, source
+        case id, title, source, model, preview
         case startedAt = "started_at"
         case endedAt = "ended_at"
+        case messageCount = "message_count"
+        case toolCallCount = "tool_call_count"
+        case lastActive = "last_active"
+        case isActive = "is_active"
+        case inputTokens = "input_tokens"
+        case outputTokens = "output_tokens"
+        case cacheReadTokens = "cache_read_tokens"
+        case cacheWriteTokens = "cache_write_tokens"
+        case reasoningTokens = "reasoning_tokens"
+        case estimatedCostUsd = "estimated_cost_usd"
+        case actualCostUsd = "actual_cost_usd"
+        case costStatus = "cost_status"
     }
 }
 
 public struct DashboardSessionsResponse: Codable, Equatable, Sendable {
     public let sessions: [DashboardSessionSummary]
+    /// Total session count on the server (the list itself is windowed by
+    /// `limit`). Optional for forward/backward compat with servers that omit it.
+    public let total: Int?
 }
 
 public struct DashboardSessionSearchResult: Codable, Equatable, Sendable {
