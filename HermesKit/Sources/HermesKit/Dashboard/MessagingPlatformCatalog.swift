@@ -212,6 +212,18 @@ public enum MessagingPlatformCatalog {
             ]
         ),
         MessagingPlatformCatalogEntry(
+            id: "homeassistant",
+            displayName: "Home Assistant",
+            systemImage: "house.fill",
+            docURL: "https://hermes-agent.nousresearch.com/docs/user-guide/messaging/homeassistant",
+            statusKey: "homeassistant",
+            envPrefixes: ["HASS_"],
+            fields: [
+                .init(envVar: "HASS_TOKEN", label: "Long-Lived Access Token", required: true),
+                .init(envVar: "HASS_URL", label: "Server URL"),
+            ]
+        ),
+        MessagingPlatformCatalogEntry(
             id: "irc",
             displayName: "IRC",
             systemImage: "terminal.fill",
