@@ -182,10 +182,54 @@ final class LocalChatViewModel {
             return
         }
 
+        // A `/`-prefixed message is a slash command — it's run by the harness (or
+        // a native Talaria action), never sent to the LLM. Echo the typed command
+        // as a user bubble, then route it.
+        if text.hasPrefix("/") {
+            prompt = ""
+            _ = append(kind: .user, text: text)
+            let parsed = SlashCommand(parsing: text)
+            // Mark the session busy for the duration of the slash dispatch: it
+            // drives the working indicator and, crucially, the `isSending` guard
+            // above blocks a second send from starting a normal turn that would
+            // race the slash `.submit` path's `runPrompt` (→ `turnInProgress`).
+            // Tradeoff: `isSending` also shows the composer's Cancel button, which
+            // is inert while a non-`.submit` slash RPC (e.g. /help) is in flight —
+            // the gateway has no slash-cancel RPC and `call(...)` isn't
+            // cancellable, so `cancel()` can't abort it. Left as-is deliberately:
+            // slash RPCs resolve quickly and the dispatch's own completion clears
+            // `isSending` (the `.submit` case does produce a real cancellable turn).
+            isSending = true
+            turnStartDate = Date()
+            statusText = "Running /\(parsed.name)…"
+            hasError = false
+            store?.markTurnStarted(id: sessionId)
+
+            // `runSlash` returns true when it handed off to `runPrompt` (the
+            // `.submit` case), which then owns the busy lifecycle; otherwise we
+            // clear it here.
+            let startedTurn = await runSlash(name: parsed.name, arg: parsed.arg, client: client)
+            if !startedTurn {
+                isSending = false
+                turnStartDate = nil
+                statusText = nil
+                store?.markTurnFinished(id: sessionId)
+            }
+            return
+        }
+
         prompt = ""
-        _ = append(kind: .user, text: text)
+        await runPrompt(text: text, client: client, echoUser: true)
+    }
+
+    /// Runs one LLM turn. `echoUser` appends the user bubble for a normal send;
+    /// the slash `submit` path passes `false` because the command was already
+    /// echoed. Extracted so both callers share the streaming/turn lifecycle.
+    private func runPrompt(text: String, client: any ChatBackend, echoUser: Bool) async {
         resetStreamingMessages()
-        currentUserStreamMessageId = messages.last?.id
+        if echoUser {
+            currentUserStreamMessageId = append(kind: .user, text: text)
+        }
         isSending = true
         turnStartDate = Date()
         statusText = "Hermes is working in \(cwd)..."
@@ -213,6 +257,99 @@ final class LocalChatViewModel {
             self?.turnStartDate = nil
             self?.store?.markTurnFinished(id: id)
         }
+    }
+
+    /// Routes a parsed slash command: native shims (real Talaria actions),
+    /// informational stubs (honest "not supported here" lines), or the harness.
+    /// Returns `true` only when it delegated to ``runPrompt`` (the harness
+    /// `.submit` case), so the caller knows the busy lifecycle has been handed
+    /// off rather than completing inline.
+    private func runSlash(name: String, arg: String, client: any ChatBackend) async -> Bool {
+        switch name.lowercased() {
+        // A. Native shims — real Talaria actions.
+        case "new", "reset":
+            // No transcript confirmation: on success `openNew` switches selection
+            // to a fresh empty session (the visible feedback), and on failure it
+            // swallows the error into `store.lastError` and stays put — so a
+            // "Started a new session." line would either land on the now-hidden
+            // old session or falsely claim success. This matches the toolbar
+            // new-session button, which likewise just calls `openNew()`.
+            await store?.openNew()
+        case "title":
+            if arg.isEmpty {
+                append(kind: .event, text: title.map { "Current title: \($0)" } ?? "This session has no title yet.")
+            } else {
+                await runSetTitle(to: arg, client: client)
+            }
+
+        // B. Informational stubs — capabilities Talaria doesn't have, intercepted
+        // so they neither hit the LLM nor create confusing harness state.
+        case "yolo":
+            append(kind: .event, text: "Approval bypass isn't available in Talaria — approvals are interactive here.")
+        case "profile":
+            append(kind: .event, text: "This window is bound to a single Hermes profile. Open a new window to use another profile.")
+        case "skin":
+            append(kind: .event, text: "Talaria follows the system appearance; skins aren't supported.")
+        case "branch", "fork":
+            append(kind: .event, text: "Session branching isn't supported in Talaria yet.")
+
+        // C. Everything else → harness.
+        default:
+            return await runHarnessSlash(name: name, arg: arg, client: client)
+        }
+        return false
+    }
+
+    private func runSetTitle(to newTitle: String, client: any ChatBackend) async {
+        do {
+            let resolved = try await client.setTitle(sessionId: sessionId, title: newTitle)
+            // The gateway echoes the persisted title, but an unpersisted/pending
+            // row can come back blank. Honor the same never-blank invariant
+            // `applyTitle`/`updateTitle` enforce by falling back to the requested
+            // (non-blank) title, and feed the *same* value to the header and the
+            // store so they can't diverge.
+            let trimmed = resolved.trimmingCharacters(in: .whitespacesAndNewlines)
+            let applied = trimmed.isEmpty ? newTitle : trimmed
+            title = applied
+            store?.updateTitle(sessionId, to: applied)
+            append(kind: .event, text: "Renamed session to “\(applied)”.")
+        } catch {
+            append(kind: .event, text: errorMessage(for: error))
+        }
+    }
+
+    /// Runs a command through the harness. Returns `true` only for the `.submit`
+    /// case, where it delegates to ``runPrompt`` (which owns the busy lifecycle).
+    private func runHarnessSlash(name: String, arg: String, client: any ChatBackend) async -> Bool {
+        let command = arg.isEmpty ? name : "\(name) \(arg)"
+        do {
+            switch try await client.slash(sessionId: sessionId, command: command) {
+            case let .output(text):
+                append(kind: .event, text: text.isEmpty ? "(no output)" : text)
+            case let .prefill(message, notice):
+                prompt = message
+                // This is the `/undo` shape: the harness rewound the transcript
+                // server-side. Re-seed our local transcript from the dashboard's
+                // authoritative message list (one `GET /api/sessions/{id}`, no
+                // re-resume) so it matches — dropping the undone turn — instead of
+                // guessing what to trim from the human-text notice. Then surface
+                // the notice as confirmation. (No-ops for a brand-new session not
+                // yet keyed by a stored dashboard id; see `refreshTranscript`.)
+                await store?.refreshTranscript(sessionId)
+                if !notice.isEmpty {
+                    append(kind: .event, text: notice)
+                }
+            case let .submit(message, notice):
+                if let notice, !notice.isEmpty {
+                    append(kind: .event, text: notice)
+                }
+                await runPrompt(text: message, client: client, echoUser: false)
+                return true
+            }
+        } catch {
+            append(kind: .event, text: errorMessage(for: error))
+        }
+        return false
     }
 
     func cancel() async {
@@ -477,6 +614,16 @@ final class LocalChatViewModel {
         currentUserStreamMessageId = nil
         currentAgentMessageId = nil
         currentThoughtMessageId = nil
+    }
+
+    /// Replaces the transcript with a fresh seed (e.g. after a harness-side
+    /// rewind from `/undo`) and clears the streaming/tool-tracking caches that
+    /// pointed at the now-removed messages.
+    func replaceTranscript(with messages: [ChatTranscriptMessage]) {
+        self.messages = messages
+        resetStreamingMessages()
+        toolMessageIds.removeAll()
+        toolTitles.removeAll()
     }
 
     private func errorMessage(for error: Error) -> String {

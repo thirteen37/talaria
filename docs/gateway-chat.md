@@ -91,6 +91,9 @@ sites. `session_id` is the runtime id and is passed **in `params`**, never in th
 | `clarify.respond` | `{ request_id: string, answer: string }` | `{ status: "ok" }` | `server.py:5110`, `clarify-tool.tsx:119` |
 | `sudo.respond` | `{ request_id: string, password: string }` | `{ status: "ok" }` | `server.py:5115`, `prompt-overlays.tsx:62` |
 | `secret.respond` | `{ request_id: string, value: string }` | `{ status: "ok" }` | `server.py:5120`, `prompt-overlays.tsx:161` |
+| `slash.exec` | `{ session_id: string, command: string }` (no leading `/`) | `{ output: string, warning?: string }` | `server.py:7173`, `use-prompt-actions.ts:388` |
+| `command.dispatch` | `{ session_id: string, name: string, arg: string }` | typed payload (below) | `server.py:6120`, `use-prompt-actions.ts:388` |
+| `session.title` | `{ session_id: string, title: string }` | `{ title: string, pending: bool }` | `server.py:3418`, `use-session-actions.ts` |
 
 `approval.respond.choice` defaults to `"deny"` server-side (`server.py:5138`). The desktop sends
 `"once"` for an immediate allow, `"deny"` to reject, and `"always"` (with the confirm dialog) to
@@ -128,6 +131,45 @@ The respond handlers (`clarify`/`sudo`/`secret`) are unified server-side as
   credential_warning?, config_warning?, desktop_contract?: number, version?,
   skills?, tools? }
 ```
+
+### Slash commands (`/help`, `/undo`, `/model …`, …)
+
+A `/`-prefixed message is **not** an LLM turn — it's run by the harness (or a
+native app action). Talaria intercepts it on send and never calls `prompt.submit`
+for it. The harness exposes two RPCs (neither was documented above before this
+section), mirroring the desktop's `executeSlashCommand`
+(`use-prompt-actions.ts:388`): try `slash.exec` first, fall through to
+`command.dispatch` on any error.
+
+- **`slash.exec`** `{ session_id, command }` — `command` has the leading `/`
+  stripped. Runs the harness slash worker; handles most commands (`/help`,
+  `/status`, `/model …`, `/compress`, …) and returns `{ output, warning? }`
+  (`server.py:7173`).
+- **`command.dispatch`** `{ session_id, name, arg }` — the fallback for the
+  commands `slash.exec` rejects: the pending-input set
+  `{retry, queue, q, steer, plan, goal, undo}` (`server.py:5931`) and skill
+  commands (`server.py:6120`). It returns a **typed** payload keyed by `type`
+  (`chat-runtime.ts:190` `parseCommandDispatch`):
+
+  | `type` | payload | Talaria behavior |
+  |---|---|---|
+  | `exec` / `plugin` | `{ output }` | render `output` as a system line |
+  | `alias` | `{ target }` | recurse: run `/target [arg]` (back through `slash.exec`) |
+  | `skill` | `{ message, name }` | system line `⚡ loading skill: name`, then submit `message` as a real prompt |
+  | `send` | `{ message, notice? }` | system line `notice` (if any), then submit `message` as a real prompt |
+  | `prefill` | `{ message, notice }` | set the composer text to `message`, **re-seed the transcript** from `GET /api/sessions/{id}` (so it matches the harness's server-side rewind), then a system line `notice` — **this is the `/undo` shape** (the harness rewinds the transcript and hands back the backed-up user turn). The on-disk desktop's `parseCommandDispatch` doesn't yet handle `prefill`; Talaria does. The re-seed is the same cheap history fetch used to populate a resumed chat (no re-resume), keyed by the stored session id, so it resyncs resumed sessions; a brand-new session still keyed by its gateway runtime id is left as-is. |
+
+`session.title` `{ session_id, title }` → `{ title, pending }` renames the live
+session (maps the runtime id → session, queues when the DB row isn't persisted
+yet). Talaria's `/title <name>` shim calls it, then mirrors the resolved title
+into the open tab + chat header. `/new` and `/reset` are pure native shims
+(`store.openNew()`); a few informational stubs (`/yolo`, `/profile`, `/skin`,
+`/branch`, `/fork`) render an honest "not available in Talaria" line instead of
+hitting the harness.
+
+One more harness method exists for completeness — **`complete.slash`** (autocomplete
+for the slash menu) — but Talaria builds its menu from `commands.catalog` instead,
+so it isn't used.
 
 ## Server → client events
 
