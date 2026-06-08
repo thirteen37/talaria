@@ -40,7 +40,10 @@ build/sparkle-signature.txt   # ed25519 line for appcast
 Push a tag matching `v*` to trigger `.github/workflows/release.yml`. The
 workflow restores the Developer-ID certificate and App Store Connect API key
 from repo secrets, runs `scripts/release.sh`, uploads the DMG to the GitHub
-Release, and opens a PR updating `docs/appcast.xml`.
+Release, and opens two PRs: one updating `docs/appcast.xml` (Sparkle) and one
+updating `Casks/talaria.rb` (Homebrew — version + the new DMG's sha256). The
+cask PR runs post-build because the checksum only exists once the DMG is built,
+and it is independent of Sparkle so it still opens if the Sparkle key is absent.
 
 Required GitHub repo secrets (set in **Settings → Secrets → Actions**):
 
