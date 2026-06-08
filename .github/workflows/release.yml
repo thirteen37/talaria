@@ -43,7 +43,10 @@ jobs:
           # Strip leading "v" from tag refs (v1.0 -> 1.0).
           VERSION="${VERSION#v}"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
-          echo "${VERSION}" > VERSION
+          # Note: VERSION is passed to scripts/release.sh as an argument, and the
+          # committed ./VERSION + project.yml must already match the tag (enforced
+          # by assert_version_metadata in release.sh) — so we deliberately do not
+          # rewrite ./VERSION here.
 
       - name: Install create-dmg
         run: brew install create-dmg

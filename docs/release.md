@@ -86,8 +86,23 @@ codesign --sign "Developer ID Application" --options=runtime --timestamp \
 
 ## Version bump conventions
 
+Bump the marketing version with one command **before** tagging a release:
+
+```sh
+scripts/bump-version.sh 1.1   # updates ./VERSION + both project.yml targets, regenerates the project
+```
+
+Then review, commit (PR to `main`), and tag `v1.1`. The marketing version lives
+in two committed places — `./VERSION` (the release-script default) and
+`project.yml`'s `MARKETING_VERSION` (the Xcode source of truth, which feeds
+`CFBundleShortVersionString` via `$(MARKETING_VERSION)` in both `Info.plist`s).
+`bump-version.sh` keeps them in lockstep, and both release scripts call
+`assert_version_metadata` to **abort the build** if either disagrees with the
+version being released — so a forgotten bump fails the release loudly instead of
+shipping stale metadata.
+
 - `CFBundleShortVersionString` / `MARKETING_VERSION` (visible) — **major.minor**
-  in `VERSION` (e.g. `1.0`).
+  in `VERSION` and `project.yml` (e.g. `1.0`).
 - `CFBundleVersion` / `CURRENT_PROJECT_VERSION` (build number) —
   **`YYYYMMDD.HHMM` (UTC)**, set automatically by `scripts/release.sh` from
   `date -u +%Y%m%d.%H%M`. Always monotonic with no same-day collisions, and

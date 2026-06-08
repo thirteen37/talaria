@@ -66,6 +66,20 @@ BUILD_NUMBER="$(date -u +%Y%m%d.%H%M)"
 log()  { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Refuse to build if the committed version metadata disagrees with the version
+# being released, so a tag can never ship while VERSION / project.yml still read
+# an old number. Run scripts/bump-version.sh <version> and commit to fix.
+assert_version_metadata() {
+    local expected="$1" bad=0 v
+    v="$(tr -d '[:space:]' < "${REPO_ROOT}/VERSION" 2>/dev/null || true)"
+    [[ "$v" == "$expected" ]] || { echo "  VERSION file: '$v' (want '$expected')" >&2; bad=1; }
+    while IFS= read -r v; do
+        [[ "$v" == "$expected" ]] || { echo "  project.yml MARKETING_VERSION: '$v' (want '$expected')" >&2; bad=1; }
+    done < <(grep -E '^[[:space:]]*MARKETING_VERSION:' "${REPO_ROOT}/project.yml" | sed -E 's/.*MARKETING_VERSION:[[:space:]]*//')
+    (( bad == 0 )) || fail "version metadata out of sync with ${expected}. Run: scripts/bump-version.sh ${expected} (then commit)."
+}
+assert_version_metadata "$VERSION"
+
 log "iOS release ${VERSION} (build ${BUILD_NUMBER})"
 
 # Validate upload credentials up front so we don't archive for 5 minutes and
