@@ -155,6 +155,63 @@ public actor GatewayChatClient: ChatBackend {
     /// nothing to reply to. No-op.
     public func respond(id: JSONRPCID, error: JSONRPCError) async throws {}
 
+    /// Run a slash command through the harness. Tries `slash.exec` (the harness
+    /// slash worker — `/help`, `/status`, `/model …`, `/compress`, …); on any
+    /// error falls back to `command.dispatch`, the typed path for pending-input
+    /// commands (`/undo`, `/retry`, …) and skills. Uses the request/response
+    /// ``call(_:_:)`` helper, so it's independent of the turn lifecycle and never
+    /// touches `turnContinuation`.
+    public func slash(sessionId: SessionId, command: String) async throws -> SlashOutcome {
+        let runtime = runtimeSessionId ?? sessionId
+        let bare = Self.stripLeadingSlashes(command)
+        do {
+            let result = try await call("slash.exec", SlashExecParams(sessionId: runtime, command: bare))
+            let p = Self.object(result)
+            let output = Self.string(p["output"]) ?? ""
+            // `slash.exec` may also carry a non-fatal `warning`; append it.
+            if let warning = Self.string(p["warning"]), !warning.isEmpty {
+                return .output([output, warning].filter { !$0.isEmpty }.joined(separator: "\n\n"))
+            }
+            return .output(output)
+        } catch {
+            let parsed = SlashCommand(parsing: bare)
+            let result = try await call("command.dispatch", CommandDispatchParams(sessionId: runtime, name: parsed.name, arg: parsed.arg))
+            return try await mapDispatch(result, runtime: runtime, arg: parsed.arg)
+        }
+    }
+
+    /// Map a `command.dispatch` payload onto a ``SlashOutcome``. `alias` recurses
+    /// back into ``slash(sessionId:command:)`` so the aliased target runs through
+    /// the same `slash.exec`-first path.
+    private func mapDispatch(_ result: JSONValue, runtime: String, arg: String) async throws -> SlashOutcome {
+        let p = Self.object(result)
+        switch Self.string(p["type"]) ?? "" {
+        case "alias":
+            let target = Self.string(p["target"]) ?? ""
+            let next = arg.isEmpty ? target : "\(target) \(arg)"
+            return try await slash(sessionId: runtime, command: next)
+        case "skill":
+            let name = Self.string(p["name"]) ?? ""
+            return .submit(message: Self.string(p["message"]) ?? "", notice: "⚡ loading skill: \(name)")
+        case "send":
+            return .submit(message: Self.string(p["message"]) ?? "", notice: Self.string(p["notice"]))
+        case "prefill":
+            return .prefill(message: Self.string(p["message"]) ?? "", notice: Self.string(p["notice"]) ?? "")
+        default:
+            // `exec` / `plugin` (and any unknown type carrying output).
+            return .output(Self.string(p["output"]) ?? "")
+        }
+    }
+
+    /// Rename the live session via the gateway `session.title` RPC. Returns the
+    /// resolved title (the gateway echoes it back, possibly `pending` until the
+    /// DB row is persisted).
+    public func setTitle(sessionId: SessionId, title: String) async throws -> String {
+        let runtime = runtimeSessionId ?? sessionId
+        let result = try await call("session.title", SessionTitleParams(sessionId: runtime, title: title))
+        return Self.string(Self.object(result)["title"]) ?? title
+    }
+
     public func close() async {
         guard !closed else { return }
         closed = true
@@ -518,6 +575,13 @@ public actor GatewayChatClient: ChatBackend {
         }
     }
 
+    /// Drop any leading `/`(s) so a typed `/help` becomes the bare `help` the
+    /// harness slash worker expects. (Name/arg splitting for the
+    /// `command.dispatch` fallback uses the shared ``SlashCommand`` parser.)
+    private static func stripLeadingSlashes(_ s: String) -> String {
+        String(s.drop(while: { $0 == "/" }))
+    }
+
     // MARK: - Wire structs
 
     private struct InboundEnvelope: Decodable {
@@ -563,6 +627,35 @@ public actor GatewayChatClient: ChatBackend {
         let sessionId: String
         enum CodingKeys: String, CodingKey {
             case sessionId = "session_id"
+        }
+    }
+
+    private struct SlashExecParams: Codable, Sendable {
+        let sessionId: String
+        let command: String
+        enum CodingKeys: String, CodingKey {
+            case sessionId = "session_id"
+            case command
+        }
+    }
+
+    private struct CommandDispatchParams: Codable, Sendable {
+        let sessionId: String
+        let name: String
+        let arg: String
+        enum CodingKeys: String, CodingKey {
+            case sessionId = "session_id"
+            case name
+            case arg
+        }
+    }
+
+    private struct SessionTitleParams: Codable, Sendable {
+        let sessionId: String
+        let title: String
+        enum CodingKeys: String, CodingKey {
+            case sessionId = "session_id"
+            case title
         }
     }
 

@@ -343,6 +343,23 @@ final class SessionsStore {
         }
     }
 
+    /// Re-seeds an open session's transcript from the dashboard's authoritative
+    /// message list (the same `GET /api/sessions/{id}` used to seed a resumed
+    /// chat). Used after a harness-side rewind (`/undo` → prefill) so the local
+    /// transcript matches the server instead of still showing the undone turn.
+    ///
+    /// Best-effort: an empty/failed fetch leaves the current transcript untouched
+    /// rather than blanking a populated chat. Resolves by the session's stored
+    /// dashboard id, so it resyncs resumed sessions; a brand-new session still
+    /// keyed by its gateway runtime id won't match a dashboard row and is left
+    /// as-is (no regression — that was the prior behavior for every command).
+    func refreshTranscript(_ id: SessionId) async {
+        guard let vm = viewModels[id] else { return }
+        let history = await liveHistory(for: id)
+        guard !history.isEmpty else { return }
+        vm.replaceTranscript(with: history)
+    }
+
     private func openReadOnly(_ summary: HermesSessionSummary, source: String) async throws {
         guard let dashboardClient else {
             lastError = "Dashboard not reachable"
@@ -531,6 +548,21 @@ final class SessionsStore {
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    /// Updates the in-memory title for an open session (and its cached view
+    /// model) without the CLI. Used by the `/title` slash shim, which renames via
+    /// the gateway `session.title` RPC; mirrors the `session_info_update` path
+    /// (`handleStateMutation`). The CLI-based `renameSession` (sessions-list UI)
+    /// is left as-is.
+    func updateTitle(_ id: SessionId, to title: String) {
+        if let index = openSessions.firstIndex(where: { $0.id == id }) {
+            applyTitle(title, to: index)
+        }
+        if let normalized = normalizedTitle(title) {
+            viewModels[id]?.title = normalized
+        }
+        browserRefreshToken &+= 1
     }
 
     func deleteSession(_ id: SessionId) async {

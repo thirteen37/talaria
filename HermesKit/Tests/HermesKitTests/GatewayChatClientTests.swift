@@ -271,6 +271,159 @@ struct GatewayChatClientTests {
         }
     }
 
+    // MARK: - Slash commands
+
+    @Test
+    func slashExecResolvesToOutput() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let task = Task { try await client.slash(sessionId: sid, command: "/help") }
+        let frame = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: frame) == "slash.exec")
+        // The leading slash is stripped before hitting the harness slash worker.
+        #expect(stringParam(frame, "command") == "help")
+        #expect(stringParam(frame, "session_id") == sid)
+
+        fake.pushInbound(responseFrame(id: idOf(frame), result: ["output": .string("commands: /help …")]))
+        let outcome = try await task.value
+        #expect(outcome == .output("commands: /help …"))
+    }
+
+    @Test
+    func slashUndoFallsBackToCommandDispatchPrefill() async throws {
+        // `/undo` is pending-input, so `slash.exec` errors (4018) and Talaria
+        // resolves it via `command.dispatch`, which returns a `prefill`.
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let task = Task { try await client.slash(sessionId: sid, command: "/undo") }
+        let execFrame = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: execFrame) == "slash.exec")
+        fake.pushInbound(errorFrame(id: idOf(execFrame), message: "command requires pending input"))
+
+        let dispatchFrame = try await fake.waitForSent(at: sentBefore + 1)
+        #expect(method(of: dispatchFrame) == "command.dispatch")
+        #expect(stringParam(dispatchFrame, "name") == "undo")
+        fake.pushInbound(responseFrame(id: idOf(dispatchFrame), result: [
+            "type": .string("prefill"),
+            "message": .string("prev"),
+            "notice": .string("↶ Undid 1 turn…")
+        ]))
+
+        let outcome = try await task.value
+        #expect(outcome == .prefill(message: "prev", notice: "↶ Undid 1 turn…"))
+    }
+
+    @Test
+    func commandDispatchSendResolvesToSubmit() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let task = Task { try await client.slash(sessionId: sid, command: "/q hello there") }
+        let execFrame = try await fake.waitForSent(at: sentBefore)
+        fake.pushInbound(errorFrame(id: idOf(execFrame), message: "needs dispatch"))
+
+        let dispatchFrame = try await fake.waitForSent(at: sentBefore + 1)
+        #expect(stringParam(dispatchFrame, "name") == "q")
+        #expect(stringParam(dispatchFrame, "arg") == "hello there")
+        fake.pushInbound(responseFrame(id: idOf(dispatchFrame), result: [
+            "type": .string("send"),
+            "message": .string("hello there")
+        ]))
+
+        let outcome = try await task.value
+        #expect(outcome == .submit(message: "hello there", notice: nil))
+    }
+
+    @Test
+    func commandDispatchSkillResolvesToSubmitWithNotice() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let task = Task { try await client.slash(sessionId: sid, command: "/brainstorm") }
+        let execFrame = try await fake.waitForSent(at: sentBefore)
+        fake.pushInbound(errorFrame(id: idOf(execFrame), message: "needs dispatch"))
+
+        let dispatchFrame = try await fake.waitForSent(at: sentBefore + 1)
+        fake.pushInbound(responseFrame(id: idOf(dispatchFrame), result: [
+            "type": .string("skill"),
+            "name": .string("brainstorm"),
+            "message": .string("Use the brainstorm skill")
+        ]))
+
+        let outcome = try await task.value
+        #expect(outcome == .submit(message: "Use the brainstorm skill", notice: "⚡ loading skill: brainstorm"))
+    }
+
+    @Test
+    func commandDispatchAliasRecursesToTarget() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let task = Task { try await client.slash(sessionId: sid, command: "/h") }
+        let execFrame = try await fake.waitForSent(at: sentBefore)
+        fake.pushInbound(errorFrame(id: idOf(execFrame), message: "needs dispatch"))
+
+        let dispatchFrame = try await fake.waitForSent(at: sentBefore + 1)
+        fake.pushInbound(responseFrame(id: idOf(dispatchFrame), result: [
+            "type": .string("alias"),
+            "target": .string("help")
+        ]))
+
+        // The alias recurses through `slash`, so the aliased target runs through
+        // `slash.exec` again.
+        let aliasExecFrame = try await fake.waitForSent(at: sentBefore + 2)
+        #expect(method(of: aliasExecFrame) == "slash.exec")
+        #expect(stringParam(aliasExecFrame, "command") == "help")
+        fake.pushInbound(responseFrame(id: idOf(aliasExecFrame), result: ["output": .string("help text")]))
+
+        let outcome = try await task.value
+        #expect(outcome == .output("help text"))
+    }
+
+    @Test
+    func slashDoesNotEmitPromptSubmitOrBlockTheTurn() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let slashTask = Task { try await client.slash(sessionId: sid, command: "/status") }
+        let execFrame = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: execFrame) == "slash.exec")
+        fake.pushInbound(responseFrame(id: idOf(execFrame), result: ["output": .string("ok")]))
+        _ = try await slashTask.value
+
+        // A normal prompt still works afterwards — slash never touched the turn
+        // continuation.
+        let beforePrompt = fake.sent.count
+        let promptTask = Task { try await client.prompt(sessionId: sid, content: "go") }
+        let submitFrame = try await fake.waitForSent(at: beforePrompt)
+        #expect(method(of: submitFrame) == "prompt.submit")
+        fake.pushInbound(responseFrame(id: idOf(submitFrame), result: ["status": .string("streaming")]))
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: sid, payload: ["status": .string("complete")]))
+        let response = try await promptTask.value
+        #expect(response.stopReason == .endTurn)
+    }
+
+    @Test
+    func setTitleSendsSessionTitleAndReturnsResolved() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let task = Task { try await client.setTitle(sessionId: sid, title: "Foo") }
+        let frame = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: frame) == "session.title")
+        #expect(stringParam(frame, "title") == "Foo")
+        #expect(stringParam(frame, "session_id") == sid)
+
+        fake.pushInbound(responseFrame(id: idOf(frame), result: [
+            "title": .string("Foo"),
+            "pending": .bool(true)
+        ]))
+        let resolved = try await task.value
+        #expect(resolved == "Foo")
+    }
+
     // MARK: - Helpers
 
     /// Awaits the next notification and requires it to be non-nil. Evaluates
@@ -324,6 +477,14 @@ struct GatewayChatClientTests {
             "jsonrpc": .string("2.0"),
             "id": .string(id),
             "result": .object(result)
+        ]))
+    }
+
+    private func errorFrame(id: String, message: String) -> Data {
+        encode(.object([
+            "jsonrpc": .string("2.0"),
+            "id": .string(id),
+            "error": .object(["message": .string(message)])
         ]))
     }
 
