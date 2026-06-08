@@ -63,7 +63,7 @@ public struct NIOSSHHermesAdminRunner: HermesAdminRunning {
 
     // runStream(_:) intentionally uses the `HermesAdminRunning` protocol default
     // (drains the captured output once the child exits, then synthesises line
-    // events). It loses stdout/stderr interleaving.
-    // TODO: add a live-streaming child handler (model on `DashboardExecHandler`)
-    // so Tools/Doctor output streams incrementally instead of arriving at exit.
+    // events). Output therefore appears after command exit and stdout/stderr
+    // interleaving is not preserved. This matches the current NIO admin surface,
+    // where correctness matters more than incremental terminal-style streaming.
 }

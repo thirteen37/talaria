@@ -26,7 +26,7 @@ More macOS surfaces — live chat, model assignment, skills, and scheduled jobs:
   <img src="docs/screenshots/cron.png" alt="Cron screen — scheduled jobs with schedule and prompt" width="49%">
 </p>
 
-<p align="center"><em>Chat, Models, Skills, and Cron. Session titles and a few internal hostnames in these shots are anonymized for the README.</em></p>
+<p align="center"><em>Chat, Models, Skills, and Cron.</em></p>
 
 ## Install
 

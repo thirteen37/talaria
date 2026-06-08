@@ -18,7 +18,7 @@ struct DesktopServerWindow: View {
     /// where the banner strip is hosted — see `content`.
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var harness: ServerWindowHarness?
-    @State private var browse: BrowseDestination? = .sessions
+    @State private var browse: BrowseDestination? = UITestFlags.screenshotBrowseDestination ?? .sessions
     /// Window-scoped navigation intent for `EntityLink` taps. Injected into the
     /// content so chat + browse surfaces can route to an entity's page; this
     /// window observes `pendingFocus` to switch pages, the target page clears it.
@@ -122,6 +122,21 @@ struct DesktopServerWindow: View {
 
     @MainActor
     private func rebuildHarness() async {
+        if UITestFlags.screenshotFixture {
+            hermesProfilesLoading = false
+            hermesProfiles = [
+                HermesProfileInfo(name: HermesProfiles.defaultProfileName, isDefault: true),
+                HermesProfileInfo(name: "release", isDefault: false),
+            ]
+            let previous = harness
+            let fixture = ServerWindowHarness.makeScreenshotFixture()
+            harness = fixture
+            previous?.tearDown()
+            if UITestFlags.opensScreenshotChat {
+                await fixture.openScreenshotSession()
+            }
+            return
+        }
         if UITestFlags.mockServer {
             // UI-test mode: bypass SSH entirely with an in-process ACP server.
             // The mock never loads profiles and keeps a nil dashboard client, so

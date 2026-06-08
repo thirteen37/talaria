@@ -261,7 +261,10 @@ the `useGatewayChat` flag, the version gate, and the ACP/WS badge are all gone).
   There is no fallback — a session opened before the dashboard is up errors and the user retries.
 
 Verified by unit tests (`GatewayChatClientTests`, `GatewayWebSocketHandshakeTests`, `SessionManagerTests`)
-+ macOS/iOS app builds. The end-to-end SSH tunnel (iOS) still needs live on-device verification.
++ macOS/iOS app builds. Optional live smoke coverage lives in `GatewayLiveSmokeTests`: set
+`HERMES_WS_LIVE_BASE` (and, when needed, `HERMES_WS_LIVE_TOKEN` / `HERMES_WS_LIVE_PROMPT`) to run it
+against a real `hermes dashboard`; add `HERMES_WS_LIVE_VERBOSE=1` for diagnostic output. The
+end-to-end SSH tunnel (iOS) still needs live on-device verification.
 
 ## Remaining work
 
