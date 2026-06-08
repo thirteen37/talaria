@@ -37,7 +37,7 @@ struct LogSyntaxTests {
         for (raw, level) in cases {
             let line = "2026-05-28 22:35:51,312 \(raw) gateway.run: a message"
             let segs = LogSyntax.segments(of: line)
-            let levelSeg = try? #require(segs.first(where: { if case .level = $0.token { return true } else { return false } }))
+            let levelSeg = segs.first { if case .level = $0.token { return true } else { return false } }
             #expect(levelSeg?.token == .level(level))
             #expect(levelSeg?.text == raw)
         }

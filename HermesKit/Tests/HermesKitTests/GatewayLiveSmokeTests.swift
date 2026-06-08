@@ -13,6 +13,11 @@ private actor LiveCounter {
     func set(_ v: Int) { value = v }
 }
 
+private func liveLog(_ message: @autoclosure () -> String) {
+    guard ProcessInfo.processInfo.environment["HERMES_WS_LIVE_VERBOSE"] == "1" else { return }
+    print(message())
+}
+
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["HERMES_WS_LIVE_BASE"] != nil))
 struct GatewayLiveSmokeTests {
     @Test
@@ -25,7 +30,7 @@ struct GatewayLiveSmokeTests {
         let client = GatewayChatClient(webSocket: socket)
         try await client.start(clientInfo: Implementation(name: "smoke", version: "1.0"))
         let response = try await client.newSession(cwd: NSTemporaryDirectory())
-        print("LIVE session_id = \(response.sessionId)")
+        liveLog("LIVE session_id = \(response.sessionId)")
         #expect(!response.sessionId.isEmpty)
         await client.close()
     }
@@ -40,13 +45,13 @@ struct GatewayLiveSmokeTests {
 
         let session = DashboardSession(baseURL: base)
         let token = try await session.refresh()
-        print("LIVE refresh() token len=\(token.count) head=\(token.prefix(6))")
+        liveLog("LIVE refresh() token len=\(token.count) head=\(token.prefix(6))")
 
         let socket = try URLSessionGatewayWebSocket(dashboardBaseURL: base, credential: .token(token))
         let client = GatewayChatClient(webSocket: socket)
         try await client.start(clientInfo: Implementation(name: "smoke-refresh", version: "1.0"))
         let response = try await client.newSession(cwd: NSTemporaryDirectory())
-        print("LIVE refresh-path session_id = \(response.sessionId)")
+        liveLog("LIVE refresh-path session_id = \(response.sessionId)")
         #expect(!response.sessionId.isEmpty)
         await client.close()
     }
@@ -74,14 +79,14 @@ struct GatewayLiveSmokeTests {
                 if case let .sessionUpdate(n) = note {
                     if case let .availableCommandsUpdate(u) = n.update {
                         await commandCount.set(u.availableCommands.count)
-                        print("COMMANDS: \(u.availableCommands.prefix(8).map(\.name))")
+                        liveLog("COMMANDS: \(u.availableCommands.prefix(8).map(\.name))")
                     }
                     if case let .usageUpdate(u) = n.update {
                         await usageCount.set(1)
-                        print("USAGE: used=\(u.used) size=\(u.size)")
+                        liveLog("USAGE: used=\(u.used) size=\(u.size)")
                     }
                     if case let .sessionInfoUpdate(u) = n.update {
-                        print("SESSION INFO: model=\(u.model ?? "nil") branch=\(u.branch ?? "nil")")
+                        liveLog("SESSION INFO: model=\(u.model ?? "nil") branch=\(u.branch ?? "nil")")
                     }
                 }
             }
@@ -96,7 +101,8 @@ struct GatewayLiveSmokeTests {
         reader.cancel()
         await client.close()
         let cmds = await commandCount.value
-        print("RESULT commands=\(cmds) usageSeen=\(await usageCount.value)")
+        let usageSeen = await usageCount.value
+        liveLog("RESULT commands=\(cmds) usageSeen=\(usageSeen)")
         #expect(cmds > 0)
     }
 
@@ -114,7 +120,7 @@ struct GatewayLiveSmokeTests {
         } catch {
             thrown = error
         }
-        print("LIVE rejection error = \(String(describing: thrown))")
+        liveLog("LIVE rejection error = \(String(describing: thrown))")
         guard case let .closedWithCode(code)? = thrown as? GatewayWebSocketError else {
             Issue.record("expected GatewayWebSocketError.closedWithCode, got \(String(describing: thrown))")
             return

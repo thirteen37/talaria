@@ -118,6 +118,22 @@ struct PhoneServerWindow: View {
 
     @MainActor
     private func rebuildHarness() async {
+        if UITestFlags.screenshotFixture {
+            hermesProfilesLoading = false
+            hermesProfiles = [
+                HermesProfileInfo(name: HermesProfiles.defaultProfileName, isDefault: true),
+                HermesProfileInfo(name: "release", isDefault: false),
+            ]
+            let previous = harness
+            let fixture = ServerWindowHarness.makeScreenshotFixture()
+            harness = fixture
+            previous?.tearDown()
+            if UITestFlags.opensScreenshotChat {
+                await fixture.openScreenshotSession()
+                chatPath = [ScreenshotFixtures.primarySessionID]
+            }
+            return
+        }
         if UITestFlags.mockServer {
             // The mock never loads profiles and keeps a nil dashboard client, so
             // clear the loading flag here or the placeholder would spin forever.
