@@ -1,6 +1,6 @@
 cask "talaria" do
-  version "1.0"
-  sha256 "9466cd0e38723996bd482497bafdd79cfbe492b8678da0e3f6a0200e002067f2"
+  version "1.1"
+  sha256 "a68f4048f787dd8aea8ca53485b235ee270a2277ddd6d41db004f46432f6633f"
 
   url "https://github.com/thirteen37/talaria/releases/download/v#{version}/Talaria-#{version}.dmg"
   name "Talaria"
