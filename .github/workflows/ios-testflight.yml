@@ -49,7 +49,10 @@ jobs:
           # Strip a leading "v" if someone passes a tag-style version.
           VERSION="${VERSION#v}"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
-          echo "${VERSION}" > VERSION
+          # Note: VERSION is passed to scripts/release-ios.sh as an argument, and
+          # the committed ./VERSION + project.yml must already match it (enforced
+          # by assert_version_metadata in release-ios.sh) — so we deliberately do
+          # not rewrite ./VERSION here.
 
       - name: Install xcodegen
         run: brew install xcodegen
