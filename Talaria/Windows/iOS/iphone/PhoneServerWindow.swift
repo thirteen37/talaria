@@ -287,7 +287,7 @@ struct PhoneServerWindow: View {
         }
         // Track this window's foreground state (to gate notifications) and
         // consume a tapped-notification route addressed to this profile.
-        .chatNotificationRouting(store: harness.store, profileId: harness.profile.id)
+        .chatNotificationRouting(harness: harness)
         // Full-width banner strip across the top of the window: bridges
         // session/dashboard errors + the web-UI progress note from the sidebar.
         // The visible strip is hosted *inside* the NavigationStack on each

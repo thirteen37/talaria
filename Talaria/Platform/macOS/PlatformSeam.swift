@@ -97,6 +97,12 @@ extension View {
         background(WindowForegroundReader(report: report))
     }
 
+    /// No-op on macOS — desktop SSH connections aren't suspended when the app
+    /// backgrounds, so there's no background→foreground reconnect to trigger.
+    /// Mirrors the iOS seam so the shared `chatNotificationRouting` call site
+    /// compiles `#if`-free.
+    func onResumeFromBackground(_ action: @escaping () -> Void) -> some View { self }
+
     /// Profile-editor sheet for the desktop window. No-op on macOS — the
     /// `Settings` scene presents the editor instead.
     func platformSettingsSheet<Editor: View>(

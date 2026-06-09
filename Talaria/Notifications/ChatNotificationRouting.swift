@@ -11,14 +11,17 @@ extension View {
     ///
     /// Shared across the desktop and iPhone window roots; the foreground source
     /// (`controlActiveState` on macOS, `scenePhase` on iOS) lives behind the seam.
-    func chatNotificationRouting(store: SessionsStore, profileId: UUID) -> some View {
-        modifier(ChatNotificationRouting(store: store, profileId: profileId))
+    /// Takes the whole `harness` (not just `store`/`profileId`) so it can drive
+    /// the iOS/iPad background→foreground connection recovery.
+    func chatNotificationRouting(harness: ServerWindowHarness) -> some View {
+        modifier(ChatNotificationRouting(harness: harness))
     }
 }
 
 private struct ChatNotificationRouting: ViewModifier {
-    let store: SessionsStore
-    let profileId: UUID
+    let harness: ServerWindowHarness
+    private var store: SessionsStore { harness.store }
+    private var profileId: UUID { harness.profile.id }
     private var notifier: ChatNotifier { .shared }
 
     // `Self.Content` (not bare `Content`) because this file imports HermesKit,
@@ -27,6 +30,10 @@ private struct ChatNotificationRouting: ViewModifier {
     func body(content: Self.Content) -> some View {
         content
             .trackWindowForeground { store.isWindowForeground = $0 }
+            // On a real background→foreground round-trip, probe the dashboard and
+            // reconnect only if the suspended SSH connection died. No-op on macOS
+            // (the seam is a no-op there); fires on iPhone + iPad.
+            .onResumeFromBackground { harness.recoverConnectionIfNeeded() }
             // Consume on appear AND on change: a window opened *in response to* a
             // tap (warm "open the target window", or a cold launch) mounts with
             // `pendingRoute` already set, and `.onChange` never fires for a
