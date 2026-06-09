@@ -2,8 +2,9 @@ import HermesKit
 import SwiftUI
 
 /// Compact iPhone window: a `NavigationStack` chat push with a top toolbar
-/// (Browse / All-sessions / Logs). Browse opens a modal sheet covering the full
-/// manage feature set; Settings is reached via Browse → Settings. iOS-only.
+/// (Browse / All-sessions / Reconnect). Browse opens a modal sheet covering the
+/// full manage feature set; Settings is reached via Browse → Settings, and the
+/// app's own log console lives under Browse → System → App Logs. iOS-only.
 struct PhoneServerWindow: View {
     let profileId: UUID
 
@@ -18,7 +19,6 @@ struct PhoneServerWindow: View {
     @State private var navigator = WindowNavigator()
     @State private var showingSettings = false
     @State private var showingAllSessions = false
-    @State private var showingLogs = false
     @State private var showingBrowse = false
     /// Optional surface the Browse sheet should open directly on (set by the
     /// bell → Notifications deep link; nil for the plain Browse button).
@@ -346,15 +346,6 @@ struct PhoneServerWindow: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
-                    showingLogs = true
-                } label: {
-                    Image(systemName: "ladybug")
-                }
-                .accessibilityLabel("Logs")
-                .help("View logs")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
                     harness.reconnectDashboard()
                 } label: {
                     Image(systemName: "arrow.clockwise")
@@ -386,9 +377,6 @@ struct PhoneServerWindow: View {
             )
             .environment(sidebarLayout)
             .environment(navigator)
-        }
-        .sheet(isPresented: $showingLogs) {
-            LogConsoleView(onDismiss: { showingLogs = false })
         }
         .sheet(isPresented: $showingAllSessions) {
             NavigationStack {
