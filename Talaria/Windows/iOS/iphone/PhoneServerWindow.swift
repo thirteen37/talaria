@@ -247,8 +247,10 @@ struct PhoneServerWindow: View {
         NavigationStack(path: $chatPath) {
             sidebar(harness: harness)
                 .navigationTitle(harness.profile.name)
+                .bannerHost(harness.banners)
                 .navigationDestination(for: SessionId.self) { id in
                     chatDestination(harness: harness, id: id)
+                        .bannerHost(harness.banners)
                 }
         }
         // Window-scoped navigation for EntityLink taps in chat + browse surfaces.
@@ -288,10 +290,11 @@ struct PhoneServerWindow: View {
         .chatNotificationRouting(store: harness.store, profileId: harness.profile.id)
         // Full-width banner strip across the top of the window: bridges
         // session/dashboard errors + the web-UI progress note from the sidebar.
-        // iPhone has no side-by-side sidebar, so hosting the strip at the
-        // NavigationStack root keeps it correctly full-width (the bridge no
-        // longer hosts it).
-        .bannerHost(harness.banners)
+        // The visible strip is hosted *inside* the NavigationStack on each
+        // on-screen view (the root list and the pushed chat) so its top
+        // safe-area inset lands below that view's navigation bar instead of
+        // over the toolbar buttons. Only the on-screen view's inset renders;
+        // the strip is still full-width because the List / chat fill the column.
         .bridgeWindowBanners(harness: harness)
     }
 
