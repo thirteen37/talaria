@@ -37,7 +37,6 @@ struct BrowseDetailView: View {
         case .hermesProfiles:
             ProfilesView(
                 client: harness.dashboardClient,
-                runner: harness.store.adminRunner,
                 activeProfile: activeHermesProfile,
                 hermesVersion: harness.effectiveHermesVersion,
                 onProfilesChanged: onProfilesChanged

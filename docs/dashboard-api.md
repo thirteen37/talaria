@@ -125,7 +125,7 @@ bodies are JSON; the "Body" column lists the wrapping the dashboard's Pydantic m
 | Method | Path                     | Body                                         | Returns / notes |
 | ------ | ------------------------ | -------------------------------------------- | --------------- |
 | GET    | `/api/profiles`          | —                                            | `{profiles: [DashboardProfile]}`. Profile-agnostic (scans the profiles dir). |
-| POST   | `/api/profiles`          | `{name, clone_from_default, no_skills}`      | Creates by cloning **default only**; arbitrary-source clone needs the CLI. |
+| POST   | `/api/profiles`          | `{name, clone_from_default, no_skills}`      | Creates by cloning **default only**. Talaria's Profiles screen is dashboard-only, so it gates Clone to the `default` row (no arbitrary-source clone). |
 | PATCH  | `/api/profiles/{name}`   | `{new_name}`                                 | Rename in place. `default` is rejected by the server. |
 | DELETE | `/api/profiles/{name}`   | —                                            | Delete. Server forces `yes=True`; `default` is rejected. |
 
