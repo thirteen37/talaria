@@ -18,8 +18,14 @@ struct ChatView: View {
                         } else {
                             let lastId = viewModel.messages.last?.id
                             ForEach(viewModel.messages) { message in
-                                TranscriptRow(message: message, isLast: message.id == lastId)
-                                    .id(message.id)
+                                TranscriptRow(
+                                    message: message,
+                                    isLast: message.id == lastId,
+                                    onUndo: (message.isUndoableUserTurn && !viewModel.isReadOnly && !viewModel.isSending)
+                                        ? { Task { await viewModel.undo(throughUserMessageId: message.id) } }
+                                        : nil
+                                )
+                                .id(message.id)
                             }
                         }
                     }
@@ -245,6 +251,63 @@ final class LocalChatViewModel {
 
         prompt = ""
         await runPrompt(text: text, client: client, echoUser: true)
+    }
+
+    /// Counts the real user turns from `id` (inclusive) back to the latest, so an
+    /// "undo back to here" can dispatch a single `/undo <N>`: the latest user
+    /// bubble → 1, the one before → 2, and so on. Locally echoed slash commands
+    /// are skipped (see ``ChatTranscriptMessage/isUndoableUserTurn``) so the count
+    /// matches Hermes' real turn boundaries rather than inflating `N`. Returns 0
+    /// if `id` isn't found. Pure and `nonisolated` so it's unit-testable from a
+    /// synchronous, non-`MainActor` context (the class itself is `@MainActor`).
+    nonisolated static func undoTurnCount(through id: UUID, in messages: [ChatTranscriptMessage]) -> Int {
+        guard let index = messages.firstIndex(where: { $0.id == id }) else {
+            return 0
+        }
+        return messages[index...].reduce(0) { $0 + ($1.isUndoableUserTurn ? 1 : 0) }
+    }
+
+    /// Rewinds the conversation back to a user bubble by running `/undo <N>`,
+    /// where `N` is the number of user turns from that bubble to the latest. Unlike
+    /// the composer slash path, this does *not* echo a `/undo` user bubble — the
+    /// `.prefill` outcome in `runHarnessSlash` already re-seeds the transcript and
+    /// surfaces the harness notice.
+    func undo(throughUserMessageId id: UUID) async {
+        guard !isReadOnly, !isSending, pendingPermission == nil else {
+            return
+        }
+        guard let manager else {
+            hasError = true
+            statusText = "Session is not active"
+            return
+        }
+        let count = Self.undoTurnCount(through: id, in: messages)
+        guard count > 0 else {
+            return
+        }
+        // Mark the session busy *before* the first `await` so a rapid second Undo
+        // tap fails the `!isSending` guard above instead of slipping past it and
+        // rewinding extra turns from the same not-yet-refreshed `messages`
+        // (mirrors the composer slash path). `/undo` resolves as `.prefill`, never
+        // `.submit`, so no turn is started and we own this busy lifecycle — the
+        // `defer` restores it on every exit, including the no-client path.
+        isSending = true
+        turnStartDate = Date()
+        statusText = "Running /undo…"
+        hasError = false
+        store?.markTurnStarted(id: sessionId)
+        defer {
+            isSending = false
+            turnStartDate = nil
+            store?.markTurnFinished(id: sessionId)
+        }
+        guard let client = await manager.client(for: sessionId) else {
+            hasError = true
+            statusText = "Session is not active"
+            return
+        }
+        // count == 1 → plain "/undo" (the already-verified shape); >1 passes the count.
+        _ = await runHarnessSlash(name: "undo", arg: count > 1 ? String(count) : "", client: client)
     }
 
     /// Runs one LLM turn. `echoUser` appends the user bubble for a normal send;

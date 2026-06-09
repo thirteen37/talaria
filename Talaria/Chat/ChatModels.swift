@@ -73,6 +73,16 @@ struct ChatTranscriptMessage: Identifiable, Equatable {
         self.toolStatus = toolStatus
         self.toolContent = toolContent
     }
+
+    /// A real user turn that "Undo back to here" can rewind to. Excludes locally
+    /// echoed slash commands: `sendPrompt` echoes any `/`-prefixed composer input
+    /// as a `.user` bubble but runs it through the harness instead of the LLM, so
+    /// it has no matching Hermes turn. Counting those would inflate `/undo <N>`,
+    /// and a slash echo shouldn't carry an Undo button. (A genuine user turn can
+    /// never start with `/` — `sendPrompt` always routes that to the slash path.)
+    var isUndoableUserTurn: Bool {
+        kind == .user && !text.hasPrefix("/")
+    }
 }
 
 extension ToolCallStatus {
