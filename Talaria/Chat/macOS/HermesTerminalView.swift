@@ -28,7 +28,10 @@ final class HermesTerminalController: LocalProcessTerminalViewDelegate {
 
     init(spec: TUILaunchSpec) {
         self.spec = spec
-        self.terminalView = LocalProcessTerminalView(frame: .zero)
+        // `ScrollableLocalProcessTerminalView` (a `LocalProcessTerminalView`
+        // subclass) adds wheel/trackpad scrolling for the alternate-screen TUI;
+        // the property type stays the superclass so nothing else changes.
+        self.terminalView = ScrollableLocalProcessTerminalView(frame: .zero)
         self.terminalView.processDelegate = self
     }
 
