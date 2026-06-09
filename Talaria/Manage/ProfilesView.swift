@@ -29,18 +29,15 @@ final class ProfilesHarness {
     var draft: ProfileDraft?
 
     private let client: DashboardClient?
-    private let runner: HermesAdminRunning?
     /// Invoked after any successful mutation so the window can refresh its
     /// sidebar switcher and reconcile the active `-p <name>` if it vanished.
     private let onProfilesChanged: () -> Void
 
     init(
         client: DashboardClient?,
-        runner: HermesAdminRunning?,
         onProfilesChanged: @escaping () -> Void
     ) {
         self.client = client
-        self.runner = runner
         self.onProfilesChanged = onProfilesChanged
     }
 
@@ -49,35 +46,35 @@ final class ProfilesHarness {
         return profiles.first { $0.id == id }
     }
 
-    /// Dashboard-first / CLI-fallback / default-degrade — the same ladder the
-    /// window uses to populate the sidebar switcher.
+    /// The dashboard API can only clone from `default`, so cloning is offered
+    /// only when the default profile is selected.
+    var canClone: Bool {
+        guard let profile = selectedProfile else { return false }
+        return profile.isDefault || profile.name == HermesProfiles.defaultProfileName
+    }
+
+    /// Dashboard-only. The dashboard reports clean names + a structured
+    /// `is_default` flag, so this never leaks the CLI `profile list` table's
+    /// `◆` default-marker glyph into a name. On failure the error is surfaced
+    /// (no CLI fallback, no `default`-only degrade) so the user sees a banner
+    /// rather than silent CLI-parsed data. `client == nil` is handled upstream
+    /// by the view's "Dashboard not ready" state.
     func refresh() async {
+        guard let client else { return }
         isLoading = true
         defer { isLoading = false }
-        if let client {
-            do {
-                let list = try await client.listProfiles()
-                profiles = list.map {
-                    HermesProfileInfo(name: $0.name, isDefault: $0.isDefault, model: $0.model)
-                }
-                lastError = nil
-                banners?.dismiss(key: "profiles")
-                return
-            } catch {
-                // Fall through to the CLI source.
+        do {
+            let list = try await client.listProfiles()
+            profiles = list.map {
+                HermesProfileInfo(name: $0.name, isDefault: $0.isDefault, model: $0.model)
             }
+            lastError = nil
+            banners?.dismiss(key: "profiles")
+        } catch {
+            let message = error.localizedDescription
+            lastError = message
+            banners?.surfaceError("profiles", message)
         }
-        if let runner {
-            do {
-                profiles = try await HermesProfiles.list(runner: runner)
-                lastError = nil
-                banners?.dismiss(key: "profiles")
-                return
-            } catch {
-                // Fall through to the default-only degrade.
-            }
-        }
-        profiles = [HermesProfileInfo(name: HermesProfiles.defaultProfileName, isDefault: true, status: nil)]
     }
 
     // MARK: - Editor lifecycle
@@ -94,36 +91,17 @@ final class ProfilesHarness {
 
     // MARK: - Mutations
 
-    /// Clones `source` into `rawName`. The dashboard API can only clone from
-    /// `default`, so a non-default source goes straight to the CLI; cloning
-    /// from default tries the dashboard first and falls back to the CLI.
-    func clone(source: String, newName rawName: String) async {
+    /// Clones into a new profile `rawName`. The dashboard API can only clone
+    /// from `default`, so the UI gates Clone to the default row and this always
+    /// seeds from default.
+    func clone(newName rawName: String) async {
         if let message = validateNewName(rawName) {
             lastError = message
             banners?.surfaceError("profiles", message)
             return
         }
         let name = normalized(rawName)
-        let message: String?
-        if source == HermesProfiles.defaultProfileName {
-            message = await runWrite(
-                dashboard: { try await $0.createProfile(name: name, cloneFromDefault: true, noSkills: false) },
-                cli: { try await HermesProfiles.create(runner: $0, name: name, cloneFrom: HermesProfiles.defaultProfileName) }
-            )
-        } else {
-            guard let runner else {
-                let message = "Cloning a non-default profile requires the Hermes CLI."
-                lastError = message
-                banners?.surfaceError("profiles", message)
-                return
-            }
-            do {
-                try await HermesProfiles.create(runner: runner, name: name, cloneFrom: source)
-                message = nil
-            } catch {
-                message = error.localizedDescription
-            }
-        }
+        let message = await runWrite { try await $0.createProfile(name: name, cloneFromDefault: true, noSkills: false) }
         await finishWrite(message)
     }
 
@@ -140,10 +118,7 @@ final class ProfilesHarness {
             return
         }
         let name = normalized(rawName)
-        let message = await runWrite(
-            dashboard: { try await $0.renameProfile(name: original, newName: name) },
-            cli: { try await HermesProfiles.rename(runner: $0, from: original, to: name) }
-        )
+        let message = await runWrite { try await $0.renameProfile(name: original, newName: name) }
         await finishWrite(message)
     }
 
@@ -154,34 +129,21 @@ final class ProfilesHarness {
             banners?.surfaceError("profiles", message)
             return
         }
-        let message = await runWrite(
-            dashboard: { try await $0.deleteProfile(name: name) },
-            cli: { try await HermesProfiles.delete(runner: $0, name: name) }
-        )
+        let message = await runWrite { try await $0.deleteProfile(name: name) }
         await finishWrite(message)
     }
 
     // MARK: - Plumbing
 
-    /// Runs a write dashboard-first, falling back to the CLI when the dashboard
-    /// is absent or fails. On total failure surfaces the dashboard error (its
-    /// HTTP 400 `detail` is more informative than the CLI's stderr) when a
-    /// dashboard attempt was actually made. Returns nil on success.
+    /// Runs a write against the dashboard. Returns nil on success, the
+    /// dashboard error's description on failure (its HTTP 400 `detail` is the
+    /// informative message), or a "no dashboard" message when `client == nil`.
     private func runWrite(
-        dashboard: (DashboardClient) async throws -> Void,
-        cli: (HermesAdminRunning) async throws -> Void
+        _ dashboard: (DashboardClient) async throws -> Void
     ) async -> String? {
-        var dashboardError: Error?
-        if let client {
-            do { try await dashboard(client); return nil }
-            catch { dashboardError = error }
-        }
-        if let runner {
-            do { try await cli(runner); return nil }
-            catch { return (dashboardError ?? error).localizedDescription }
-        }
-        if let dashboardError { return dashboardError.localizedDescription }
-        return "No dashboard or CLI available to manage profiles."
+        guard let client else { return "No dashboard available to manage profiles." }
+        do { try await dashboard(client); return nil }
+        catch { return error.localizedDescription }
     }
 
     private func finishWrite(_ message: String?) async {
@@ -218,7 +180,6 @@ final class ProfilesHarness {
 
 struct ProfilesView: View {
     let client: DashboardClient?
-    let runner: HermesAdminRunning?
     let activeProfile: String
     let hermesVersion: HermesVersion?
     let onProfilesChanged: () -> Void
@@ -235,13 +196,11 @@ struct ProfilesView: View {
 
     init(
         client: DashboardClient?,
-        runner: HermesAdminRunning?,
         activeProfile: String = HermesProfiles.defaultProfileName,
         hermesVersion: HermesVersion? = nil,
         onProfilesChanged: @escaping () -> Void = {}
     ) {
         self.client = client
-        self.runner = runner
         self.activeProfile = activeProfile
         self.hermesVersion = hermesVersion
         self.onProfilesChanged = onProfilesChanged
@@ -269,7 +228,7 @@ struct ProfilesView: View {
         .task(id: client != nil) {
             guard let client else { harness = nil; return }
             if harness != nil { consumeFocus(harness: harness!); return }
-            let h = ProfilesHarness(client: client, runner: runner, onProfilesChanged: onProfilesChanged)
+            let h = ProfilesHarness(client: client, onProfilesChanged: onProfilesChanged)
             h.banners = banners
             harness = h
             await h.refresh()
@@ -391,7 +350,8 @@ struct ProfilesView: View {
             } label: {
                 Label("Clone", systemImage: "plus.square.on.square")
             }
-            .disabled(harness.selectionID == nil)
+            .disabled(!harness.canClone)
+            .help("Create a new profile from default")
             Button {
                 guard let profile = harness.selectedProfile else { return }
                 harness.beginRename(original: profile.name)
@@ -437,8 +397,8 @@ struct ProfilesView: View {
                 ),
                 onSave: { draft in
                     switch draft.mode {
-                    case let .clone(source):
-                        Task { await harness.clone(source: source, newName: draft.newName) }
+                    case .clone:
+                        Task { await harness.clone(newName: draft.newName) }
                     case let .rename(original):
                         Task { await harness.rename(from: original, to: draft.newName) }
                     }

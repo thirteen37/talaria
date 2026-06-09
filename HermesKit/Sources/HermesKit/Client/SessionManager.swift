@@ -33,6 +33,13 @@ public actor SessionManager {
     private struct ActiveSession {
         let client: any ChatBackend
         let cwd: String
+        /// Identifies this specific registration. The pump task captures it and
+        /// every fan-out/finish re-checks it against the live session, so a
+        /// lingering pump from a since-closed backend (whose cooperative
+        /// cancellation hasn't taken effect yet) can never write into a *newer*
+        /// session that was re-opened under the same id — the iOS reconnect path
+        /// (close → re-`openExisting`) does exactly that.
+        let epoch: UUID
         var subscribers: [UUID: AsyncStream<HermesNotification>.Continuation] = [:]
         var pumpTask: Task<Void, Never>?
         /// Notifications that arrived while no subscriber was attached.
@@ -175,29 +182,34 @@ public actor SessionManager {
     }
 
     private func register(client: any ChatBackend, sessionId: SessionId, cwd: String) {
-        var active = ActiveSession(client: client, cwd: cwd)
+        let epoch = UUID()
+        var active = ActiveSession(client: client, cwd: cwd, epoch: epoch)
         active.pumpTask = Task { [weak self] in
-            await self?.pump(sessionId: sessionId, notifications: client.notifications)
+            await self?.pump(sessionId: sessionId, epoch: epoch, notifications: client.notifications)
         }
         sessions[sessionId] = active
     }
 
     private func pump(
         sessionId: SessionId,
+        epoch: UUID,
         notifications: AsyncThrowingStream<HermesNotification, Error>
     ) async {
         do {
             for try await notification in notifications {
-                fanOut(sessionId: sessionId, notification: notification)
+                fanOut(sessionId: sessionId, epoch: epoch, notification: notification)
             }
         } catch {
             // Notification stream ended — fall through to finish subscribers.
         }
-        finishSubscribers(sessionId: sessionId)
+        finishSubscribers(sessionId: sessionId, epoch: epoch)
     }
 
-    private func fanOut(sessionId: SessionId, notification: HermesNotification) {
-        guard var active = sessions[sessionId] else {
+    private func fanOut(sessionId: SessionId, epoch: UUID, notification: HermesNotification) {
+        // Ignore a stale pump still draining a closed backend: if this id was
+        // re-opened, the live session carries a different epoch and must not
+        // inherit the dead session's notifications.
+        guard var active = sessions[sessionId], active.epoch == epoch else {
             return
         }
         // Always buffer for replay so a late subscriber (e.g. a chat tab
@@ -214,8 +226,10 @@ public actor SessionManager {
         sessions[sessionId] = active
     }
 
-    private func finishSubscribers(sessionId: SessionId) {
-        guard var active = sessions[sessionId] else {
+    private func finishSubscribers(sessionId: SessionId, epoch: UUID) {
+        // Same stale-pump guard as `fanOut`: a dead backend's pump ending must
+        // not finish the subscribers of a session re-opened under this id.
+        guard var active = sessions[sessionId], active.epoch == epoch else {
             return
         }
         for (_, continuation) in active.subscribers {
