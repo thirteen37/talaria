@@ -170,7 +170,7 @@ struct SessionsSidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowBackground(store.selection == session.id ? Color.accentColor.opacity(0.15) : Color.clear)
+        .listRowBackground(rowBackground(for: session))
         .onHover { hovering in
             if hovering {
                 hoveredSessionId = session.id
@@ -191,6 +191,23 @@ struct SessionsSidebar: View {
                 Task { await store.deleteSession(session.id) }
             }
         }
+    }
+
+    /// Unselected row background. iOS wraps this sidebar in a grouped `List`
+    /// whose section background is grey; `Color.clear` would let that grey show
+    /// through, leaving session rows grey while the unstyled "New session" row
+    /// stays white. Match the grouped white cell color on iOS so the Chat list
+    /// reads as one consistent white card. macOS uses a sidebar list style where
+    /// `.clear` correctly shows the sidebar material.
+    private func rowBackground(for session: SessionsStore.OpenSession) -> Color {
+        if store.selection == session.id {
+            return Color.accentColor.opacity(0.15)
+        }
+        #if os(iOS)
+        return Color(uiColor: .secondarySystemGroupedBackground)
+        #else
+        return Color.clear
+        #endif
     }
 
     private func statusColor(for id: SessionId) -> Color {
