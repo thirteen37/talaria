@@ -168,6 +168,31 @@ final class LocalChatViewModel {
         }
     }
 
+    /// Re-subscribes after a reconnect re-resumed this session on a fresh
+    /// manager session. When the previous WebSocket died the old notification
+    /// stream finished and `notificationTask` exited permanently; clear it and
+    /// re-`start()`, which re-attaches to the new session (whose
+    /// `SessionManager.addSubscriber` replays any buffered history). Clears
+    /// `hasError` so a stale "connection lost" notice doesn't linger.
+    func restart() async {
+        guard !isReadOnly else {
+            return
+        }
+        notificationTask?.cancel()
+        notificationTask = nil
+        hasError = false
+        await start()
+    }
+
+    /// Marks this session lost after a reconnect found no resumable server-side
+    /// session to re-attach to (a brand-new chat the gateway never persisted).
+    /// Surfaces an inline notice *without* blanking `messages`, so whatever the
+    /// user had on screen stays readable.
+    func markConnectionLost() {
+        hasError = true
+        statusText = "Connection lost — start a new chat to continue."
+    }
+
     func sendPrompt() async {
         guard !isReadOnly else {
             return

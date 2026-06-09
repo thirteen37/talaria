@@ -167,6 +167,8 @@ extension ServerWindowHarness {
     }
 
     func tearDown() {
+        recoveryTask?.cancel()
+        recoveryTask = nil
         if dashboardStarted, !dashboardReleased {
             dashboardReleased = true
             // Same chained-release reasoning as macOS, but the supervisor lives
