@@ -85,6 +85,17 @@ final class ServerWindowHarness {
     /// and before the dashboard is up.
     var chatTunnelBox: GatewayChatTunnelBox?
 
+    /// True while a connection recovery is in flight — the manual Reconnect
+    /// button and the iOS background→foreground auto-probe share it. A second
+    /// trigger (a tap during an in-flight recovery, or a duplicate resume event)
+    /// is a no-op, so the dashboard is never double-spawned and the
+    /// "Reconnecting…" banner shows once. Declared here (extensions can't add
+    /// stored properties) but only the recovery paths populate it.
+    var isRecovering = false
+    /// The in-flight recovery task. Stored so it's reachable for cancellation;
+    /// the iOS background-resume path and the manual button both assign it.
+    var recoveryTask: Task<Void, Never>?
+
     /// The version every capability banner should gate on: the **live**
     /// dashboard status version when known, else the profile's cached probe
     /// version. The cached value is captured once at probe time and never
@@ -172,19 +183,81 @@ final class ServerWindowHarness {
     /// is genuinely rebuilt. Manual, not an auto-loop: against a still-untrusted
     /// host on macOS an auto-retry would spin forever, so the user taps Reconnect
     /// once the cause is cleared. No-op once the window has released its
-    /// dashboard.
+    /// dashboard, or while a recovery is already in flight (the in-flight one
+    /// already rebuilds and re-resumes — a second tap would only double-spawn).
+    /// Routes through ``performRecovery()`` (no liveness probe — the user tapped
+    /// because something is wrong), which re-acquires the dashboard *and*
+    /// re-resumes open live chats so a manual reconnect no longer leaves the
+    /// open chat tabs dead.
     func reconnectDashboard() {
-        guard !dashboardReleased else { return }
+        guard !dashboardReleased, !isRecovering else { return }
+        recoveryTask = Task { [weak self] in
+            await self?.performRecovery()
+        }
+    }
+
+    /// iOS / iPad background→foreground hook: probe the dashboard, and rebuild
+    /// the connection **only if the probe fails** (the single SSH tunnel died or
+    /// went half-open while the app was suspended). A live connection is left
+    /// untouched, so a brief app-switch costs one cheap `/api/status` round-trip
+    /// and never tears the session down. No-op before the dashboard has started,
+    /// after it's released, or while a recovery is already running. The macOS
+    /// `onResumeFromBackground` seam is a no-op, so this only fires on iOS/iPad.
+    func recoverConnectionIfNeeded() {
+        guard dashboardStarted, !dashboardReleased, !isRecovering else { return }
+        recoveryTask = Task { [weak self] in
+            guard let self else { return }
+            if await self.isDashboardAlive() { return }
+            await self.performRecovery()
+        }
+    }
+
+    /// Races a `GET /api/status` round-trip against a short deadline. A half-open
+    /// SSH tunnel would otherwise hang until ``NIOSSHDashboardConnection``'s 30s
+    /// request timeout; ``SessionsStore/withTimeout(_:isPaused:_:)`` cancels far
+    /// sooner. Returns false on any throw, timeout, or missing client.
+    func isDashboardAlive(timeout: TimeInterval = 4) async -> Bool {
+        guard let client = dashboardClient else { return false }
+        do {
+            _ = try await SessionsStore.withTimeout(timeout) {
+                try await client.getStatus()
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Rebuilds the dashboard connection and re-resumes open live chats, behind
+    /// the shared ``isRecovering`` guard and a persistent "Reconnecting…" banner.
+    /// Force-tears the current supervisor down (so the dead/half-open SSH tunnel
+    /// is genuinely replaced), re-acquires (refilling `dashboardClient` and, on
+    /// iOS, `chatTunnelBox`), and — if the client came back —
+    /// ``SessionsStore/recoverLiveSessions()`` re-resumes the open tabs over the
+    /// fresh tunnel. On failure, `acquireDashboard()` has already set
+    /// `dashboardError`, which the banner bridge turns into the red error banner
+    /// with the manual Reconnect action — graceful degradation, no new failure UI.
+    /// Re-entrant-safe: a second call while one is in flight returns immediately.
+    func performRecovery() async {
+        guard !isRecovering else { return }
+        isRecovering = true
+        defer { isRecovering = false }
+        banners.info("Reconnecting…", key: "reconnect", persist: true)
+        defer { banners.dismiss(key: "reconnect") }
+
         dashboardTask?.cancel()
-        dashboardError = nil
-        startupPhase = nil
         let previous = dashboardSupervisor
         dashboardSupervisor = nil
         dashboardClient = nil
         store.dashboardClient = nil
-        dashboardTask = Task { [weak self] in
-            if let previous { await self?.forceReleaseDashboardSupervisor(previous) }
-            await self?.acquireDashboard()
+        dashboardError = nil
+        startupPhase = nil
+        if let previous {
+            await forceReleaseDashboardSupervisor(previous)
+        }
+        await acquireDashboard()
+        if dashboardClient != nil {
+            await store.recoverLiveSessions()
         }
     }
 

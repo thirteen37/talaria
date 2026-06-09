@@ -54,43 +54,59 @@ enum LogConsole {
 /// On-screen log viewer. Pull-to-refresh-free; an explicit Refresh button
 /// reloads, and Copy puts the whole transcript on the pasteboard so it can be
 /// shared from the device.
+///
+/// `onDismiss` is nil when the view is embedded (e.g. the Browse → System
+/// "App Logs" tab); the toolbar then omits its Done button. Pass a closure only
+/// when presenting it modally.
 struct LogConsoleView: View {
-    var onDismiss: () -> Void
+    var onDismiss: (() -> Void)? = nil
 
     @State private var entries: [LogConsole.Entry] = []
     @State private var isLoading = false
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if entries.isEmpty {
-                    ContentUnavailableView(
-                        isLoading ? "Loading…" : "No logs yet",
-                        systemImage: "doc.text.magnifyingglass"
-                    )
-                } else {
-                    List(entries) { entry in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.message)
-                                .font(.system(.caption, design: .monospaced))
-                                .textSelection(.enabled)
-                            Text("\(entry.category) · \(entry.level) · \(entry.date.formatted(date: .omitted, time: .standard))")
-                                .font(.caption2)
-                                .foregroundStyle(entry.level == "error" || entry.level == "fault" ? .red : .secondary)
-                        }
-                    }
-                    .listStyle(.plain)
-                }
-            }
-            .navigationTitle("Logs")
-            .inlineNavigationTitle()
-            .logConsoleToolbar(
-                onCopy: { copyAll() },
-                onRefresh: { Task { await reload() } },
-                onDismiss: onDismiss
-            )
-            .task { await reload() }
+        // Modal presentation owns its navigation chrome, so wrap in a
+        // NavigationStack. When embedded (e.g. the Browse → System "App Logs"
+        // tab) the host already provides one — wrapping again would nest a
+        // second navigation bar inside it, so render bare and let the title +
+        // Copy/Refresh toolbar attach to the host's bar like the sibling tabs.
+        if onDismiss != nil {
+            NavigationStack { content }
+        } else {
+            content
         }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        Group {
+            if entries.isEmpty {
+                ContentUnavailableView(
+                    isLoading ? "Loading…" : "No logs yet",
+                    systemImage: "doc.text.magnifyingglass"
+                )
+            } else {
+                List(entries) { entry in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.message)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                        Text("\(entry.category) · \(entry.level) · \(entry.date.formatted(date: .omitted, time: .standard))")
+                            .font(.caption2)
+                            .foregroundStyle(entry.level == "error" || entry.level == "fault" ? .red : .secondary)
+                    }
+                }
+                .listStyle(.plain)
+            }
+        }
+        .navigationTitle("Logs")
+        .inlineNavigationTitle()
+        .logConsoleToolbar(
+            onCopy: { copyAll() },
+            onRefresh: { Task { await reload() } },
+            onDismiss: onDismiss
+        )
+        .task { await reload() }
     }
 
     private func reload() async {

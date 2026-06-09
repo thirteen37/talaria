@@ -42,14 +42,26 @@ final class ChatNavigationUITests: XCTestCase {
         )
     }
 
-    /// The log console (ladybug) opens and shows the Logs view.
+    /// The app log console now lives under Browse → System → App Logs (the
+    /// toolbar ladybug entry was removed). Drilling in shows the Logs view.
     func testLogConsoleOpens() {
         let app = launchApp()
         XCTAssertTrue(app.buttons["New session"].waitForExistence(timeout: 10))
-        app.buttons["Logs"].tap()
+        app.buttons["Browse"].tap()
+        XCTAssertTrue(
+            app.navigationBars["Browse"].waitForExistence(timeout: 5),
+            "Browse sheet did not appear"
+        )
+        app.buttons["System"].tap()
+        let appLogsTab = app.buttons["App Logs"]
+        XCTAssertTrue(
+            appLogsTab.waitForExistence(timeout: 5),
+            "App Logs tab did not appear in the System surface"
+        )
+        appLogsTab.tap()
         XCTAssertTrue(
             app.navigationBars["Logs"].waitForExistence(timeout: 5),
-            "Log console sheet did not appear"
+            "App log console did not appear after selecting the App Logs tab"
         )
     }
 

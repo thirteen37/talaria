@@ -429,6 +429,77 @@ final class SessionsStore {
         vm.replaceTranscript(with: history)
     }
 
+    /// Re-establishes open live chat tabs after the dashboard tunnel was rebuilt
+    /// (the iOS background→foreground reconnect, or a manual Reconnect). The old
+    /// `/api/ws` WebSocket died with the previous tunnel, so each `.acp` tab's
+    /// manager session is dead — its notification stream finished and the
+    /// underlying client is gone. For every editable live tab this tears the dead
+    /// session down, re-resumes over the fresh tunnel, re-seeds history, and
+    /// re-subscribes the view model. Read-only `.acp` tabs (no manager) and
+    /// `.tui` tabs are skipped; a tab the dashboard no longer has (an unpersisted
+    /// new chat) is marked lost rather than re-resumed. No-op without a dashboard.
+    func recoverLiveSessions() async {
+        guard dashboardClient != nil else { return }
+        // Snapshot up front: the loop awaits, and close/openExisting mutate
+        // `openSessions` underneath us.
+        let liveTabs = openSessions.filter { $0.kind == .acp }
+        for tab in liveTabs {
+            let id = tab.id
+            guard let vm = viewModels[id], !vm.isReadOnly else { continue }
+
+            // 1. Tear down the dead manager session (the step the manual
+            //    reconnect used to skip, leaving the tab permanently dead).
+            statusTasks[id]?.cancel()
+            statusTasks[id] = nil
+            await manager.close(id: id)
+
+            // 2. Only sessions the gateway persisted are resumable. `openExisting`
+            //    tabs always are (their id is the stored id); a brand-new chat is
+            //    resumable iff the gateway already wrote it.
+            guard await dashboardHasSession(id) else {
+                vm.markConnectionLost()
+                continue
+            }
+
+            // 3. Re-resume live over the fresh tunnel.
+            do {
+                _ = try await Self.withTimeout(Self.openTimeout, isPaused: isAwaitingUserInput) {
+                    try await self.manager.openExisting(id: id, cwd: tab.cwd)
+                }
+            } catch {
+                AppLog.session.error("recoverLiveSessions: re-resume failed for \(id, privacy: .public): \(String(describing: error), privacy: .public)")
+                vm.markConnectionLost()
+                continue
+            }
+
+            // 4. Re-seed the transcript from the dashboard's authoritative list.
+            //    Replace, never blank: a failed/empty fetch leaves history visible.
+            let history = await liveHistory(for: id)
+            if !history.isEmpty {
+                vm.replaceTranscript(with: history)
+            }
+
+            // 5. Re-attach the store's status task and re-subscribe the VM.
+            attachStatus(id: id)
+            await vm.restart()
+        }
+    }
+
+    /// Whether the dashboard still has a row for `id` — i.e. the session
+    /// persisted server-side and can be re-resumed after a reconnect. A thrown
+    /// error (404 for an unpersisted new chat, or any transient failure) counts
+    /// as "no", so the caller marks the tab lost rather than re-resuming a
+    /// session that isn't there.
+    private func dashboardHasSession(_ id: SessionId) async -> Bool {
+        guard let dashboardClient else { return false }
+        do {
+            _ = try await dashboardClient.sessionDetail(id: id)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     private func openReadOnly(_ summary: HermesSessionSummary, source: String) async throws {
         guard let dashboardClient else {
             lastError = "Dashboard not reachable"
