@@ -1,17 +1,20 @@
 import SwiftUI
 
-// iOS toolbar layout for `LogConsoleView`: Done on the leading edge, icon
-// buttons for Copy/Refresh trailing. Mirror of `System/macOS/`.
+// iOS toolbar layout for `LogConsoleView`: Done on the leading edge (only when
+// presented modally), icon buttons for Copy/Refresh trailing. Mirror of
+// `System/macOS/`.
 extension View {
     func logConsoleToolbar(
         onCopy: @escaping () -> Void,
         onRefresh: @escaping () -> Void,
-        onDismiss: @escaping () -> Void
+        onDismiss: (() -> Void)?
     ) -> some View {
         toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("Done", action: onDismiss)
-                    .help("Close")
+            if let onDismiss {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done", action: onDismiss)
+                        .help("Close")
+                }
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button(action: onCopy) {
