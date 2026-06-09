@@ -155,11 +155,32 @@ struct PlatformSplit<Primary: View, Secondary: View>: View {
     }
 
     var body: some View {
-        HSplitView {
-            primary()
-            if showsSecondary { secondary() }
+        // Honor the inherited top safe-area inset (window toolbar + the
+        // window-center banner strip hosted on the detail-column root, plus any
+        // stacked `manageBanner`). The detail root applies the strip via
+        // `safeAreaInset(.top)`, which clears the translucent toolbar but does
+        // not shrink the `HSplitView`'s layout region — so a top-left `Table`
+        // (an NSScrollView with a floating header) would render at y=0 *under*
+        // the strip. Reading the cumulative inset here and converting it to
+        // explicit top padding — while opting the container out of the
+        // OS-managed top inset so the manual padding owns the offset — starts
+        // the panes below the strip instead of behind it.
+        //
+        // The `GeometryReader` must *not* ignore the safe area itself: doing so
+        // collapses its reported `safeAreaInsets.top` to 0 (the reader expands
+        // into the region it would otherwise be inset by), which would make the
+        // padding a no-op. So the reader keeps the inset and only the inner
+        // `HSplitView` opts out of the container inset, after the padding.
+        GeometryReader { proxy in
+            let topInset = proxy.safeAreaInsets.top
+            HSplitView {
+                primary()
+                if showsSecondary { secondary() }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.top, topInset)
+            .ignoresSafeArea(.container, edges: .top)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
