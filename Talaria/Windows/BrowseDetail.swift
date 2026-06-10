@@ -38,6 +38,9 @@ struct BrowseDetailView: View {
             ProfilesView(
                 client: harness.dashboardClient,
                 runner: harness.store.adminRunner,
+                profile: harness.profile,
+                snapshotTransfer: harness.snapshotTransfer,
+                hostShell: harness.hostShell,
                 activeProfile: activeHermesProfile,
                 hermesVersion: harness.effectiveHermesVersion,
                 onProfilesChanged: onProfilesChanged

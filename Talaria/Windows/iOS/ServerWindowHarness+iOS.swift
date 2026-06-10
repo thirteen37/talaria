@@ -44,6 +44,14 @@ extension ServerWindowHarness {
             hostKeyStore: hostKeyStore,
             hostKeyConfirmer: confirmer
         )
+        // Distribution Publish/Export git + archive work on the remote host,
+        // over the same NIO-SSH auth/trust wiring as the snapshot transfer.
+        let hostShell = RemoteCommandHostShell(runner: NIOSSHCommandRunner(
+            profile: profile,
+            credentialProvider: credentialProvider,
+            hostKeyStore: hostKeyStore,
+            hostKeyConfirmer: confirmer
+        ))
         // Cross-platform NIO admin runner over `exec`. Shares the window's
         // host-key trust + identity wiring so Tools/Doctor/Profiles connect on
         // the same auth policy as the chat transport (and don't re-prompt for a
@@ -73,6 +81,7 @@ extension ServerWindowHarness {
             profile: profile,
             hermesProfileName: hermesProfileName,
             snapshotTransfer: snapshotTransfer,
+            hostShell: hostShell,
             hostKeyCoordinator: hostKeyCoordinator
         )
         harness.chatTunnelBox = tunnelBox
