@@ -283,6 +283,8 @@ extension ServerWindowHarness {
         for session in store.openSessions where session.kind == .tui {
             HermesTerminalRegistry.shared.terminate(session.id)
         }
+        recoveryTask?.cancel()
+        recoveryTask = nil
         if dashboardStarted, !dashboardReleased {
             dashboardReleased = true
             // Chain release behind the acquire task. Cancelling it doesn't stop

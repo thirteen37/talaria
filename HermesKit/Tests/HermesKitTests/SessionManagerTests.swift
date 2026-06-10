@@ -115,6 +115,47 @@ struct SessionManagerTests {
     }
 
     @Test
+    func reopenAfterStreamEndsReplaysHistoryToNewSubscriber() async throws {
+        // The iOS reconnect path: when the WebSocket dies, the backend's
+        // notification stream finishes, SessionsStore calls `close`, then
+        // re-resumes via `openExisting` over the fresh tunnel. The new
+        // subscriber must see the *new* backend's buffered history (the prior
+        // dead session is gone, not replayed).
+        let scripter = BackendScripter()
+        let manager = SessionManager(backendFactory: { await scripter.next() })
+
+        _ = try await manager.openExisting(id: "sess", cwd: "/tmp")
+        let first = try await scripter.waitForBackend(at: 0)
+        // Simulate the socket dying, then SessionsStore tearing the dead session
+        // down. After close the old client/subscribers are gone.
+        first.emit(.sessionUpdate(SessionNotification(
+            sessionId: "sess",
+            update: .agentMessageChunk(Content(content: .text("pre-death")))
+        )))
+        await manager.close(id: "sess")
+        #expect(await manager.client(for: "sess") == nil)
+
+        // Re-resume over a fresh backend (the rebuilt tunnel).
+        _ = try await manager.openExisting(id: "sess", cwd: "/tmp")
+        let second = try await scripter.waitForBackend(at: 1)
+        #expect(second !== first)
+        let recovered = SessionNotification(
+            sessionId: "sess",
+            update: .agentMessageChunk(Content(content: .text("recovered history")))
+        )
+        second.emit(.sessionUpdate(recovered))
+        // Let the pump buffer it into the fresh session's replay.
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let stream = await manager.notifications(for: "sess")
+        var iterator = stream.makeAsyncIterator()
+        let received = await iterator.next()
+        #expect(received == .sessionUpdate(recovered))
+
+        await manager.close(id: "sess")
+    }
+
+    @Test
     func closeFinishesSubscribersAndDropsClient() async throws {
         let scripter = BackendScripter(newSessionId: "sess")
         let manager = SessionManager(backendFactory: { await scripter.next() })

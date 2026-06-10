@@ -302,7 +302,7 @@ struct DesktopServerWindow: View {
         }
         // Track this window's foreground state (to gate notifications) and
         // consume a tapped-notification route addressed to this profile.
-        .chatNotificationRouting(store: harness.store, profileId: harness.profile.id)
+        .chatNotificationRouting(harness: harness)
         // Bridges session/dashboard errors + the web-UI progress note from the
         // sidebar into the center, and publishes the center so detail surfaces
         // emit save successes here. The visible strip is hosted over the detail

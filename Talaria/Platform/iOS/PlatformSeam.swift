@@ -88,6 +88,16 @@ extension View {
         background(WindowForegroundReader(report: report))
     }
 
+    /// Fires `action` when the app returns from a real backgrounding (a
+    /// `.background` → `.active` round-trip), so the window can probe and, if
+    /// needed, rebuild its suspended SSH connection. A bare `.inactive` blip
+    /// (control center, app-switcher peek) never fires it. macOS has a no-op
+    /// mirror — desktop connections don't suspend on background — so the shared
+    /// call site (`chatNotificationRouting`) compiles `#if`-free.
+    func onResumeFromBackground(_ action: @escaping () -> Void) -> some View {
+        background(BackgroundResumeReader(action: action))
+    }
+
     /// Gear toolbar item that opens the profile editor (there's no `Settings`
     /// scene on iOS, so the desktop window surfaces editing itself on iPad).
     func platformSettingsToolbarItem(action: @escaping () -> Void) -> some View {
@@ -203,5 +213,22 @@ private struct WindowForegroundReader: View {
         Color.clear
             .onAppear { report(isForeground) }
             .onChange(of: scenePhase) { _, _ in report(isForeground) }
+    }
+}
+
+/// Watches `scenePhase` and fires `action` on a real background→foreground
+/// round-trip, gated by ``BackgroundResumeLatch`` so a transient `.inactive`
+/// blip never triggers it. Implemented as a background `View` to mirror
+/// `WindowForegroundReader`.
+private struct BackgroundResumeReader: View {
+    @Environment(\.scenePhase) private var scenePhase
+    let action: () -> Void
+    @State private var latch = BackgroundResumeLatch()
+
+    var body: some View {
+        Color.clear
+            .onChange(of: scenePhase) { _, phase in
+                if latch.note(phase) { action() }
+            }
     }
 }
