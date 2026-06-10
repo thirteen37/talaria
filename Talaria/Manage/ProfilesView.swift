@@ -45,8 +45,10 @@ final class ProfilesHarness {
     var busy = false
     /// A produced `.tar.gz` ready for the `.fileExporter` save panel, or nil.
     var pendingExport: ExportPayload?
-    /// Last success summary (install/update/import/publish stdout), shown as a
-    /// transient info line. Cleared when a new action starts.
+    /// Result of an in-pane manifest action (Save / Publish stdout), rendered in
+    /// the manifest editor's Result section. Menu/form actions (install / update
+    /// / import) confirm via a top-of-window success banner instead, so they
+    /// don't use this.
     var lastOutput: String?
 
     private let client: DashboardClient?
@@ -258,8 +260,13 @@ final class ProfilesHarness {
         infoLoading = true
         defer { infoLoading = false }
         do {
-            selectedInfo = try await HermesProfiles.info(runner: runner, name: name)
+            let info = try await HermesProfiles.info(runner: runner, name: name)
+            // Selection may have changed while info() was in flight (likely on a
+            // slow remote profile); don't paint a stale profile's manifest.
+            guard selectedProfile?.name == name else { return }
+            selectedInfo = info
         } catch {
+            guard selectedProfile?.name == name else { return }
             selectedInfo = nil
             lastError = error.localizedDescription
             banners?.surfaceError("profiles", error.localizedDescription)
@@ -274,10 +281,9 @@ final class ProfilesHarness {
             return
         }
         busy = true
-        lastOutput = nil
         defer { busy = false }
         do {
-            let summary = try await HermesProfiles.install(
+            _ = try await HermesProfiles.install(
                 runner: runner,
                 source: source,
                 name: draft.name.trimmingCharacters(in: .whitespaces),
@@ -285,11 +291,12 @@ final class ProfilesHarness {
                 force: draft.force
             )
             lastError = nil
-            lastOutput = summary.isEmpty ? "Installed distribution." : summary
             installDraft = nil
-            banners?.dismiss(key: "profiles")
             await refresh()
             onProfilesChanged()
+            // Menu/form actions have no in-pane result line, so confirm via the
+            // top-of-window success banner.
+            banners?.surfaceSuccess("profiles", "Installed distribution.")
         } catch {
             surface(error.localizedDescription)
         }
@@ -298,15 +305,13 @@ final class ProfilesHarness {
     func update(name: String, forceConfig: Bool) async {
         guard let runner else { return }
         busy = true
-        lastOutput = nil
         defer { busy = false }
         do {
-            let summary = try await HermesProfiles.update(runner: runner, name: name, forceConfig: forceConfig)
+            _ = try await HermesProfiles.update(runner: runner, name: name, forceConfig: forceConfig)
             lastError = nil
-            lastOutput = summary.isEmpty ? "Updated “\(name)”." : summary
-            banners?.dismiss(key: "profiles")
             await refresh()
             if viewingManifest { await loadInfo(name: name) }
+            banners?.surfaceSuccess("profiles", "Updated “\(name)”.")
         } catch {
             surface(error.localizedDescription)
         }
@@ -354,7 +359,6 @@ final class ProfilesHarness {
     func importArchive(data: Data, name: String?) async {
         guard let runner else { return }
         busy = true
-        lastOutput = nil
         defer { busy = false }
         do {
             let localTmp = FileManager.default.temporaryDirectory
@@ -362,23 +366,21 @@ final class ProfilesHarness {
             try data.write(to: localTmp, options: .atomic)
             defer { try? FileManager.default.removeItem(at: localTmp) }
 
-            let summary: String
             if profile.kind == .local {
-                summary = try await HermesProfiles.importArchive(runner: runner, archivePath: localTmp.path, name: name)
+                _ = try await HermesProfiles.importArchive(runner: runner, archivePath: localTmp.path, name: name)
             } else {
                 guard let transfer = resolvedTransfer() else {
                     throw HermesFileStoreError.transferUnavailable
                 }
                 let remoteTmp = "/tmp/talaria-import-\(UUID().uuidString).tar.gz"
                 try await transfer.upload(from: localTmp, to: remoteTmp)
-                summary = try await HermesProfiles.importArchive(runner: runner, archivePath: remoteTmp, name: name)
+                _ = try await HermesProfiles.importArchive(runner: runner, archivePath: remoteTmp, name: name)
                 _ = try? await hostShell?.runShell("rm -f \(ShellQuoting.shellQuote(remoteTmp))", workingDirectory: nil)
             }
             lastError = nil
-            lastOutput = summary.isEmpty ? "Imported distribution." : summary
-            banners?.dismiss(key: "profiles")
             await refresh()
             onProfilesChanged()
+            banners?.surfaceSuccess("profiles", "Imported distribution.")
         } catch {
             surface(error.localizedDescription)
         }
@@ -906,7 +908,6 @@ struct ProfilesView: View {
                     set: { harness.installDraft = $0 }
                 ),
                 busy: harness.busy,
-                lastOutput: harness.lastOutput,
                 onInstall: { Task { await harness.installDistribution() } },
                 onCancel: { harness.closeSecondary() }
             )
@@ -1135,7 +1136,6 @@ private func labeledField(_ label: String, text: Binding<String>, prompt: String
 private struct InstallFormView: View {
     @Binding var draft: InstallDraft
     let busy: Bool
-    let lastOutput: String?
     let onInstall: () -> Void
     let onCancel: () -> Void
 
@@ -1152,11 +1152,6 @@ private struct InstallFormView: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            }
-            if let lastOutput {
-                Section("Result") {
-                    Text(lastOutput).font(.caption.monospaced()).textSelection(.enabled)
-                }
             }
             HStack {
                 Button("Cancel", role: .cancel) { onCancel() }

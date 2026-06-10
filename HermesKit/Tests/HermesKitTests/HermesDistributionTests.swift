@@ -134,7 +134,7 @@ struct DistributionPublisherTests {
         #expect(script.contains("git init"))
         #expect(script.contains("git branch -M main"))
         #expect(script.contains("git remote add origin 'git@github.com:jane/x.git'"))
-        #expect(script.contains("git tag 'v1.0.0'"))
+        #expect(script.contains("git tag -f 'v1.0.0'"))
         #expect(script.contains("git push -u origin main --tags"))
         #expect(script.contains("git commit -m 'Initial publish'"))
     }
@@ -150,8 +150,47 @@ struct DistributionPublisherTests {
         #expect(!script.contains("git init"))
         #expect(script.contains("git remote set-url origin 'https://example.com/x.git'"))
         #expect(script.contains("git remote add origin 'https://example.com/x.git'"))
-        #expect(script.contains("git tag 'v2.0.0'"))
+        #expect(script.contains("git tag -f 'v2.0.0'"))
         #expect(script.contains("git push origin HEAD --tags"))
+    }
+
+    @Test
+    func scriptIsRetryableAfterFailedPush() {
+        for fresh in [true, false] {
+            let script = DistributionPublisher.script(
+                isFreshRepo: fresh,
+                remoteURL: "u",
+                version: "v1.0.0",
+                message: "Publish"
+            )
+            // Commit only when something is staged → retry doesn't hit "nothing to commit".
+            #expect(script.contains("git diff --cached --quiet || git commit -m 'Publish'"))
+            // Force-update the tag → retry doesn't hit "tag already exists".
+            #expect(script.contains("git tag -f 'v1.0.0'"))
+            #expect(!script.contains("git tag 'v1.0.0'"))
+        }
+    }
+
+    @Test
+    func scriptSetsCommitterIdentityOnlyWhenUnset() {
+        let script = DistributionPublisher.script(
+            isFreshRepo: true, remoteURL: "u", version: "v", message: "m"
+        )
+        // Set local identity only when the host resolves none (so commit doesn't
+        // fail on a fresh server / default ~/.hermes), without clobbering a
+        // configured identity.
+        #expect(script.contains("git config user.email >/dev/null 2>&1 || git config user.email 'hermes@localhost'"))
+        #expect(script.contains("git config user.name >/dev/null 2>&1 || git config user.name 'Hermes'"))
+    }
+
+    @Test
+    func scriptHonorsCustomCommitterIdentity() {
+        let script = DistributionPublisher.script(
+            isFreshRepo: true, remoteURL: "u", version: "v", message: "m",
+            committerName: "Jane Doe", committerEmail: "jane@example.com"
+        )
+        #expect(script.contains("git config user.email 'jane@example.com'"))
+        #expect(script.contains("git config user.name 'Jane Doe'"))
     }
 
     @Test

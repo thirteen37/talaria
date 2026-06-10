@@ -315,26 +315,42 @@ public enum DistributionPublisher {
     /// changed, tags, and pushes. `ownedPaths` extends the staged allowlist with
     /// the manifest's `distribution_owned` entries. Pure + deterministic for
     /// testing.
+    ///
+    /// The script is **retryable**: it sets a committer identity only when the
+    /// host has none (so a fresh server / default `~/.hermes` doesn't fail with
+    /// "Please tell me who you are"), commits only when something is staged, and
+    /// force-updates the tag — so after a failed `push` (auth/network) a second
+    /// Publish doesn't abort at `git commit` ("nothing to commit") or `git tag`
+    /// ("already exists").
     public static func script(
         isFreshRepo: Bool,
         remoteURL: String,
         version: String,
         message: String,
-        ownedPaths: [String] = []
+        ownedPaths: [String] = [],
+        committerName: String = "Hermes",
+        committerEmail: String = "hermes@localhost"
     ) -> String {
         let url = ShellQuoting.shellQuote(remoteURL)
         let tag = ShellQuoting.shellQuote(version)
         let msg = ShellQuoting.shellQuote(message)
         let ignore = ensureGitignoreCommand()
         let stage = stagingCommand(ownedPaths: ownedPaths)
+        let identity = ensureIdentityCommand(name: committerName, email: committerEmail)
+        // Commit only when something is staged, so a retry after a failed push
+        // (the commit already landed) doesn't abort with "nothing to commit".
+        let commit = "{ git diff --cached --quiet || git commit -m \(msg); }"
+        // -f so re-tagging after a failed push doesn't fail with "already exists".
+        let tagCmd = "git tag -f \(tag)"
         if isFreshRepo {
             return [
                 "git init",
+                identity,
                 ignore,
                 stage,
-                "git commit -m \(msg)",
+                commit,
                 "git branch -M main",
-                "git tag \(tag)",
+                tagCmd,
                 "git remote add origin \(url)",
                 "git push -u origin main --tags",
             ].joined(separator: " && ")
@@ -343,13 +359,25 @@ public enum DistributionPublisher {
         let ensureRemote = "if git remote get-url origin >/dev/null 2>&1; "
             + "then git remote set-url origin \(url); else git remote add origin \(url); fi"
         return [
+            identity,
             ignore,
             stage,
-            "git commit -m \(msg)",
-            "git tag \(tag)",
+            commit,
+            tagCmd,
             ensureRemote,
             "git push origin HEAD --tags",
         ].joined(separator: " && ")
+    }
+
+    /// Sets a **local** committer identity only when none resolves from the
+    /// host's git config — so a commit on a freshly-`init`ed repo doesn't fail
+    /// with "Please tell me who you are", while a host that already configured
+    /// `user.name`/`user.email` keeps its own identity.
+    static func ensureIdentityCommand(name: String, email: String) -> String {
+        let quotedName = ShellQuoting.shellQuote(name)
+        let quotedEmail = ShellQuoting.shellQuote(email)
+        return "{ git config user.email >/dev/null 2>&1 || git config user.email \(quotedEmail); } && "
+            + "{ git config user.name >/dev/null 2>&1 || git config user.name \(quotedName); }"
     }
 
     /// Idempotently ensures every ``excludedPaths`` entry is present in the
