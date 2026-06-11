@@ -22,7 +22,7 @@ struct ProfilesHarnessTests {
         let http = ProfilesStubHTTP(responses: [
             .init(path: "/api/profiles", body: Self.profilesJSON),
         ])
-        let harness = ProfilesHarness(client: makeClient(http), onProfilesChanged: {})
+        let harness = ProfilesHarness(client: makeClient(http), runner: nil, profile: ProfileDirectory.localProfile, onProfilesChanged: {})
 
         await harness.refresh()
 
@@ -39,7 +39,7 @@ struct ProfilesHarnessTests {
             .init(path: "/api/profiles", statusCode: 500, body: Data("boom".utf8)),
         ])
         let banners = BannerCenter()
-        let harness = ProfilesHarness(client: makeClient(http), onProfilesChanged: {})
+        let harness = ProfilesHarness(client: makeClient(http), runner: nil, profile: ProfileDirectory.localProfile, onProfilesChanged: {})
         harness.banners = banners
 
         await harness.refresh()
@@ -56,7 +56,7 @@ struct ProfilesHarnessTests {
         let http = ProfilesStubHTTP(responses: [
             .init(path: "/api/profiles", body: Self.profilesJSON),
         ])
-        let harness = ProfilesHarness(client: makeClient(http), onProfilesChanged: {})
+        let harness = ProfilesHarness(client: makeClient(http), runner: nil, profile: ProfileDirectory.localProfile, onProfilesChanged: {})
 
         await harness.refresh()
 
@@ -79,7 +79,7 @@ struct ProfilesHarnessTests {
             .init(path: "/api/profiles", body: Self.okJSON),       // POST
             .init(path: "/api/profiles", body: Self.profilesJSON), // refresh GET
         ])
-        let harness = ProfilesHarness(client: makeClient(http), onProfilesChanged: {})
+        let harness = ProfilesHarness(client: makeClient(http), runner: nil, profile: ProfileDirectory.localProfile, onProfilesChanged: {})
 
         await harness.clone(newName: "newprofile")
 
@@ -100,7 +100,7 @@ struct ProfilesHarnessTests {
             .init(path: "/api/profiles/work", body: Self.okJSON),  // PATCH
             .init(path: "/api/profiles", body: Self.profilesJSON), // refresh GET
         ])
-        let harness = ProfilesHarness(client: makeClient(http), onProfilesChanged: {})
+        let harness = ProfilesHarness(client: makeClient(http), runner: nil, profile: ProfileDirectory.localProfile, onProfilesChanged: {})
 
         await harness.rename(from: "work", to: "office")
 
@@ -119,7 +119,7 @@ struct ProfilesHarnessTests {
             .init(path: "/api/profiles/work", body: Self.okJSON),  // DELETE
             .init(path: "/api/profiles", body: Self.profilesJSON), // refresh GET
         ])
-        let harness = ProfilesHarness(client: makeClient(http), onProfilesChanged: {})
+        let harness = ProfilesHarness(client: makeClient(http), runner: nil, profile: ProfileDirectory.localProfile, onProfilesChanged: {})
 
         await harness.delete(name: "work")
 

@@ -133,6 +133,7 @@ from a phone" and lose on native feel and offline integration.
 | Doctor / health diagnostics | ✅ (CLI) | 🟡 | ? | ✅ | ✅ + audit | 🟡 |
 | Updates (self-update) | ✅ Sparkle + Hermes | ✅ one-click | ✅ auto | ✅ | ✅ Sparkle | 🟡 |
 | Hermes profile clone / rename / delete | ✅ | 🟡 switch | ✅ multi-profile | ✅ | ✅ + export/import | ✅ presets |
+| Profile **distributions** (install / update / export / publish) | ✅ install·update·info·export·import·author·**publish to git** | ? | ? | ⬜ | 🟡 export/import (zip) | ? |
 | Usage insights / token cost analytics | ✅ tokens + cost | 🟡 | ✅ tokens + cost | ✅ | ✅ heatmaps | ✅ ledger |
 | Activity feed / tool-call log | ⬜ | 🟡 live tool activity | 🟡 tool progress | 🟡 | ✅ | ✅ |
 | Credential pools / rotation | ⬜ | ⬜ | ✅ pools | ⬜ | ✅ | ⬜ |
@@ -167,6 +168,22 @@ file browser that have no row here; fathah's app adds a "Hermes Office" 3D view.
   desktop sidebar and the iPhone Browse sheet.
 - **Kanban with full CRUD** (boards, tasks, links, comments, bulk ops, run logs,
   diagnostics) wired straight to the Hermes kanban plugin API.
+- **Full profile-distribution lifecycle — including authoring and publishing.**
+  Talaria takes a distribution all the way around the loop: **install** one from
+  a git URL or local dir, **update** (re-pull) it, view its **manifest**,
+  **export/import** a profile as a portable `.tar.gz`, **author** its
+  `distribution.yaml` in a form editor, and **publish** it to git (Talaria runs
+  `git init/add/commit/tag/push` on the host). Among the clients tracked here,
+  Scarf is the only other one that touches this area at all — and only as profile
+  **export/import** (zip), not git install or publish; the official and
+  third-party Hermes Desktop apps and hermes-workspace don't mention
+  distributions in their public material (so those cells are `?`, not confirmed
+  absences). And like every Talaria surface it works **identically on macOS and
+  iOS** and against a local or SSH-remote Hermes — the git/archive work runs on
+  whichever host the profile lives on, over the same transport everything else
+  uses. (These are CLI-driven: Hermes exposes no dashboard route for `profile
+  install/update/export/import`, so they ride the admin runner like the Skills
+  Hub mutations.)
 
 ## Where Talaria trails (honest gaps)
 
@@ -180,7 +197,10 @@ Several are tracked in `docs/roadmap.md` as deliberately deferred:
 ## Takeaway
 
 Pick **Talaria** if you want a focused, native-Mac (and soon iOS) client with a
-strict, documented boundary to Hermes and clean SSH remoting. Pick
+strict, documented boundary to Hermes and clean SSH remoting — and the fullest
+profile-**distribution** workflow here, from installing one off git to authoring
+its `distribution.yaml` and publishing it back (Scarf does profile export/import;
+the other GUIs don't document distribution support either way). Pick
 **[Scarf][scarf]** if you want the broadest native-Mac feature set today and
 don't mind it reading Hermes' database directly. Pick the **official [Hermes
 Desktop][hermes-desktop]** — Nous Research's own first-party app — if you want

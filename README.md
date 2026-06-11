@@ -4,6 +4,8 @@ Talaria is a native SwiftUI front-end for Hermes Agent — macOS today, with an 
 
 Talaria is one of several GUIs for Hermes Agent. Its distinguishing choice is its **integration boundary**: every surface goes through `hermes dashboard` — non-chat screens over its HTTP API, live chat over its `/api/ws` JSON-RPC gateway — so it never reads or writes Hermes' database or config files directly, and the same path works whether Hermes is local or remote over SSH. It's also fully native, signed, and notarized — not Electron, not a browser tab.
 
+It also manages the full **profile-distribution** lifecycle — install or update a distribution from a git URL, export/import a profile as a `.tar.gz`, author its `distribution.yaml`, and **publish it back to git** — on both macOS and iOS, local or remote. Among Hermes GUIs that's an unusually complete take: the closest, Scarf, does profile export/import but not git install or publish.
+
 See [`docs/comparison.md`](docs/comparison.md) for the full feature-by-feature breakdown against the official Hermes Desktop (and the unrelated third-party app of the same name), the built-in `hermes dashboard`, and the other Hermes front-ends.
 
 ## Screenshots
@@ -44,9 +46,9 @@ Talaria drives [Hermes Agent](https://github.com/NousResearch/hermes-agent). Ins
 
 This repository contains the dashboard-mode build:
 
-- `Talaria`: SwiftUI app (macOS, with a shared iOS target) — gateway chat (`/api/ws`) plus dashboard-backed Browse surfaces: Sessions, **Skills, Tools, MCP, Plugins** (one tabbed destination — MCP servers include add/edit, enable, connection test, and a Nous-approved install catalog), Cron, Kanban, Gateway, Hermes profiles, **Configuration** (the `config.yaml` editor and the `.env` Environment editor as two tabs), Soul, Personalities, Models, and **System** (Doctor, Updates, and Logs as three tabs). Chats can also be opened as the real Hermes TUI in an embedded terminal (macOS). The Browse sidebar is reorderable and pages can be hidden; a Settings screen holds Server Profiles, Sidebar Order, and Notifications. Optional OS-level chat notifications (agent-finished / tool-approval) and Sparkle auto-update.
+- `Talaria`: SwiftUI app (macOS, with a shared iOS target) — gateway chat (`/api/ws`) plus dashboard-backed Browse surfaces: Sessions, **Skills, Tools, MCP, Plugins** (one tabbed destination — MCP servers include add/edit, enable, connection test, and a Nous-approved install catalog), Cron, Kanban, Gateway, Hermes profiles (clone/rename/delete plus **profile distributions** — install/update from git, view manifest, export/import a `.tar.gz`, author `distribution.yaml`, and publish to git), **Configuration** (the `config.yaml` editor and the `.env` Environment editor as two tabs), Soul, Personalities, Models, and **System** (Doctor, Updates, and Logs as three tabs). Chats can also be opened as the real Hermes TUI in an embedded terminal (macOS). The Browse sidebar is reorderable and pages can be hidden; a Settings screen holds Server Profiles, Sidebar Order, and Notifications. Optional OS-level chat notifications (agent-finished / tool-approval) and Sparkle auto-update.
 - `HermesKit`: Swift package for the JSON-RPC chat-event model, the gateway WebSocket + NIO-SSH transport, dashboard HTTP client/supervisor, CLI fallbacks, profile models, and capability gates.
-- `docs`: architecture, security, release, integration coverage, dashboard API, competitor comparison, roadmap, and manual test-plan notes.
+- `docs`: architecture, security, release, integration coverage, dashboard API, [profile distributions & the `distribution.yaml` schema](docs/profile-distributions.md), competitor comparison, roadmap, and manual test-plan notes.
 
 ## Prerequisite: Hermes Agent
 
@@ -59,7 +61,7 @@ Hermes is the source of truth for everything Talaria renders — when behavior i
 
 - ACP behavior and live session protocol details.
 - Dashboard HTTP behavior for sessions, logs, skills, cron jobs, and updates.
-- CLI command surfaces that do not have dashboard routes yet: `hermes sessions rename`, `hermes tools enable/disable`, `hermes doctor`, and the Skills Hub mutations `hermes skills install/update/uninstall` (Skills Hub *search* reads the public Nous index over HTTP instead).
+- CLI command surfaces that do not have dashboard routes yet: `hermes sessions rename`, `hermes tools enable/disable`, `hermes doctor`, the Skills Hub mutations `hermes skills install/update/uninstall` (Skills Hub *search* reads the public Nous index over HTTP instead), and the profile-distribution commands `hermes profile install/update/info/export/import` (with `distribution.yaml` authored directly and git publish run on the host).
 - Version and capability gates for features that land after the MVP baseline.
 
 ## Development

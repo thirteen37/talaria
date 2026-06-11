@@ -74,7 +74,12 @@ extension ServerWindowHarness {
             profileId: profile.id,
             notifier: ChatNotifier.shared
         )
-        return ServerWindowHarness(store: store, profile: profile, hermesProfileName: hermesProfileName)
+        return ServerWindowHarness(
+            store: store,
+            profile: profile,
+            hermesProfileName: hermesProfileName,
+            hostShell: LocalHostShell()
+        )
     }
 
     static func makeRemote(
@@ -87,6 +92,11 @@ extension ServerWindowHarness {
         // falls back to `SFTPSubprocessTransfer`. (Live chat itself always rides
         // the dashboard `/api/ws` gateway, independent of this.)
         let snapshotTransfer: RemoteSnapshotTransfer?
+        // Drives distribution Publish/Export git + archive work on the host. On
+        // the NIO opt-in it shares the same auth/trust wiring as the snapshot
+        // transfer; on the default system-ssh path it execs over `/usr/bin/ssh`
+        // (the snapshot transfer is nil there and falls back to SFTP).
+        let hostShell: HostShellRunning
         let hostKeyCoordinator = HostKeyConfirmationCoordinator()
         if preferNIOSSHTransport() {
             let confirmer: HostKeyConfirmer = { host, port, fingerprint in
@@ -98,9 +108,16 @@ extension ServerWindowHarness {
                 hostKeyStore: defaultHostKeyStore(),
                 hostKeyConfirmer: confirmer
             )
+            hostShell = RemoteCommandHostShell(runner: NIOSSHCommandRunner(
+                profile: profile,
+                credentialProvider: FileIdentityProvider(),
+                hostKeyStore: defaultHostKeyStore(),
+                hostKeyConfirmer: confirmer
+            ))
         } else {
             // nil → HermesConfigReader falls back to SFTPSubprocessTransfer.
             snapshotTransfer = nil
+            hostShell = RemoteCommandHostShell(runner: SystemSSHCommandRunner(profile: profile))
         }
 
         // Live chat over the dashboard `/api/ws` gateway, which rides the
@@ -161,6 +178,7 @@ extension ServerWindowHarness {
             profile: profile,
             hermesProfileName: hermesProfileName,
             snapshotTransfer: snapshotTransfer,
+            hostShell: hostShell,
             hostKeyCoordinator: hostKeyCoordinator
         )
     }

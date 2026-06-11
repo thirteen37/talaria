@@ -33,6 +33,11 @@ final class ServerWindowHarness {
     /// e.g. Profiles' config comparison — so they honor the same auth + trust
     /// policy as Sessions/snapshot rather than hardcoding one transport.
     let snapshotTransfer: RemoteSnapshotTransfer?
+    /// Runs arbitrary shell on the host where the profile lives (local `/bin/sh`
+    /// on macOS, system-ssh or NIO-SSH remotely) — used by the Profiles screen's
+    /// distribution **Publish** flow to drive `git`. Built per-platform next to
+    /// `adminRunner`/`snapshotTransfer`; nil on the iOS local stub.
+    let hostShell: HostShellRunning?
     /// Drives the trust-on-first-use prompt for unknown SSH host keys. Always
     /// present for SSH profiles; nil for the bundled local profile.
     let hostKeyCoordinator: HostKeyConfirmationCoordinator?
@@ -111,12 +116,14 @@ final class ServerWindowHarness {
         profile: ServerProfile,
         hermesProfileName: String = HermesProfiles.defaultProfileName,
         snapshotTransfer: RemoteSnapshotTransfer? = nil,
+        hostShell: HostShellRunning? = nil,
         hostKeyCoordinator: HostKeyConfirmationCoordinator? = nil
     ) {
         self.store = store
         self.profile = profile
         self.hermesProfileName = hermesProfileName
         self.snapshotTransfer = snapshotTransfer
+        self.hostShell = hostShell
         self.hostKeyCoordinator = hostKeyCoordinator
         self.doctor = DoctorHarness(runner: store.adminRunner)
         self.updates = UpdatesHarness(runner: store.adminRunner)

@@ -49,6 +49,14 @@ public enum HermesCapability: String, CaseIterable, Codable, Sendable {
     /// the Skills screen still lists/toggles and still searches, but the
     /// Install/Update/Remove controls show a `capabilityBanner` warning.
     case skillsHub
+    /// `hermes profile install/update/info/export/import` — the profile
+    /// *distribution* affordances on the Profiles screen. Like ``skillsHub``
+    /// these have no dashboard route and run through the CLI-fallback admin
+    /// runner, so the gate is on the CLI surface, not the dashboard. Below it
+    /// the Profiles screen still clones/renames/deletes, but the distribution
+    /// menu shows a `capabilityBanner` warning. Runtime `commandUnavailable`
+    /// detection remains the real backstop.
+    case profileDistributions
 }
 
 public struct CapabilityTable: Sendable {
@@ -122,5 +130,12 @@ public struct CapabilityTable: Sendable {
         // this pin can be lowered if the exact CLI shape is re-verified on an
         // older build; pinned to the verified floor for now.
         .skillsHub: HermesVersion(major: 0, minor: 14, patch: 0),
+        // `hermes profile install/update/info/export/import` — verified
+        // non-interactive against hermes v0.15.1 (`-y` on install/update,
+        // `-o` on export, `--name` on install/import). The distribution
+        // machinery may have shipped earlier; this pin can be lowered if the
+        // exact CLI shape is re-verified on an older build. Pinned to the
+        // verified floor for now; runtime `commandUnavailable` is the backstop.
+        .profileDistributions: HermesVersion(major: 0, minor: 15, patch: 1),
     ]
 }
