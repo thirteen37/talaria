@@ -40,6 +40,10 @@ final class ProfilesHarness {
     /// The selected profile's parsed manifest (loaded on selection change).
     var selectedInfo: ProfileDistributionInfo?
     var infoLoading = false
+    /// Set when `loadInfo` fails (a read error, not the "not a distribution"
+    /// sentinel), so the manifest pane shows the failure rather than falsely
+    /// claiming the profile has no `distribution.yaml`.
+    var infoError: String?
     /// True while a distribution mutation (install/update/export/import/publish)
     /// is in flight, so the toolbar disables re-entry and shows progress.
     var busy = false
@@ -95,8 +99,6 @@ final class ProfilesHarness {
         return profiles.first { $0.id == id }
     }
 
-    /// Dashboard-first / CLI-fallback / default-degrade — the same ladder the
-    /// window uses to populate the sidebar switcher.
     /// The dashboard API can only clone from `default`, so cloning is offered
     /// only when the default profile is selected.
     var canClone: Bool {
@@ -209,15 +211,24 @@ final class ProfilesHarness {
     }
 
     private func loadManifest(name: String) async {
-        guard manifestEditor?.profileName == name else { return }
+        guard manifestEditor?.profileName == name, let runner else { return }
+        // The state `beginAuthorManifest` seeded. The read below makes SSH
+        // round-trips on a remote profile, so the editor may already be visible
+        // and edited by the time it returns — only adopt the on-disk manifest if
+        // the user hasn't touched the seeded form (or switched away).
+        let seeded = ManifestEditorState(profileName: name, fields: ManifestFields(name: name))
         do {
+            // Named profiles live in ~/.hermes/profiles/<name>/, not the default
+            // home, so resolve the profile's actual directory rather than reading
+            // `.profileRelative` against the window's (default) hermesHome.
+            let dir = try await HermesProfiles.profileDirectory(runner: runner, name: name)
             let text = try await HermesFileStore.read(
                 profile: profile,
-                location: .profileRelative(tail: "distribution.yaml"),
+                location: .resolved(path: manifestPath(in: dir)),
                 transfer: snapshotTransfer
             )
             let parsed = try DistributionManifest(parsingYAML: text)
-            guard manifestEditor?.profileName == name else { return }
+            guard manifestEditor == seeded else { return }
             var editor = ManifestEditorState(profileName: name, fields: ManifestFields(parsed))
             editor.version = parsed.version ?? ""
             manifestEditor = editor
@@ -240,9 +251,13 @@ final class ProfilesHarness {
             // slow remote profile); don't paint a stale profile's manifest.
             guard selectedProfile?.name == name else { return }
             selectedInfo = info
+            infoError = nil
         } catch {
             guard selectedProfile?.name == name else { return }
+            // A read failure — distinct from the "not a distribution" sentinel —
+            // so the pane shows the error rather than "no distribution.yaml".
             selectedInfo = nil
+            infoError = error.localizedDescription
             lastError = error.localizedDescription
             banners?.surfaceError("profiles", error.localizedDescription)
         }
@@ -318,9 +333,16 @@ final class ProfilesHarness {
                 let localTmp = FileManager.default.temporaryDirectory
                     .appendingPathComponent("talaria-export-\(UUID().uuidString).tar.gz")
                 defer { try? FileManager.default.removeItem(at: localTmp) }
-                try await transfer.fetch(remotePath: remoteTmp, to: localTmp)
-                data = try Data(contentsOf: localTmp)
-                _ = try? await hostShell?.runShell("rm -f \(ShellQuoting.shellQuote(remoteTmp))", workingDirectory: nil)
+                // Clean up the host temp on every path — a failed fetch/read must
+                // not leak it in the remote /tmp (defer can't await, so do/catch).
+                do {
+                    try await transfer.fetch(remotePath: remoteTmp, to: localTmp)
+                    data = try Data(contentsOf: localTmp)
+                } catch {
+                    await removeRemoteTemp(remoteTmp)
+                    throw error
+                }
+                await removeRemoteTemp(remoteTmp)
             }
             lastError = nil
             pendingExport = ExportPayload(document: TarGzDocument(data: data), filename: filename)
@@ -349,8 +371,15 @@ final class ProfilesHarness {
                 }
                 let remoteTmp = "/tmp/talaria-import-\(UUID().uuidString).tar.gz"
                 try await transfer.upload(from: localTmp, to: remoteTmp)
-                _ = try await HermesProfiles.importArchive(runner: runner, archivePath: remoteTmp, name: name)
-                _ = try? await hostShell?.runShell("rm -f \(ShellQuoting.shellQuote(remoteTmp))", workingDirectory: nil)
+                // Clean up the host temp on every path (a failed import must not
+                // leak it in the remote /tmp).
+                do {
+                    _ = try await HermesProfiles.importArchive(runner: runner, archivePath: remoteTmp, name: name)
+                } catch {
+                    await removeRemoteTemp(remoteTmp)
+                    throw error
+                }
+                await removeRemoteTemp(remoteTmp)
             }
             lastError = nil
             await refresh()
@@ -363,7 +392,7 @@ final class ProfilesHarness {
 
     /// Writes the edited manifest to the profile's `distribution.yaml`.
     func saveManifest() async {
-        guard let editor = manifestEditor else { return }
+        guard let editor = manifestEditor, let runner else { return }
         let manifest = editor.fields.toManifest()
         guard !manifest.name.trimmingCharacters(in: .whitespaces).isEmpty else {
             surface("The manifest needs a name.")
@@ -373,7 +402,8 @@ final class ProfilesHarness {
         lastOutput = nil
         defer { busy = false }
         do {
-            try await writeManifest(manifest)
+            let dir = try await HermesProfiles.profileDirectory(runner: runner, name: editor.profileName)
+            try await writeManifest(manifest, in: dir)
             lastError = nil
             markSaved()
             lastOutput = "Wrote distribution.yaml for “\(editor.profileName)”."
@@ -409,11 +439,13 @@ final class ProfilesHarness {
         lastOutput = nil
         defer { busy = false }
         do {
-            // Persist the in-form manifest before committing so the published
-            // commit reflects unsaved edits rather than a stale on-disk file.
-            try await writeManifest(manifest)
-            markSaved()
+            // Resolve the profile's actual home first, then persist the in-form
+            // manifest THERE before committing — so the published commit reflects
+            // unsaved edits and lands in the same directory git runs in (named
+            // profiles live in ~/.hermes/profiles/<name>/, not the default home).
             let directory = try await HermesProfiles.profileDirectory(runner: runner, name: editor.profileName)
+            try await writeManifest(manifest, in: directory)
+            markSaved()
             let output = try await DistributionPublisher.publish(
                 shell: hostShell,
                 directory: directory,
@@ -429,16 +461,22 @@ final class ProfilesHarness {
         }
     }
 
-    /// Encodes `manifest` and writes it to the profile's `distribution.yaml`
+    /// Encodes `manifest` and writes it to `distribution.yaml` in the resolved
+    /// profile `directory` (the parent of `hermes -p <name> config path`),
     /// through the same direct-file path the Memory editor uses.
-    private func writeManifest(_ manifest: DistributionManifest) async throws {
+    private func writeManifest(_ manifest: DistributionManifest, in directory: String) async throws {
         let yaml = try manifest.encodeYAML()
         try await HermesFileStore.write(
             yaml,
             profile: profile,
-            location: .profileRelative(tail: "distribution.yaml"),
+            location: .resolved(path: manifestPath(in: directory)),
             transfer: snapshotTransfer
         )
+    }
+
+    /// The `distribution.yaml` path inside a resolved profile home.
+    private func manifestPath(in directory: String) -> String {
+        (directory as NSString).appendingPathComponent("distribution.yaml")
     }
 
     /// Marks the active editor as saved, for the secondary pane's state.
@@ -456,6 +494,13 @@ final class ProfilesHarness {
         if profile.kind == .ssh { return SFTPSubprocessTransfer(profile: profile) }
         #endif
         return nil
+    }
+
+    /// Best-effort removal of a host temp file used to stage an export/import
+    /// archive. Called on both success and failure paths so a failed
+    /// fetch/import doesn't leak it in the remote `/tmp`.
+    private func removeRemoteTemp(_ path: String) async {
+        _ = try? await hostShell?.runShell("rm -f \(ShellQuoting.shellQuote(path))", workingDirectory: nil)
     }
 
     private func surface(_ message: String) {
@@ -882,6 +927,7 @@ struct ProfilesView: View {
             ManifestInfoView(
                 info: harness.selectedInfo,
                 loading: harness.infoLoading,
+                error: harness.infoError,
                 onAuthor: runner == nil ? nil : {
                     if let name = harness.selectedProfile?.name {
                         harness.beginAuthorManifest(name: name)
@@ -1135,6 +1181,9 @@ private struct InstallFormView: View {
 private struct ManifestInfoView: View {
     let info: ProfileDistributionInfo?
     let loading: Bool
+    /// Non-nil when the read failed (vs. the profile simply not being a
+    /// distribution), so the pane reports the error instead of "no manifest".
+    let error: String?
     /// Opens the author/publish editor for the viewed profile. nil hides the
     /// "Author one" affordance (e.g. no CLI runner).
     let onAuthor: (() -> Void)?
@@ -1143,6 +1192,12 @@ private struct ManifestInfoView: View {
         if loading {
             ProgressView("Reading manifest…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error {
+            ContentUnavailableView {
+                Label("Couldn’t read the manifest", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(error)
+            }
         } else if let info, info.isDistribution {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
