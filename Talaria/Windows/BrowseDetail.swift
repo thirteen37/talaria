@@ -35,14 +35,9 @@ struct BrowseDetailView: View {
                 hermesVersion: harness.effectiveHermesVersion
             )
         case .hermesProfiles:
-            ProfilesView(
-                client: harness.dashboardClient,
-                runner: harness.store.adminRunner,
-                profile: harness.profile,
-                snapshotTransfer: harness.snapshotTransfer,
-                hostShell: harness.hostShell,
+            ProfilesTabsView(
+                harness: harness,
                 activeProfile: activeHermesProfile,
-                hermesVersion: harness.effectiveHermesVersion,
                 onProfilesChanged: onProfilesChanged
             )
         case .profiles:

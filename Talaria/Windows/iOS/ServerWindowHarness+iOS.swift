@@ -57,14 +57,16 @@ extension ServerWindowHarness {
         // the same auth policy as the chat transport (and don't re-prompt for a
         // key the chat transport already trusted).
         // Scope outermost so Tools/Doctor run under the window's Hermes profile;
-        // `profile list` and the default profile stay unscoped.
+        // `profile list` and the default profile stay unscoped. The unscoped base
+        // is threaded onto the harness for cross-profile re-scoping.
+        let baseAdminRunner: any HermesAdminRunning = NIOSSHHermesAdminRunner(
+            profile: profile,
+            credentialProvider: credentialProvider,
+            hostKeyStore: hostKeyStore,
+            hostKeyConfirmer: confirmer
+        )
         let admin: any HermesAdminRunning = ProfileScopedHermesAdminRunner(
-            inner: NIOSSHHermesAdminRunner(
-                profile: profile,
-                credentialProvider: credentialProvider,
-                hostKeyStore: hostKeyStore,
-                hostKeyConfirmer: confirmer
-            ),
+            inner: baseAdminRunner,
             hermesProfileName: hermesProfileName
         )
         let store = SessionsStore(
@@ -82,7 +84,8 @@ extension ServerWindowHarness {
             hermesProfileName: hermesProfileName,
             snapshotTransfer: snapshotTransfer,
             hostShell: hostShell,
-            hostKeyCoordinator: hostKeyCoordinator
+            hostKeyCoordinator: hostKeyCoordinator,
+            baseAdminRunner: baseAdminRunner
         )
         harness.chatTunnelBox = tunnelBox
         return harness
