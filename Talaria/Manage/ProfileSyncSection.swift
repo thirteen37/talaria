@@ -69,10 +69,24 @@ final class ProfileSyncHarness {
     /// would push a strict subset of what the Config section's own button does).
     var curatedConfigOnly: Bool { Idiom.isPhone && !showAllConfigDifferences }
 
-    /// Profiles with a profile-level "Sync everything" in flight.
-    private(set) var pushingProfiles: Set<String> = []
+    /// In-flight profile-level pushes ("Sync everything" / "Sync all"), **reference
+    /// counted** — several can overlap on one profile (e.g. a "Sync all" started
+    /// while "Sync everything" runs), and a `Set` couldn't tell them apart: the
+    /// first to finish would clear membership and re-enable the button mid-sync.
+    /// Read via ``isPushingProfile(_:)``.
+    private(set) var pushingProfiles: [String: Int] = [:]
     /// Per-item push spinners, keyed by ``itemKey(_:profile:id:)``.
     private(set) var pushingItems: Set<String> = []
+
+    /// True while any profile-level push is in flight for `profile`.
+    func isPushingProfile(_ profile: String) -> Bool { (pushingProfiles[profile] ?? 0) > 0 }
+
+    private func beginProfilePush(_ profile: String) { pushingProfiles[profile, default: 0] += 1 }
+
+    private func endProfilePush(_ profile: String) {
+        let remaining = (pushingProfiles[profile] ?? 0) - 1
+        if remaining > 0 { pushingProfiles[profile] = remaining } else { pushingProfiles[profile] = nil }
+    }
 
     /// Bumped on every refresh so revealed env secrets re-mask (mirrors
     /// ``EnvironmentHarness``'s refresh token).
@@ -471,8 +485,8 @@ final class ProfileSyncHarness {
     func syncAllSkills(profile: String) async {
         let actions = (skillsDrift[profile]?.items ?? []).compactMap(skillAction(for:))
         guard !actions.isEmpty else { return }
-        pushingProfiles.insert(profile)
-        defer { pushingProfiles.remove(profile) }
+        beginProfilePush(profile)
+        defer { endProfilePush(profile) }
         let outcomes = await pushSkillsSerialized(actions, profile: profile)
         await refreshProfile(profile)
         surfaceFailures(outcomes.compactMap(\.error), profile: profile, noun: "skill")
@@ -504,8 +518,8 @@ final class ProfileSyncHarness {
         guard let drift = configDrift[profile] else { return }
         let edits = drift.pushPayload(curatedOnly: curatedOnly)
         guard !edits.isEmpty else { return }
-        pushingProfiles.insert(profile)
-        defer { pushingProfiles.remove(profile) }
+        beginProfilePush(profile)
+        defer { endProfilePush(profile) }
         let error = await pushConfigEdits(edits, profile: profile)
         await refreshProfile(profile)
         if let error { banners?.surfaceError("profiles", error) }
@@ -614,8 +628,8 @@ final class ProfileSyncHarness {
     func syncAllEnv(profile: String) async {
         let items = envPushItems(for: profile)
         guard !items.isEmpty else { return }
-        pushingProfiles.insert(profile)
-        defer { pushingProfiles.remove(profile) }
+        beginProfilePush(profile)
+        defer { endProfilePush(profile) }
         let results = await pushEnvItems(items, profile: profile)
         await refreshProfile(profile)
         surfaceFailures(results.compactMap { $0 }, profile: profile, noun: "credential")
@@ -655,8 +669,8 @@ final class ProfileSyncHarness {
     /// and env over the scoped window client, then re-snapshot. Honors the
     /// curated⇄all toggle for the config payload.
     func syncEverything(profile: String) async {
-        pushingProfiles.insert(profile)
-        defer { pushingProfiles.remove(profile) }
+        beginProfilePush(profile)
+        defer { endProfilePush(profile) }
 
         // Collect every leg's failures and surface them together — otherwise a
         // failed skill install or credential copy in the batch is silent (the rows
@@ -965,7 +979,7 @@ struct ProfileSyncView: View {
                     .frame(maxWidth: 200)
                     Spacer()
                     if let selected = selectedProfile {
-                        let syncing = harness.pushingProfiles.contains(selected)
+                        let syncing = harness.isPushingProfile(selected)
                         if syncing {
                             ProgressView().controlSize(.small)
                         }
@@ -1365,7 +1379,7 @@ private struct ProfileDriftRow: View {
                 Text(profile).font(.body.weight(.medium))
                 statusPill
                 Spacer()
-                if harness.pushingProfiles.contains(profile) {
+                if harness.isPushingProfile(profile) {
                     ProgressView().controlSize(.small)
                 } else if count > 0 {
                     Button("Sync everything") { confirmingProfile = profile }
