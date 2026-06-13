@@ -413,13 +413,32 @@ final class ProfileSyncHarness {
 
     // MARK: - Push: skills
 
+    /// Tail of the per-profile skill-push chain (see ``pushSkillsSerialized``).
+    private var skillPushChains: [String: Task<[SkillPushOutcome], Never>] = [:]
+
+    /// Installs/updates `actions` in `profile`, **serialized per profile**. The
+    /// engine mutates the profile's on-disk skills directory, so two `pushSkills`
+    /// for the same profile must not overlap — a per-row Install/Update clicked
+    /// during a "Sync all"/"Sync everything" batch would otherwise run a second
+    /// concurrent CLI mutation against the same directory. Mirrors
+    /// ``pushConfigEdits(_:profile:)``.
+    private func pushSkillsSerialized(_ actions: [SkillPushAction], profile: String) async -> [SkillPushOutcome] {
+        let previous = skillPushChains[profile]
+        let task = Task { () -> [SkillPushOutcome] in
+            _ = await previous?.value
+            return await self.engine.pushSkills(
+                actions: actions, toProfile: profile, runnerProvider: self.makeRunnerProvider()
+            )
+        }
+        skillPushChains[profile] = task
+        return await task.value
+    }
+
     func syncSkill(_ item: SkillDriftItem, profile: String) async {
         guard let action = skillAction(for: item) else { return }
         let key = itemKey("skill", profile: profile, id: item.id)
         pushingItems.insert(key)
-        let outcome = await engine.pushSkills(
-            actions: [action], toProfile: profile, runnerProvider: makeRunnerProvider()
-        ).first
+        let outcome = await pushSkillsSerialized([action], profile: profile).first
         pushingItems.remove(key)
         await refreshProfile(profile)
         if let error = outcome?.error {
@@ -454,7 +473,7 @@ final class ProfileSyncHarness {
         guard !actions.isEmpty else { return }
         pushingProfiles.insert(profile)
         defer { pushingProfiles.remove(profile) }
-        let outcomes = await engine.pushSkills(actions: actions, toProfile: profile, runnerProvider: makeRunnerProvider())
+        let outcomes = await pushSkillsSerialized(actions, profile: profile)
         await refreshProfile(profile)
         surfaceFailures(outcomes.compactMap(\.error), profile: profile, noun: "skill")
     }
@@ -539,11 +558,13 @@ final class ProfileSyncHarness {
         await refreshProfile(profile)
         if let error {
             banners?.surfaceError("profiles", error)
-        } else if envDrift[profile]?.items.contains(where: { $0.key == id }) == true {
-            // PUT /api/env returned OK but the re-read still shows the old value.
-            // Don't guess why — capture the two paths actually involved (the home
-            // the dashboard wrote to vs. the env file the reader checked) so the
-            // divergence is visible instead of asserted.
+        } else if plaintext(forKey: id, inProfile: profile) != value {
+            // PUT /api/env returned OK but the profile's re-read value isn't the
+            // one we just wrote. Compare against the *written* value (not freshly
+            // derived drift vs. default) so a default edited concurrently in
+            // another window can't masquerade as a failed write. Don't guess why —
+            // capture the two paths involved (the home the dashboard wrote to vs.
+            // the env file the reader checked) so the divergence is visible.
             let diagnosis = await diagnoseEnvNoop(id: id, profile: profile)
             banners?.surfaceError("profiles", diagnosis)
         } else {
@@ -644,8 +665,7 @@ final class ProfileSyncHarness {
 
         let actions = (skillsDrift[profile]?.items ?? []).compactMap(skillAction(for:))
         if !actions.isEmpty {
-            let outcomes = await engine.pushSkills(actions: actions, toProfile: profile, runnerProvider: makeRunnerProvider())
-            errors += outcomes.compactMap(\.error)
+            errors += await pushSkillsSerialized(actions, profile: profile).compactMap(\.error)
         }
 
         let configEdits = configDrift[profile]?.pushPayload(curatedOnly: curatedConfigOnly) ?? [:]
@@ -950,12 +970,12 @@ struct ProfileSyncView: View {
                             ProgressView().controlSize(.small)
                         }
                         Button("Sync everything from default") { confirmingProfile = selected }
-                            // Disable while a sync is in flight: a second concurrent
+                            // Disable while a sync is in flight (a second concurrent
                             // syncEverything would run unserialized skill/env legs and
-                            // corrupt the shared `pushingProfiles` flag (whichever
-                            // finishes first clears it). The phone row hides the button
-                            // the same way.
-                            .disabled(syncing)
+                            // corrupt the shared `pushingProfiles` flag), and when
+                            // there's nothing to sync (else it's a silent no-op over
+                            // an in-sync profile). The phone row gates the same way.
+                            .disabled(syncing || !harness.canSyncEverything(profile: selected))
                             .help("Install/update skills and copy config + credentials from default to “\(selected)”")
                             .accessibilityLabel("Sync everything from default to \(selected)")
                     }
