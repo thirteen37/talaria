@@ -137,6 +137,46 @@ final class SkillsHarness {
     /// The currently-selected installed skill, or nil. Drives the detail panel.
     var selected: DashboardSkill? { rows.first { $0.name == selectionID } }
 
+    /// The on-disk directory a skill occupies (`<hermesHome>/skills/[<category>/]
+    /// <name>`). Local resolves to an absolute path; remote keeps `~` literal
+    /// (the remote side resolves it). Used for the Force-remove confirmation and
+    /// as the unexpanded base for ``resolvedPublishPath``.
+    func skillDirectoryPath(for skill: DashboardSkill) -> String {
+        switch profile?.kind {
+        case .ssh:
+            let home = profile?.hermesHome?.trimmingCharacters(in: .whitespaces)
+            var path = (home?.isEmpty == false ? home! : "~/.hermes") + "/skills"
+            if let category = skill.category, !category.isEmpty { path += "/\(category)" }
+            return path + "/\(skill.name)"
+        case .local, .none:
+            var url = skillsRoot
+            if let category = skill.category, !category.isEmpty {
+                url.appendPathComponent(category, isDirectory: true)
+            }
+            url.appendPathComponent(skill.name, isDirectory: true)
+            return url.path
+        }
+    }
+
+    /// The Publish sheet's pre-filled path — fully expanded. Local is already
+    /// absolute; for remote, resolves the remote `$HOME` over the host shell and
+    /// substitutes it for a leading `~`, so `hermes skills publish` receives an
+    /// absolute path rather than a `~` it may not expand. Falls back to the
+    /// unexpanded path if the home can't be resolved.
+    func resolvedPublishPath(for skill: DashboardSkill) async -> String {
+        let path = skillDirectoryPath(for: skill)
+        // Only a remote profile yields a `~`-prefixed path; local is absolute.
+        guard path.hasPrefix("~"), let hostShell else { return path }
+        do {
+            let result = try await hostShell.runShell("printf '%s' \"$HOME\"", workingDirectory: nil)
+            let home = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            if result.exitCode == 0, !home.isEmpty {
+                return home + path.dropFirst()  // "~/.hermes/…" → "<home>/.hermes/…"
+            }
+        } catch {}
+        return path
+    }
+
     /// Reads the selected skill's `SKILL.md` for the detail-panel preview. Runs
     /// on selection change (the view's `.task(id:)` cancels the prior load), and
     /// re-checks the selection after the `await` so a stale read can't overwrite.
@@ -884,7 +924,7 @@ struct SkillsView: View {
                 lifecycleAvailable: lifecycleAvailable,
                 publishAvailable: publishAvailable,
                 forceRemoveAvailable: forceRemoveAvailable,
-                forceRemovePath: skillDirectoryPath(for: skill),
+                forceRemovePath: harness.skillDirectoryPath(for: skill),
                 busy: harness.busy.contains(skill.name),
                 previewText: harness.previewText,
                 previewError: harness.previewError,
@@ -894,35 +934,17 @@ struct SkillsView: View {
                 onAudit: { Task { await harness.audit(skill.name) } },
                 onReset: { Task { await harness.reset(skill.name) } },
                 onRepair: { Task { await harness.repair(skill.name) } },
-                onPublish: { publishTarget = PublishTarget(skillName: skill.name, path: skillDirectoryPath(for: skill)) },
+                onPublish: {
+                    Task {
+                        let path = await harness.resolvedPublishPath(for: skill)
+                        publishTarget = PublishTarget(skillName: skill.name, path: path)
+                    }
+                },
                 onForceRemove: { Task { await harness.forceRemove(skill.name, category: skill.category) } }
             )
         }
     }
 
-    /// The on-disk directory a skill occupies under the local skills root
-    /// (`<hermesHome>/skills/[<category>/]<name>`, `hermesHome` from the profile,
-    /// default `~/.hermes`). `skills list` doesn't expose the path, so this is the
-    /// default the Publish sheet pre-fills and the path the Force-remove
-    /// confirmation names.
-    private func skillDirectoryPath(for skill: DashboardSkill) -> String {
-        switch profile?.kind {
-        case .ssh:
-            // A path on the remote host — keep `~` literal so the remote side
-            // resolves it (don't local-expand the tilde).
-            let home = profile?.hermesHome?.trimmingCharacters(in: .whitespaces)
-            var path = (home?.isEmpty == false ? home! : "~/.hermes") + "/skills"
-            if let category = skill.category, !category.isEmpty { path += "/\(category)" }
-            return path + "/\(skill.name)"
-        case .local, .none:
-            var url = HermesSkillsFileStore.localSkillsRoot(hermesHome: profile?.hermesHome)
-            if let category = skill.category, !category.isEmpty {
-                url.appendPathComponent(category, isDirectory: true)
-            }
-            url.appendPathComponent(skill.name, isDirectory: true)
-            return url.path
-        }
-    }
 }
 
 /// Identifies the local skill being published, seeding the publish sheet.
