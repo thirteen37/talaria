@@ -115,7 +115,10 @@ public enum HermesSkillsFileStore {
               components.contains("skills") else {
             throw RemoteForceDeleteError.unsafePath
         }
-        return "rm -rf -- \(ShellQuoting.shellQuote(directory))"
+        // `command` bypasses a shell function/alias named `rm` on the remote
+        // login shell (notably zsh, which expands aliases non-interactively and
+        // sources .zshenv for `ssh host '…'`).
+        return "command rm -rf -- \(ShellQuoting.shellQuote(directory))"
     }
 
     // MARK: - Directory resolution by frontmatter name
@@ -162,7 +165,9 @@ public enum HermesSkillsFileStore {
         guard !rel.split(separator: "/").contains("..") else { throw RemoteForceDeleteError.unsafePath }
         let quoted = ShellQuoting.shellQuote(rel)
         let base = rel.hasPrefix("/") ? quoted : "\"$HOME\"/\(quoted)"
-        return "find \(base) -mindepth 1 -maxdepth 1 -type d 2>/dev/null"
+        // `command` bypasses a shell function/alias named `find` (see the rm
+        // command for the remote zsh rationale).
+        return "command find \(base) -mindepth 1 -maxdepth 1 -type d 2>/dev/null"
     }
 
     /// Splits a directory-listing command's stdout into trimmed, non-empty

@@ -122,7 +122,7 @@ struct HermesSkillsFileStoreTests {
         let cmd = try HermesSkillsFileStore.remoteForceDeleteDirectoryCommand(
             directory: "/home/u/.hermes/skills/creative/creative-ideation"
         )
-        #expect(cmd == "rm -rf -- '/home/u/.hermes/skills/creative/creative-ideation'")
+        #expect(cmd == "command rm -rf -- '/home/u/.hermes/skills/creative/creative-ideation'")
     }
 
     @Test
@@ -181,13 +181,13 @@ struct HermesSkillsFileStoreTests {
     @Test
     func listingCommandScopesToCategoryUnderHome() throws {
         let cmd = try HermesSkillsFileStore.skillCandidateListingCommand(hermesHome: nil, category: "creative")
-        #expect(cmd == "find \"$HOME\"/'.hermes/skills/creative' -mindepth 1 -maxdepth 1 -type d 2>/dev/null")
+        #expect(cmd == "command find \"$HOME\"/'.hermes/skills/creative' -mindepth 1 -maxdepth 1 -type d 2>/dev/null")
     }
 
     @Test
     func listingCommandUncategorizedScansSkillsRoot() throws {
         let cmd = try HermesSkillsFileStore.skillCandidateListingCommand(hermesHome: "/opt/hermes", category: nil)
-        #expect(cmd == "find '/opt/hermes/skills' -mindepth 1 -maxdepth 1 -type d 2>/dev/null")
+        #expect(cmd == "command find '/opt/hermes/skills' -mindepth 1 -maxdepth 1 -type d 2>/dev/null")
     }
 
     @Test

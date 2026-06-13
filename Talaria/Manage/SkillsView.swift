@@ -227,7 +227,7 @@ final class SkillsHarness {
         case .ssh:
             var resolvedHome: String?
             if let hostShell,
-               let result = try? await hostShell.runShell("printf '%s' \"$HOME\"", workingDirectory: nil),
+               let result = try? await hostShell.runShell("command printf '%s' \"$HOME\"", workingDirectory: nil),
                result.exitCode == 0 {
                 let home = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
                 resolvedHome = home.isEmpty ? nil : home
