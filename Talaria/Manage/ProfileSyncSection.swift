@@ -482,11 +482,26 @@ final class ProfileSyncHarness {
     // MARK: - Push: env
 
     func syncEnvItem(_ item: EnvDriftItem, profile: String) async {
-        guard let value = plaintext(forKey: item.key) else { return }
-        await runItemPush(profile: profile, resource: "env", id: item.key) {
-            await self.pushEnvItems([(key: item.key, value: value)], profile: profile).first ?? nil
+        let id = item.key
+        guard let value = plaintext(forKey: id) else {
+            banners?.surfaceError("profiles", "Can't copy “\(id)” — default's value isn't loaded yet. Refresh and try again.")
+            return
         }
+        let key = itemKey("env", profile: profile, id: id)
+        pushingItems.insert(key)
+        defer { pushingItems.remove(key) }
+        let error = await pushEnvItems([(key: id, value: value)], profile: profile).first ?? nil
         await refreshProfile(profile)
+        if let error {
+            banners?.surfaceError("profiles", error)
+        } else if envDrift[profile]?.items.contains(where: { $0.key == id }) == true {
+            // PUT /api/env returned OK but the value still differs after the
+            // re-read — surface it rather than looking like nothing happened.
+            AppLog.general.error("Env copy no-op: “\(id, privacy: .public)” → “\(profile, privacy: .public)” reported success but the value didn't change.")
+            banners?.surfaceError("profiles", "Copying “\(id)” to “\(profile)” reported success but the value didn't change (see App Logs).")
+        } else {
+            banners?.surfaceSuccess("profiles", "Copied “\(id)” to “\(profile)”.")
+        }
     }
 
     func syncAllEnv(profile: String) async {
