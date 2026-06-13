@@ -1210,6 +1210,7 @@ private struct SkillDetail: View {
     let onForceRemove: () -> Void
 
     @State private var confirmingRemove = false
+    @State private var confirmingForceRemove = false
 
     var body: some View {
         ScrollView {
@@ -1264,6 +1265,12 @@ private struct SkillDetail: View {
             Button("Remove", role: .destructive) { onRemove() }
         } message: {
             Text("This deletes the installed skill from the Hermes host.")
+        }
+        .alert("Force remove \(skill.name)?", isPresented: $confirmingForceRemove) {
+            Button("Cancel", role: .cancel) {}
+            Button("Force remove", role: .destructive) { onForceRemove() }
+        } message: {
+            Text(forceRemoveMessage)
         }
     }
 
@@ -1388,26 +1395,19 @@ private struct SkillDetail: View {
         .help("Publish this local skill to a registry")
     }
 
-    /// Universal destructive force-delete of the skill directory, behind a
-    /// two-step pull-down ("Force remove ▾" → "Force remove") so a single stray
-    /// click can't delete files. Labelled distinctly from the hub clean-uninstall
-    /// "Remove" button (different text and a slashed-trash icon) so the two
-    /// destructive-looking controls don't read alike on a hub skill.
+    /// Universal destructive force-delete of the skill directory. A plain
+    /// destructive button that opens a confirmation alert naming the path —
+    /// matching the hub clean-uninstall "Remove" flow, so removal is confirmed
+    /// the same way regardless of skill kind. The slashed-trash icon and "Force
+    /// remove" label keep it distinct from the clean "Remove" button.
     private var forceRemoveButton: some View {
-        Menu {
-            Button(role: .destructive) {
-                onForceRemove()
-            } label: {
-                Label("Force remove", systemImage: "trash.slash")
-            }
-            .help(forceRemoveMessage)
+        Button(role: .destructive) {
+            confirmingForceRemove = true
         } label: {
             Label("Force remove", systemImage: "trash.slash")
         }
-        .menuIndicator(.visible)
-        .fixedSize()
         .disabled(busy || !forceRemoveAvailable)
-        .help("Permanently delete this skill's files from disk (two-step)")
+        .help("Permanently delete this skill's files from disk")
     }
 
     /// Explanatory captions for unavailable affordances. Uses `if case .X? =`
