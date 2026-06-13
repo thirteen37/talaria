@@ -97,7 +97,7 @@ struct HermesSkillsFileStoreTests {
     @Test
     func remoteCommandForDefaultHome() throws {
         let cmd = try HermesSkillsFileStore.remoteForceDeleteCommand(hermesHome: nil, category: nil, name: "cmux")
-        #expect(cmd == "rm -rf -- $HOME/'.hermes/skills/cmux'")
+        #expect(cmd == "rm -rf -- \"$HOME\"/'.hermes/skills/cmux'")
     }
 
     @Test
@@ -113,7 +113,7 @@ struct HermesSkillsFileStoreTests {
         let cmd = try HermesSkillsFileStore.remoteForceDeleteCommand(
             hermesHome: "~/custom", category: nil, name: "cmux"
         )
-        #expect(cmd == "rm -rf -- $HOME/'custom/skills/cmux'")
+        #expect(cmd == "rm -rf -- \"$HOME\"/'custom/skills/cmux'")
     }
 
     @Test

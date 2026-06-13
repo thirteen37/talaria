@@ -169,8 +169,9 @@ public enum HermesSkillsFileStore {
         guard !path.split(separator: "/").contains("..") else { throw RemoteForceDeleteError.unsafePath }
         let quoted = ShellQuoting.shellQuote(path)
         // `relativePath` returns an absolute path for an absolute `hermesHome`,
-        // else a path relative to the login home (which `$HOME` resolves to).
-        return path.hasPrefix("/") ? "rm -rf -- \(quoted)" : "rm -rf -- $HOME/\(quoted)"
+        // else a path relative to the login home. `"$HOME"` is double-quoted so a
+        // home containing whitespace/globs isn't word-split inside `rm -rf`.
+        return path.hasPrefix("/") ? "rm -rf -- \(quoted)" : "rm -rf -- \"$HOME\"/\(quoted)"
     }
 
     /// The absolute path of a skill directory on a **remote** host, for the
