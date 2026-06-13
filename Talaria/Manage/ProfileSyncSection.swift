@@ -496,9 +496,10 @@ final class ProfileSyncHarness {
             banners?.surfaceError("profiles", error)
         } else if envDrift[profile]?.items.contains(where: { $0.key == id }) == true {
             // PUT /api/env returned OK but the value still differs after the
-            // re-read — surface it rather than looking like nothing happened.
-            AppLog.general.error("Env copy no-op: “\(id, privacy: .public)” → “\(profile, privacy: .public)” reported success but the value didn't change.")
-            banners?.surfaceError("profiles", "Copying “\(id)” to “\(profile)” reported success but the value didn't change (see App Logs).")
+            // re-read. The only way Hermes reports success without writing is a
+            // *managed* install (NixOS/systemd), which blocks runtime env edits.
+            AppLog.general.error("Env copy no-op: “\(id, privacy: .public)” → “\(profile, privacy: .public)” reported success but the value didn't change — likely a managed Hermes install.")
+            banners?.surfaceError("profiles", "Couldn't copy “\(id)” to “\(profile)”: this Hermes is a managed install (NixOS/systemd) that blocks runtime env changes — edit it in your system config.")
         } else {
             banners?.surfaceSuccess("profiles", "Copied “\(id)” to “\(profile)”.")
         }
