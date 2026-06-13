@@ -57,6 +57,16 @@ public enum HermesCapability: String, CaseIterable, Codable, Sendable {
     /// menu shows a `capabilityBanner` warning. Runtime `commandUnavailable`
     /// detection remains the real backstop.
     case profileDistributions
+    /// `hermes skills audit / reset / repair-official / opt-in / opt-out /
+    /// publish` — the per-skill lifecycle and bundled-seeding affordances on the
+    /// Skills screen, beyond the install/update/uninstall covered by
+    /// ``skillsHub``. Like the other Skills/Profiles CLI surfaces these have no
+    /// dashboard route and run through the CLI-fallback admin runner, so the gate
+    /// is on the CLI surface. Below it the Skills screen still lists/toggles/
+    /// installs, but the Audit/Reset/Repair/Publish row actions and the Bundled
+    /// skills menu show a `capabilityBanner` warning. Runtime `commandUnavailable`
+    /// detection remains the real backstop.
+    case skillsLifecycle
 }
 
 public struct CapabilityTable: Sendable {
@@ -137,5 +147,12 @@ public struct CapabilityTable: Sendable {
         // exact CLI shape is re-verified on an older build. Pinned to the
         // verified floor for now; runtime `commandUnavailable` is the backstop.
         .profileDistributions: HermesVersion(major: 0, minor: 15, patch: 1),
+        // `hermes skills audit/reset/repair-official/opt-in/opt-out/publish` —
+        // the lifecycle surface verified non-interactive against hermes v0.15.1
+        // (safe-variant reset/repair/opt-out need no stdin; audit/publish take a
+        // positional name/path). These subcommands may have shipped earlier; the
+        // pin can be lowered if re-verified on an older build. Pinned to the
+        // verified floor for now; runtime `commandUnavailable` is the backstop.
+        .skillsLifecycle: HermesVersion(major: 0, minor: 15, patch: 1),
     ]
 }

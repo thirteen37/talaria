@@ -32,6 +32,15 @@ public struct InstalledHubSkill: Equatable, Sendable, Identifiable {
     /// `local`) rather than shipped builtin or installed from the Skills Hub.
     public var isLocal: Bool { source.lowercased() == "local" }
 
+    /// True when this skill shipped bundled with Hermes (Source column reads
+    /// exactly `builtin`). Drives the **Reset** / **Repair** affordances.
+    public var isBuiltin: Bool { source.lowercased() == "builtin" }
+
+    /// True when this skill is an *official* Nous skill (Trust column reads
+    /// `official`). A subset of builtins; gates the **Repair** (`repair-official`)
+    /// action, which only makes sense for official-trust skills.
+    public var isOfficial: Bool { trust?.lowercased() == "official" }
+
     public init(name: String, category: String?, source: String, trust: String?, enabled: Bool) {
         self.name = name
         self.category = category
@@ -81,6 +90,15 @@ public enum HermesSkillsHubError: Error, Equatable, Sendable, LocalizedError {
             return detail
         }
     }
+}
+
+/// Destination registry for `hermes skills publish`. The raw value is the
+/// literal `--to` argument the CLI expects.
+public enum SkillsPublishRegistry: String, CaseIterable, Sendable, Identifiable {
+    case github
+    case clawhub
+
+    public var id: String { rawValue }
 }
 
 /// CLI-fallback for the Skills Hub *mutations* (install / update / uninstall)
@@ -136,6 +154,92 @@ public enum HermesSkillsHub {
         ))
         try ensureSuccess(result)
         try ensureNotSoftFailure(result.stdout, markers: uninstallFailureMarkers)
+    }
+
+    // MARK: - Lifecycle (audit / reset / repair / opt-in-out / publish)
+
+    /// Re-scans a hub skill and returns the scan report (`skills audit`). `name`
+    /// is positional, passed after `--` so a name starting with `-` isn't read as
+    /// a flag. Works over local **and** remote runners (no stdin prompt).
+    @discardableResult
+    public static func audit(runner: HermesAdminRunning, name: String) async throws -> String {
+        let result = try await runner.run(HermesAdminCommand(
+            arguments: ["skills", "audit", "--", name]
+        ))
+        try ensureSuccess(result)
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Clears a builtin skill's sync-manifest `user-modified` tracking
+    /// (`skills reset`). The **safe** default (no `--restore`) only forgets the
+    /// tracking — it doesn't re-copy the bundled version — so it needs no stdin
+    /// prompt and runs over any runner. Returns trimmed stdout.
+    @discardableResult
+    public static func reset(runner: HermesAdminRunning, name: String) async throws -> String {
+        let result = try await runner.run(HermesAdminCommand(
+            arguments: ["skills", "reset", name]
+        ))
+        try ensureSuccess(result)
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Backfills an official skill's hub metadata (`skills repair-official`). The
+    /// **safe** default (no `--restore`) only re-writes metadata — it doesn't
+    /// restore files from the repo — so it needs no stdin prompt and runs over
+    /// any runner. Returns trimmed stdout.
+    @discardableResult
+    public static func repairOfficial(runner: HermesAdminRunning, name: String) async throws -> String {
+        let result = try await runner.run(HermesAdminCommand(
+            arguments: ["skills", "repair-official", name]
+        ))
+        try ensureSuccess(result)
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Stops bundled (builtin) skills from seeding into this profile by writing
+    /// the `.no-bundled-skills` marker (`skills opt-out`). The **safe** default
+    /// (no `--remove`) leaves already-seeded copies in place. Returns trimmed
+    /// stdout.
+    @discardableResult
+    public static func optOut(runner: HermesAdminRunning) async throws -> String {
+        let result = try await runner.run(HermesAdminCommand(
+            arguments: ["skills", "opt-out"]
+        ))
+        try ensureSuccess(result)
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Re-enables bundled-skill seeding by removing the `.no-bundled-skills`
+    /// marker (`skills opt-in`). With `sync` it also re-seeds immediately
+    /// (`--sync`). Returns trimmed stdout.
+    @discardableResult
+    public static func optIn(runner: HermesAdminRunning, sync: Bool = false) async throws -> String {
+        var arguments = ["skills", "opt-in"]
+        if sync { arguments.append("--sync") }
+        let result = try await runner.run(HermesAdminCommand(arguments: arguments))
+        try ensureSuccess(result)
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Publishes a **local** skill directory to a registry (`skills publish`).
+    /// `path` is the skill *directory* (publish's positional arg), `registry` the
+    /// `--to` destination, and `repo` the `owner/repo` slug — required for
+    /// `github`, optional for `clawhub` (dropped when nil/empty). Returns trimmed
+    /// stdout. Local-only in practice (it operates on a local directory).
+    @discardableResult
+    public static func publish(
+        runner: HermesAdminRunning,
+        path: String,
+        registry: SkillsPublishRegistry,
+        repo: String?
+    ) async throws -> String {
+        var arguments = ["skills", "publish", path, "--to", registry.rawValue]
+        if let repo, !repo.trimmingCharacters(in: .whitespaces).isEmpty {
+            arguments += ["--repo", repo]
+        }
+        let result = try await runner.run(HermesAdminCommand(arguments: arguments))
+        try ensureSuccess(result)
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Reads

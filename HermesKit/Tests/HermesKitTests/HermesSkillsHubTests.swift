@@ -85,6 +85,136 @@ struct HermesSkillsHubTests {
         #expect(runner.lastCommand?.environment["NO_COLOR"] == "1")
     }
 
+    // MARK: - Lifecycle command shape
+
+    @Test
+    func auditPassesNameAfterSeparatorAndReturnsReport() async throws {
+        let runner = RecordingAdminRunner(
+            result: HermesAdminResult(exitCode: 0, stdout: "Audit OK: no issues\n", stderr: "")
+        )
+        let report = try await HermesSkillsHub.audit(runner: runner, name: "foo")
+        #expect(runner.lastCommand?.arguments == ["skills", "audit", "--", "foo"])
+        #expect(report == "Audit OK: no issues")
+    }
+
+    @Test
+    func resetSendsSafeVariantWithName() async throws {
+        let runner = RecordingAdminRunner()
+        try await HermesSkillsHub.reset(runner: runner, name: "pixel-art")
+        // Safe default — no `--restore`, so no stdin prompt is needed.
+        #expect(runner.lastCommand?.arguments == ["skills", "reset", "pixel-art"])
+        #expect(runner.lastCommand?.stdinInput == nil)
+    }
+
+    @Test
+    func repairOfficialSendsSafeVariantWithName() async throws {
+        let runner = RecordingAdminRunner()
+        try await HermesSkillsHub.repairOfficial(runner: runner, name: "dogfood")
+        // Safe default — no `--restore`, so no stdin prompt is needed.
+        #expect(runner.lastCommand?.arguments == ["skills", "repair-official", "dogfood"])
+        #expect(runner.lastCommand?.stdinInput == nil)
+    }
+
+    @Test
+    func optOutSendsSafeVariant() async throws {
+        let runner = RecordingAdminRunner()
+        try await HermesSkillsHub.optOut(runner: runner)
+        // Safe default — writes the marker only, no `--remove`.
+        #expect(runner.lastCommand?.arguments == ["skills", "opt-out"])
+        #expect(runner.lastCommand?.stdinInput == nil)
+    }
+
+    @Test
+    func optInWithoutSyncOmitsFlag() async throws {
+        let runner = RecordingAdminRunner()
+        try await HermesSkillsHub.optIn(runner: runner)
+        #expect(runner.lastCommand?.arguments == ["skills", "opt-in"])
+    }
+
+    @Test
+    func optInWithSyncAppendsFlag() async throws {
+        let runner = RecordingAdminRunner()
+        try await HermesSkillsHub.optIn(runner: runner, sync: true)
+        #expect(runner.lastCommand?.arguments == ["skills", "opt-in", "--sync"])
+    }
+
+    @Test
+    func publishToGithubPassesPathRegistryAndRepo() async throws {
+        let runner = RecordingAdminRunner(
+            result: HermesAdminResult(exitCode: 0, stdout: "Published to openai/skills\n", stderr: "")
+        )
+        let summary = try await HermesSkillsHub.publish(
+            runner: runner,
+            path: "/Users/me/.hermes/skills/tools/foo",
+            registry: .github,
+            repo: "openai/skills"
+        )
+        #expect(runner.lastCommand?.arguments == [
+            "skills", "publish", "/Users/me/.hermes/skills/tools/foo",
+            "--to", "github", "--repo", "openai/skills",
+        ])
+        #expect(summary == "Published to openai/skills")
+    }
+
+    @Test
+    func publishToClawhubOmitsRepoWhenEmpty() async throws {
+        let runner = RecordingAdminRunner()
+        try await HermesSkillsHub.publish(
+            runner: runner,
+            path: "/Users/me/.hermes/skills/foo",
+            registry: .clawhub,
+            repo: nil
+        )
+        // clawhub doesn't require a repo — `--repo` is dropped when absent.
+        #expect(runner.lastCommand?.arguments == [
+            "skills", "publish", "/Users/me/.hermes/skills/foo", "--to", "clawhub",
+        ])
+    }
+
+    @Test
+    func lifecycleCommandsPropagateCommandUnavailable() async throws {
+        // An older Hermes without the lifecycle subcommands surfaces argparse's
+        // "no such command" as `.commandUnavailable`, not a generic failure.
+        let runner = RecordingAdminRunner(result: HermesAdminResult(
+            exitCode: 2, stdout: "", stderr: "hermes: no such command 'audit'\n"
+        ))
+        await #expect(throws: HermesSkillsHubError.self) {
+            try await HermesSkillsHub.audit(runner: runner, name: "foo")
+        }
+        do {
+            try await HermesSkillsHub.optOut(runner: runner)
+            Issue.record("expected throw")
+        } catch let error as HermesSkillsHubError {
+            guard case .commandUnavailable = error else {
+                Issue.record("expected commandUnavailable, got \(error)")
+                return
+            }
+        } catch { Issue.record("unexpected \(error)") }
+    }
+
+    // MARK: - Skill-kind classification
+
+    @Test
+    func classifiesBuiltinAndOfficial() {
+        let builtin = InstalledHubSkill(
+            name: "dogfood", category: nil, source: "builtin", trust: "builtin", enabled: true
+        )
+        #expect(builtin.isBuiltin == true)
+        #expect(builtin.isOfficial == false)
+
+        let official = InstalledHubSkill(
+            name: "writer", category: nil, source: "builtin", trust: "official", enabled: true
+        )
+        #expect(official.isBuiltin == true)
+        #expect(official.isOfficial == true)
+
+        let hub = InstalledHubSkill(
+            name: "foo", category: nil, source: "skills-sh", trust: "community", enabled: true
+        )
+        #expect(hub.isBuiltin == false)
+        #expect(hub.isOfficial == false)
+    }
+
     // MARK: - Installed-table parsing
 
     @Test
