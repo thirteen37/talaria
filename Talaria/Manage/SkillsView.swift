@@ -1,6 +1,40 @@
 import HermesKit
 import SwiftUI
 
+/// Which lifecycle actions a row offers, derived from `hermes skills list`.
+/// `hub` → Update / Audit / Remove; `builtin` → Reset (+ Repair when official);
+/// `local` → Publish. `nil` (unknown / no admin runner) offers none.
+enum SkillKind {
+    case hub
+    case local
+    case builtin
+}
+
+/// A captured `skills audit` report awaiting presentation in a sheet.
+struct SkillAuditReport: Identifiable {
+    let name: String
+    let text: String
+    var id: String { name }
+}
+
+/// Failures specific to the remote (host-shell) Force-remove path.
+enum SkillForceRemoveError: LocalizedError {
+    case notLocated
+    case remoteShellUnavailable
+    case remoteCommandFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notLocated:
+            return "Couldn't locate this skill's directory on disk; nothing was removed."
+        case .remoteShellUnavailable:
+            return "Force remove is unavailable: no shell on the remote host."
+        case .remoteCommandFailed(let detail):
+            return detail
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class SkillsHarness {
@@ -39,20 +73,225 @@ final class SkillsHarness {
     /// Names of installed skills that came from the hub (eligible for Update /
     /// Remove), derived from `hermes skills list`. Empty when no admin runner.
     var hubInstalledNames: Set<String> = []
+    /// Names of installed skills whose Source is exactly `local` (user-created,
+    /// neither builtin nor Hub), derived from the same `hermes skills list`.
+    /// Empty when no admin runner.
+    var localNames: Set<String> = []
     /// Hub skills with an upstream update available (from `hermes skills check`),
     /// populated off `refresh()` so each row can flag "Update available".
     var updatableNames: Set<String> = []
-    /// Names with an in-flight update/remove action, to disable their buttons.
+    /// Names whose Source is exactly `builtin` (shipped with Hermes), eligible
+    /// for Reset (and Repair when also official). Empty when no admin runner.
+    var builtinNames: Set<String> = []
+    /// Names whose Trust is `official` — the subset of builtins eligible for the
+    /// `repair-official` action. Empty when no admin runner.
+    var officialNames: Set<String> = []
+    /// Names with an in-flight per-skill action (update/audit/reset/repair/
+    /// remove/publish), to disable their buttons.
     var busy: Set<String> = []
+    /// Single in-flight flag for the global bundled-seeding actions
+    /// (opt-out / opt-in / re-seed), which aren't keyed by a skill name.
+    var seedingBusy: Bool = false
+    /// Captured `skills audit` report awaiting presentation; cleared on dismiss.
+    var auditReport: SkillAuditReport?
 
     private let client: DashboardClient
     let runner: HermesAdminRunning?
     private let catalog: SkillsHubCatalog
+    /// The window's profile — its `hermesHome` resolves the on-disk skills root
+    /// (Publish / Force remove), and it drives the `SKILL.md` preview read
+    /// (local or remote SSH via ``HermesFileStore``).
+    let profile: ServerProfile?
+    /// Remote file transport for the preview read on SSH profiles; nil/unused
+    /// for local profiles.
+    let transfer: RemoteSnapshotTransfer?
+    /// Host shell on the profile's host (local `/bin/sh` or remote SSH), used to
+    /// `rm -rf` a skill directory on a **remote** profile (the local path uses
+    /// `FileManager`). nil disables remote Force remove.
+    let hostShell: HostShellRunning?
 
-    init(client: DashboardClient, runner: HermesAdminRunning?, catalog: SkillsHubCatalog = SkillsHubCatalog()) {
+    /// SKILL.md preview for the selected skill (raw markdown, highlighted in the
+    /// detail panel). `previewName` keys the load so a slow read for a since-
+    /// deselected skill can't overwrite the current one.
+    var previewName: String?
+    var previewText: String?
+    var previewError: String?
+    var previewLoading: Bool = false
+    /// The selected skill's real on-disk directory (resolved by matching its
+    /// `SKILL.md` frontmatter name — the dashboard `name` is *not* the directory
+    /// name). Keyed by `resolvedDirName`; drives the Force-remove confirmation
+    /// path and is reused by Publish. nil when not yet resolved or not found.
+    var resolvedDir: String?
+    var resolvedDirName: String?
+
+    init(
+        client: DashboardClient,
+        runner: HermesAdminRunning?,
+        profile: ServerProfile? = nil,
+        transfer: RemoteSnapshotTransfer? = nil,
+        hostShell: HostShellRunning? = nil,
+        catalog: SkillsHubCatalog = SkillsHubCatalog()
+    ) {
         self.client = client
         self.runner = runner
+        self.profile = profile
+        self.transfer = transfer
+        self.hostShell = hostShell
         self.catalog = catalog
+    }
+
+    /// The local skills root (`<hermesHome>/skills`, default `~/.hermes/skills`).
+    var skillsRoot: URL { HermesSkillsFileStore.localSkillsRoot(hermesHome: profile?.hermesHome) }
+
+    /// The currently-selected installed skill, or nil. Drives the detail panel.
+    var selected: DashboardSkill? { rows.first { $0.name == selectionID } }
+
+    /// The on-disk directory a skill occupies (`<hermesHome>/skills/[<category>/]
+    /// <name>`). Local resolves to an absolute path; remote keeps `~` literal
+    /// (the remote side resolves it). Used for the Force-remove confirmation and
+    /// as the unexpanded base for ``resolvedPublishPath``.
+    func skillDirectoryPath(for skill: DashboardSkill) -> String {
+        switch profile?.kind {
+        case .ssh:
+            let home = profile?.hermesHome?.trimmingCharacters(in: .whitespaces)
+            var path = (home?.isEmpty == false ? home! : "~/.hermes") + "/skills"
+            if let category = skill.category, !category.isEmpty { path += "/\(category)" }
+            return path + "/\(skill.name)"
+        case .local, .none:
+            var url = skillsRoot
+            if let category = skill.category, !category.isEmpty {
+                url.appendPathComponent(category, isDirectory: true)
+            }
+            url.appendPathComponent(skill.name, isDirectory: true)
+            return url.path
+        }
+    }
+
+    /// True when the window's profile runs Hermes on this machine (so deletes use
+    /// `FileManager` and reads/`find` resolve against the local home).
+    var isLocalProfile: Bool {
+        switch profile?.kind {
+        case .local: return true
+        case .ssh, .none: return false
+        }
+    }
+
+    /// Resolves the selected skill's **real** on-disk directory by matching its
+    /// `SKILL.md` frontmatter `name` — because the dashboard `name` is that
+    /// frontmatter value, not the directory name (e.g. dir `creative-ideation`
+    /// has `name: ideation`). Lists the candidate dirs in the skill's (reliable)
+    /// category via the host shell, then reads each candidate's `SKILL.md` — the
+    /// matching-named candidate first, so the common `name == dir` case is one
+    /// read — until the frontmatter name matches. Returns the absolute directory,
+    /// or nil if it can't be located. Authoritative: the returned dir's `SKILL.md`
+    /// is verified to belong to this skill, so destructive actions never target a
+    /// guessed path.
+    func resolveSkillDirectory(for skill: DashboardSkill) async -> String? {
+        guard let profile, let hostShell else { return nil }
+        let command: String
+        do {
+            command = try HermesSkillsFileStore.skillCandidateListingCommand(
+                hermesHome: profile.hermesHome, category: skill.category
+            )
+        } catch {
+            return nil
+        }
+        guard let listing = try? await hostShell.runShell(command, workingDirectory: nil),
+              listing.exitCode == 0 else { return nil }
+        var candidates = HermesSkillsFileStore.parseDirectoryListing(listing.stdout)
+        // Try the directory whose name equals the skill name first (the common
+        // case), so `name == dir` resolves in a single read.
+        if let exactIndex = candidates.firstIndex(where: { ($0 as NSString).lastPathComponent == skill.name }) {
+            candidates.insert(candidates.remove(at: exactIndex), at: 0)
+        }
+        for dir in candidates.prefix(60) {
+            let skillMd = (dir as NSString).appendingPathComponent("SKILL.md")
+            guard let content = try? await HermesFileStore.read(
+                resolvedPath: skillMd, isLocal: isLocalProfile, transfer: transfer, profile: profile
+            ) else { continue }
+            if HermesSkillsFileStore.frontmatterName(content) == skill.name {
+                return dir
+            }
+        }
+        return nil
+    }
+
+    /// The Publish sheet's pre-filled path. Prefers the resolved on-disk
+    /// directory (authoritative); falls back to a best-effort constructed path
+    /// (editable in the sheet) when the directory can't be located — for remote,
+    /// normalizing `~`/`$HOME`/`${HOME}`/absolute `hermesHome` and prepending the
+    /// resolved remote `$HOME` so `hermes skills publish` gets an absolute path.
+    func resolvedPublishPath(for skill: DashboardSkill) async -> String {
+        // Reuse the directory `loadPreview` already resolved for this skill rather
+        // than re-running the find + SKILL.md reads (extra SSH round-trips). Publish
+        // isn't destructive, so the cached value is fine; Force remove deliberately
+        // re-resolves fresh.
+        if resolvedDirName == skill.name, let dir = resolvedDir { return dir }
+        if let dir = await resolveSkillDirectory(for: skill) { return dir }
+        switch profile?.kind {
+        case .ssh:
+            var resolvedHome: String?
+            if let hostShell,
+               let result = try? await hostShell.runShell("command printf '%s' \"$HOME\"", workingDirectory: nil),
+               result.exitCode == 0 {
+                let home = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                resolvedHome = home.isEmpty ? nil : home
+            }
+            return HermesSkillsFileStore.remoteSkillPath(
+                hermesHome: profile?.hermesHome,
+                category: skill.category,
+                name: skill.name,
+                homeDirectory: resolvedHome
+            )
+        case .local, .none:
+            return skillDirectoryPath(for: skill)
+        }
+    }
+
+    /// Resolves the selected skill's directory, reads its `SKILL.md`, and renders
+    /// the preview. Runs on selection change (the view's `.task(id:)` cancels the
+    /// prior load), re-checking the selection after each `await` so a stale read
+    /// can't overwrite. Also caches the resolved directory (`resolvedDir`) for the
+    /// Force-remove confirmation. Best-effort: a missing/unlocatable skill shows a
+    /// soft note, not a banner error.
+    func loadPreview() async {
+        guard let skill = selected else {
+            previewName = nil
+            previewText = nil
+            previewError = nil
+            previewLoading = false
+            resolvedDir = nil
+            resolvedDirName = nil
+            return
+        }
+        previewName = skill.name
+        previewText = nil
+        previewError = nil
+        previewLoading = true
+        // Guard the clear by `previewName` like the writes below, so the losing
+        // side of a fast selection race doesn't drop the spinner while the
+        // winning task is still reading.
+        defer { if previewName == skill.name { previewLoading = false } }
+
+        let dir = await resolveSkillDirectory(for: skill)
+        guard previewName == skill.name else { return }
+        resolvedDir = dir
+        resolvedDirName = skill.name
+        guard let dir else {
+            previewError = "Couldn't locate this skill on disk."
+            return
+        }
+        do {
+            let skillMd = (dir as NSString).appendingPathComponent("SKILL.md")
+            let text = try await HermesFileStore.read(
+                resolvedPath: skillMd, isLocal: isLocalProfile, transfer: transfer, profile: profile
+            )
+            guard previewName == skill.name else { return }
+            previewText = text
+        } catch {
+            guard previewName == skill.name else { return }
+            previewError = error.localizedDescription
+        }
     }
 
     /// True once the manual install field has a non-empty identifier.
@@ -61,6 +300,22 @@ final class SkillsHarness {
     }
 
     func isHubManaged(_ name: String) -> Bool { hubInstalledNames.contains(name) }
+
+    func isLocal(_ name: String) -> Bool { localNames.contains(name) }
+
+    /// True when this builtin skill is official-trust (eligible for Repair).
+    func isOfficial(_ name: String) -> Bool { officialNames.contains(name) }
+
+    /// Classifies a row so it can pick its lifecycle actions. Returns `nil` when
+    /// the skill isn't in the CLI list yet (no admin runner, or a transient
+    /// dashboard/CLI mismatch), in which case the row offers no kind-specific
+    /// actions.
+    func kind(for name: String) -> SkillKind? {
+        if hubInstalledNames.contains(name) { return .hub }
+        if localNames.contains(name) { return .local }
+        if builtinNames.contains(name) { return .builtin }
+        return nil
+    }
 
     func refresh() async {
         isLoading = true
@@ -86,13 +341,22 @@ final class SkillsHarness {
     private func refreshHubInstalled() async {
         guard let runner else {
             hubInstalledNames = []
+            localNames = []
+            builtinNames = []
+            officialNames = []
             return
         }
         do {
             let installed = try await HermesSkillsHub.listInstalled(runner: runner)
             hubInstalledNames = Set(installed.filter(\.isHubManaged).map(\.name))
+            localNames = Set(installed.filter(\.isLocal).map(\.name))
+            builtinNames = Set(installed.filter(\.isBuiltin).map(\.name))
+            officialNames = Set(installed.filter(\.isOfficial).map(\.name))
         } catch {
             hubInstalledNames = []
+            localNames = []
+            builtinNames = []
+            officialNames = []
             if lastError == nil {
                 lastError = error.localizedDescription
                 banners?.surfaceError(bannerKey, error.localizedDescription)
@@ -210,12 +474,157 @@ final class SkillsHarness {
             banners?.surfaceError(bannerKey, error.localizedDescription)
         }
     }
+
+    /// Force-removes a skill by deleting its **resolved** directory directly —
+    /// the fallback for builtin/local skills (which `hermes skills uninstall`
+    /// refuses) and for a stuck hub uninstall. Resolves the real directory by
+    /// matching its `SKILL.md` frontmatter name (the dashboard `name` is not the
+    /// directory name), then deletes it: **local** via `FileManager`
+    /// (symlink-aware guard), **remote** via `rm -rf` over the host shell. Refuses
+    /// (deletes nothing) if the directory can't be located, so a wrong/guessed
+    /// path is never removed.
+    func forceRemove(_ skill: DashboardSkill) async {
+        guard let profile else { return }
+        let name = skill.name
+        busy.insert(name)
+        defer { busy.remove(name) }
+        do {
+            guard let dir = await resolveSkillDirectory(for: skill) else {
+                throw SkillForceRemoveError.notLocated
+            }
+            switch profile.kind {
+            case .local:
+                try HermesSkillsFileStore.forceDeleteDirectory(
+                    URL(fileURLWithPath: dir), underSkillsRoot: skillsRoot
+                )
+            case .ssh:
+                guard let hostShell else { throw SkillForceRemoveError.remoteShellUnavailable }
+                let command = try HermesSkillsFileStore.remoteForceDeleteDirectoryCommand(directory: dir)
+                let result = try await hostShell.runShell(command, workingDirectory: nil)
+                guard result.exitCode == 0 else {
+                    let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                    throw SkillForceRemoveError.remoteCommandFailed(
+                        detail.isEmpty ? "Force remove failed (exit \(result.exitCode))." : detail
+                    )
+                }
+            }
+            if selectionID == name { selectionID = nil }
+            resolvedDir = nil
+            resolvedDirName = nil
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
+    }
+
+    // MARK: - Lifecycle actions (CLI fallback)
+
+    /// Re-scans a hub skill and captures the report into `auditReport` for the
+    /// presentation sheet. Doesn't mutate state, so it skips the post-refresh.
+    func audit(_ name: String) async {
+        guard let runner else { return }
+        busy.insert(name)
+        defer { busy.remove(name) }
+        do {
+            let report = try await HermesSkillsHub.audit(runner: runner, name: name)
+            auditReport = SkillAuditReport(
+                name: name,
+                text: report.isEmpty ? "Audit completed — no issues reported." : report
+            )
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
+    }
+
+    /// Clears a builtin skill's `user-modified` tracking (safe `skills reset`).
+    func reset(_ name: String) async {
+        guard let runner else { return }
+        busy.insert(name)
+        defer { busy.remove(name) }
+        do {
+            _ = try await HermesSkillsHub.reset(runner: runner, name: name)
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
+    }
+
+    /// Backfills an official skill's hub metadata (safe `skills repair-official`).
+    func repair(_ name: String) async {
+        guard let runner else { return }
+        busy.insert(name)
+        defer { busy.remove(name) }
+        do {
+            _ = try await HermesSkillsHub.repairOfficial(runner: runner, name: name)
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
+    }
+
+    /// Publishes a local skill directory to a registry. `path` is the on-disk
+    /// skill directory (from the publish sheet); `name` keys the busy flag and
+    /// the confirmation. Surfaces a success banner on completion.
+    func publish(name: String, path: String, registry: SkillsPublishRegistry, repo: String?) async {
+        guard let runner else { return }
+        busy.insert(name)
+        defer { busy.remove(name) }
+        do {
+            _ = try await HermesSkillsHub.publish(runner: runner, path: path, registry: registry, repo: repo)
+            banners?.surfaceSuccess(bannerKey, "Published \(name) to \(registry.rawValue).")
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
+    }
+
+    // MARK: - Bundled-skill seeding (global, not keyed by name)
+
+    /// Stops bundled skills from seeding into this profile (safe `skills
+    /// opt-out`). Guards the shared `seedingBusy` flag.
+    func optOut() async {
+        await runSeeding { try await HermesSkillsHub.optOut(runner: $0) }
+    }
+
+    /// Re-enables bundled-skill seeding (`skills opt-in`).
+    func optIn() async {
+        await runSeeding { try await HermesSkillsHub.optIn(runner: $0) }
+    }
+
+    /// Re-enables and immediately re-seeds bundled skills (`skills opt-in
+    /// --sync`).
+    func reseed() async {
+        await runSeeding { try await HermesSkillsHub.optIn(runner: $0, sync: true) }
+    }
+
+    /// Shared driver for the three bundled-seeding actions: single in-flight
+    /// guard, run the closure, refresh on success, route errors to the banner.
+    private func runSeeding(_ body: @escaping (HermesAdminRunning) async throws -> String) async {
+        guard let runner, !seedingBusy else { return }
+        seedingBusy = true
+        defer { seedingBusy = false }
+        do {
+            _ = try await body(runner)
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
+    }
 }
 
 struct SkillsView: View {
     let client: DashboardClient?
     let runner: HermesAdminRunning?
     let hermesVersion: HermesVersion?
+    let profile: ServerProfile?
+    let transfer: RemoteSnapshotTransfer?
+    let hostShell: HostShellRunning?
 
     /// Window's top-of-window banner hub. Optional so a host that doesn't supply
     /// one degrades to no-op (hard errors then simply don't render).
@@ -230,11 +639,26 @@ struct SkillsView: View {
     // pane; the user expands them on demand to search or paste an identifier.
     @State private var searchExpanded = false
     @State private var installExpanded = false
+    /// The local skill currently being published (drives the publish sheet), or
+    /// `nil` when no sheet is up.
+    @State private var publishTarget: PublishTarget?
+    /// Confirms the destructive-ish opt-out from the Bundled skills menu.
+    @State private var confirmingOptOut = false
 
-    init(client: DashboardClient?, runner: HermesAdminRunning? = nil, hermesVersion: HermesVersion? = nil) {
+    init(
+        client: DashboardClient?,
+        runner: HermesAdminRunning? = nil,
+        hermesVersion: HermesVersion? = nil,
+        profile: ServerProfile? = nil,
+        transfer: RemoteSnapshotTransfer? = nil,
+        hostShell: HostShellRunning? = nil
+    ) {
         self.client = client
         self.runner = runner
         self.hermesVersion = hermesVersion
+        self.profile = profile
+        self.transfer = transfer
+        self.hostShell = hostShell
     }
 
     /// Whether the Skills Hub install/update affordances can run: they need the
@@ -248,6 +672,30 @@ struct SkillsView: View {
     /// than letting a remote uninstall read closed stdin and fail with a
     /// confusing "Cancelled." error.
     private var removeAvailable: Bool { runner?.deliversStdin == true }
+
+    /// Whether the lifecycle affordances (Audit / Reset / Repair / Publish and
+    /// the Bundled skills menu) can run: they need the CLI admin runner and a
+    /// Hermes new enough to expose the subcommands. Below the gate the
+    /// in-surface `capabilityBanner` explains why; runtime `commandUnavailable`
+    /// is the real backstop.
+    private var lifecycleAvailable: Bool {
+        runner != nil && CapabilityTable().has(.skillsLifecycle, in: hermesVersion)
+    }
+
+    /// Whether **Publish** can run. `hermes skills publish` is a plain CLI
+    /// command (no stdin, no local filesystem) that runs on whichever host the
+    /// runner targets, so it works on local **and** remote — same gate as
+    /// Update/Audit (a runner plus the lifecycle capability).
+    private var publishAvailable: Bool { mutationsAvailable }
+
+    /// Whether **Force remove** can run. It needs a host shell for *both* kinds:
+    /// to list candidate directories while resolving the skill (`find`), and —
+    /// on remote — to `rm -rf` (local deletes via `FileManager`). So the gate is
+    /// a host shell regardless of profile kind, keeping the invariant explicit and
+    /// fail-safe if the runner construction ever changes.
+    private var forceRemoveAvailable: Bool {
+        profile != nil && hostShell != nil
+    }
 
     var body: some View {
         Group {
@@ -271,7 +719,9 @@ struct SkillsView: View {
         .task(id: client != nil) {
             guard let client else { harness = nil; return }
             if harness != nil { consumeFocus(harness: harness!); return }
-            let h = SkillsHarness(client: client, runner: runner)
+            let h = SkillsHarness(
+                client: client, runner: runner, profile: profile, transfer: transfer, hostShell: hostShell
+            )
             h.banners = banners
             h.bannerKey = "skills"
             harness = h
@@ -298,10 +748,21 @@ struct SkillsView: View {
     private func content(harness: SkillsHarness) -> some View {
         // Reachable only from the desktop window's Browse sidebar (macOS +
         // iPad); the iPhone shell has no Browse, so this never renders there.
-        // A single self-contained list — each row expands in place to show the
-        // full description and hub actions, so there's no secondary pane.
-        primaryPane(harness: harness)
-            .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+        // A master/detail split: the installed-skills list on the left, the
+        // selected skill's description, actions, and SKILL.md preview on the right.
+        PlatformSplit(
+            showsSecondary: Binding(
+                get: { harness.selected != nil },
+                set: { if !$0 { harness.selectionID = nil } }
+            ),
+            secondaryTitle: harness.selected?.name
+        ) {
+            primaryPane(harness: harness)
+                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+        } secondary: {
+            detailPane(harness: harness)
+                .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
+        }
         .toolbar {
             ToolbarItem {
                 Button {
@@ -311,6 +772,9 @@ struct SkillsView: View {
                 }
                 .disabled(harness.isLoading)
                 .help("Refresh the skills list")
+            }
+            ToolbarItem {
+                bundledSkillsMenu(harness: harness)
             }
         }
         // Hard errors route to the top-of-window strip; only the capability warning stays in-surface.
@@ -324,9 +788,70 @@ struct SkillsView: View {
                     .skillsHub,
                     feature: "Installing, updating and removing Skills Hub skills",
                     version: hermesVersion
+                )
+                ?? capabilityBanner(
+                    .skillsLifecycle,
+                    feature: "Auditing, resetting, repairing, publishing and bundled-skill opt-in/out",
+                    version: hermesVersion
                 ),
             severity: .warning
         )
+        .alert("Opt out of bundled skills?", isPresented: $confirmingOptOut) {
+            Button("Cancel", role: .cancel) {}
+            Button("Opt out") { Task { await harness.optOut() } }
+        } message: {
+            Text("Stops built-in skills from seeding into this profile. Already-installed copies are left in place.")
+        }
+        .sheet(item: $publishTarget) { target in
+            PublishSheet(skillName: target.skillName, defaultPath: target.path) { path, registry, repo in
+                Task { await harness.publish(name: target.skillName, path: path, registry: registry, repo: repo) }
+            }
+        }
+        .sheet(item: Binding(
+            get: { harness.auditReport },
+            set: { harness.auditReport = $0 }
+        )) { report in
+            AuditReportSheet(report: report)
+        }
+        // Load the selected skill's SKILL.md preview; re-fires (and cancels the
+        // prior load) whenever the selection changes.
+        .task(id: harness.selectionID) {
+            await harness.loadPreview()
+        }
+    }
+
+    /// Bundled-skill seeding actions, grouped in one toolbar menu. Gated behind
+    /// ``lifecycleAvailable``; below the gate the in-surface `capabilityBanner`
+    /// explains why.
+    @ViewBuilder
+    private func bundledSkillsMenu(harness: SkillsHarness) -> some View {
+        Menu {
+            Button {
+                confirmingOptOut = true
+            } label: {
+                Label("Opt out of bundled skills", systemImage: "xmark.circle")
+            }
+            .help("Stops built-in skills from seeding into this profile")
+
+            Button {
+                Task { await harness.optIn() }
+            } label: {
+                Label("Opt back in", systemImage: "checkmark.circle")
+            }
+            .help("Re-enables seeding of built-in skills into this profile")
+
+            Button {
+                Task { await harness.reseed() }
+            } label: {
+                Label("Re-seed bundled skills now", systemImage: "arrow.clockwise.circle")
+            }
+            .help("Re-enables seeding and copies the built-in skills in immediately")
+        } label: {
+            Label("Bundled skills", systemImage: "shippingbox")
+        }
+        .menuIndicator(.visible)
+        .disabled(!lifecycleAvailable || harness.seedingBusy)
+        .help("Opt in or out of seeding Hermes' built-in skills into this profile")
     }
 
     // MARK: - Primary pane (search + install form + table)
@@ -452,9 +977,8 @@ struct SkillsView: View {
 
     @ViewBuilder
     private func skillsList(harness: SkillsHarness) -> some View {
-        // A grouped, inline-expanding list (like the Environment screen): each
-        // row collapses to a summary and grows in place when selected to reveal
-        // the full description and the hub Update / Remove actions — no pane.
+        // Summary rows only; selecting one opens the `PlatformSplit` detail
+        // panel (`SkillDetail`) with the description + kind-appropriate actions.
         List(selection: Binding(
             get: { harness.selectionID },
             set: { harness.selectionID = $0 }
@@ -462,16 +986,10 @@ struct SkillsView: View {
             ForEach(harness.rows) { skill in
                 SkillRow(
                     skill: skill,
-                    isExpanded: harness.selectionID == skill.name,
-                    isHubManaged: harness.isHubManaged(skill.name),
+                    kind: harness.kind(for: skill.name),
                     updateAvailable: harness.updatableNames.contains(skill.name),
-                    mutationsAvailable: mutationsAvailable,
-                    removeAvailable: removeAvailable,
-                    busy: harness.busy.contains(skill.name),
                     toggling: harness.toggling.contains(skill.name),
-                    onToggle: { enabled in Task { await harness.setEnabled(skill.name, enabled: enabled) } },
-                    onUpdate: { Task { await harness.update(skill.name) } },
-                    onRemove: { Task { await harness.remove(skill.name) } }
+                    onToggle: { enabled in Task { await harness.setEnabled(skill.name, enabled: enabled) } }
                 )
                 .tag(skill.name)
             }
@@ -483,6 +1001,52 @@ struct SkillsView: View {
         }
         .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    @ViewBuilder
+    private func detailPane(harness: SkillsHarness) -> some View {
+        if let skill = harness.selected {
+            SkillDetail(
+                skill: skill,
+                kind: harness.kind(for: skill.name),
+                isOfficial: harness.isOfficial(skill.name),
+                updateAvailable: harness.updatableNames.contains(skill.name),
+                mutationsAvailable: mutationsAvailable,
+                removeAvailable: removeAvailable,
+                lifecycleAvailable: lifecycleAvailable,
+                publishAvailable: publishAvailable,
+                forceRemoveAvailable: forceRemoveAvailable,
+                // Only use the cached resolved dir when it's for *this* skill —
+                // loadPreview overwrites it asynchronously, so during a selection
+                // change it can still hold the previous skill's path.
+                forceRemovePath: (harness.resolvedDirName == skill.name ? harness.resolvedDir : nil)
+                    ?? harness.skillDirectoryPath(for: skill),
+                busy: harness.busy.contains(skill.name),
+                previewText: harness.previewText,
+                previewError: harness.previewError,
+                previewLoading: harness.previewLoading,
+                onUpdate: { Task { await harness.update(skill.name) } },
+                onRemove: { Task { await harness.remove(skill.name) } },
+                onAudit: { Task { await harness.audit(skill.name) } },
+                onReset: { Task { await harness.reset(skill.name) } },
+                onRepair: { Task { await harness.repair(skill.name) } },
+                onPublish: {
+                    Task {
+                        let path = await harness.resolvedPublishPath(for: skill)
+                        publishTarget = PublishTarget(skillName: skill.name, path: path)
+                    }
+                },
+                onForceRemove: { Task { await harness.forceRemove(skill) } }
+            )
+        }
+    }
+
+}
+
+/// Identifies the local skill being published, seeding the publish sheet.
+private struct PublishTarget: Identifiable {
+    let skillName: String
+    let path: String
+    var id: String { skillName }
 }
 
 /// One Skills Hub search result row: identity + trust + description, with an
@@ -545,44 +1109,32 @@ private struct SkillSearchRow: View {
     }
 }
 
-/// One inline-expanding row in the installed-skills list (mirroring the
-/// Environment screen's `EnvVarRow`). Collapsed, it shows the skill name (with a
-/// Hub badge and an update hint), a one-line description preview, its category,
-/// and the enable toggle. Selected (`isExpanded`) it grows in place to reveal
-/// the full description and the Skills Hub Update / Remove actions — the content
-/// that used to live in the detail pane. `confirmingRemove` is per-row state, so
-/// the Remove confirmation lives here rather than on the harness.
+/// One summary row in the installed-skills list. Name + Hub/Local pill + an
+/// update-available hint + category + the enable toggle, over a single-line
+/// description preview. Selecting it opens the detail panel (`SkillDetail`),
+/// which shows the full, wrapping description; the row itself carries no actions
+/// or expansion.
 private struct SkillRow: View {
     let skill: DashboardSkill
-    let isExpanded: Bool
-    let isHubManaged: Bool
+    let kind: SkillKind?
     let updateAvailable: Bool
-    let mutationsAvailable: Bool
-    let removeAvailable: Bool
-    let busy: Bool
     let toggling: Bool
     let onToggle: (Bool) -> Void
-    let onUpdate: () -> Void
-    let onRemove: () -> Void
-
-    @State private var confirmingRemove = false
-
-    /// True when there's a non-empty description to show.
-    private var hasDescription: Bool { !(skill.description ?? "").isEmpty }
 
     var body: some View {
-        // Header (name + toggle) and a detail row beneath it. The description
-        // always lives in the detail row — same position, gap and font whether
-        // the row is selected or not — so expanding only un-truncates the text
-        // and reveals the hub actions, never shifts the description.
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
                 HStack(spacing: 6) {
                     Text(skill.name)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    if isHubManaged {
+                    switch kind {
+                    case .hub:
                         SkillPill(text: "Hub", color: .blue)
+                    case .local:
+                        SkillPill(text: "Local", color: .secondary)
+                    case .builtin, .none:
+                        EmptyView()
                     }
                     if updateAvailable {
                         Image(systemName: "arrow.up.circle")
@@ -612,85 +1164,273 @@ private struct SkillRow: View {
                 .disabled(toggling)
             }
 
-            detailRow
+            // One-line preview; the full description lives in the detail panel.
+            if let description = skill.description, !description.isEmpty {
+                Text(description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
-        .padding(.vertical, 6)
-        .padding(.trailing, 4)
+        .padding(.vertical, 4)
+    }
+}
+
+/// The detail panel for the selected skill (the `PlatformSplit` secondary):
+/// full description plus a kind-appropriate action cluster — hub: Update /
+/// Audit / Remove; builtin: Repair (official) / Reset; local: Publish — plus a
+/// universal, destructive **Force remove** (local profiles only). Mirrors
+/// `PluginDetail`'s prop-drilling style. Per-row confirmations live here.
+private struct SkillDetail: View {
+    let skill: DashboardSkill
+    let kind: SkillKind?
+    let isOfficial: Bool
+    let updateAvailable: Bool
+    let mutationsAvailable: Bool
+    let removeAvailable: Bool
+    let lifecycleAvailable: Bool
+    let publishAvailable: Bool
+    let forceRemoveAvailable: Bool
+    /// The on-disk directory Force remove deletes, named in its confirmation.
+    let forceRemovePath: String
+    let busy: Bool
+    /// Raw SKILL.md source for the highlighted preview (nil while loading or on
+    /// error).
+    let previewText: String?
+    let previewError: String?
+    let previewLoading: Bool
+    let onUpdate: () -> Void
+    let onRemove: () -> Void
+    let onAudit: () -> Void
+    let onReset: () -> Void
+    let onRepair: () -> Void
+    let onPublish: () -> Void
+    let onForceRemove: () -> Void
+
+    @State private var confirmingRemove = false
+    @State private var confirmingForceRemove = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 6) {
+                    Text(skill.name)
+                        .font(.headline)
+                        .textSelection(.enabled)
+                    switch kind {
+                    case .hub:
+                        SkillPill(text: "Hub", color: .blue)
+                    case .local:
+                        SkillPill(text: "Local", color: .secondary)
+                    case .builtin:
+                        SkillPill(text: "Built-in", color: .secondary)
+                    case .none:
+                        EmptyView()
+                    }
+                    if updateAvailable {
+                        Image(systemName: "arrow.up.circle")
+                            .foregroundStyle(.blue)
+                            .help("An update is available from the source")
+                            .accessibilityLabel("Update available")
+                    }
+                }
+
+                if let category = skill.category, !category.isEmpty {
+                    Text(category)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let description = skill.description, !description.isEmpty {
+                    Divider()
+                    Text(description)
+                        .font(.body)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Divider()
+                actions
+
+                Divider()
+                preview
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
         .alert("Remove \(skill.name)?", isPresented: $confirmingRemove) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) { onRemove() }
         } message: {
             Text("This deletes the installed skill from the Hermes host.")
         }
-    }
-
-    /// The description (left) and, when expanded, the hub actions (right) on one
-    /// shared row — like the Environment screen. The description is single-line
-    /// when collapsed and wraps when expanded, but its position/size never
-    /// change, so selecting a row isn't visually jarring.
-    @ViewBuilder
-    private var detailRow: some View {
-        if hasDescription || (isExpanded && isHubManaged) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                if hasDescription {
-                    Text(skill.description ?? "")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .lineLimit(isExpanded ? nil : 1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    // Keep the actions pinned right even with no description.
-                    Spacer(minLength: 0)
-                }
-
-                // Update / Remove are offered only for hub-installed skills
-                // (builtin and local skills aren't managed by the hub and can't
-                // be removed this way), once the row is expanded.
-                if isExpanded, isHubManaged {
-                    actions
-                }
-            }
+        .alert("Force remove \(skill.name)?", isPresented: $confirmingForceRemove) {
+            Button("Cancel", role: .cancel) {}
+            Button("Force remove", role: .destructive) { onForceRemove() }
+        } message: {
+            Text(forceRemoveMessage)
         }
     }
 
-    /// Trailing-aligned Update / Remove buttons with the explanatory caption
-    /// directly beneath them.
+    private var forceRemoveMessage: String {
+        let base = "This permanently deletes the skill directory at \(forceRemovePath)."
+        // `if case .builtin? =` (not `==`) so SkillKind needn't be Equatable.
+        if case .builtin? = kind {
+            return base + " A built-in skill may be re-seeded on the next sync unless you opt out of bundled skills."
+        }
+        return base
+    }
+
+    @ViewBuilder
     private var actions: some View {
-        VStack(alignment: .trailing, spacing: 4) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Button {
-                    onUpdate()
-                } label: {
-                    Label("Update", systemImage: "arrow.triangle.2.circlepath")
+                switch kind {
+                case .hub:
+                    hubButtons
+                case .builtin:
+                    builtinButtons
+                case .local:
+                    localButtons
+                case .none:
+                    EmptyView()
                 }
-                .disabled(busy || !mutationsAvailable)
-                .help("Pull the latest version from the source")
-
-                Button(role: .destructive) {
-                    confirmingRemove = true
-                } label: {
-                    Label("Remove", systemImage: "trash")
-                }
-                .disabled(busy || !removeAvailable)
-                .help("Uninstall this skill from the Hermes host")
-
+                forceRemoveButton
                 if busy { ProgressView().controlSize(.small) }
             }
-            if !mutationsAvailable {
-                Text("Admin runner unavailable.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if !removeAvailable {
-                // Update works over SSH/NIO; uninstall needs a local stdin
-                // prompt (no `--yes` in v0.14.0), so Remove is disabled here.
-                Text("Remove is unavailable on remote profiles.")
+            captions
+        }
+    }
+
+    /// The skill's `SKILL.md` source, rendered read-only with markdown syntax
+    /// highlighting (the same `MarkdownHighlightTheme` the Soul/Memory editors
+    /// use). Loading shows a spinner; a missing/unreadable file shows a soft
+    /// note. Renders inline so the whole detail panel scrolls for long skills.
+    @ViewBuilder
+    private var preview: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Preview")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            if previewLoading {
+                ProgressView().controlSize(.small)
+            } else if let previewText, !previewText.isEmpty {
+                Text(Self.highlighted(previewText))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+            } else {
+                Text(previewError ?? "Preview unavailable.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Highlights the SKILL.md source: the leading `---`-fenced YAML frontmatter
+    /// with the YAML theme, the markdown body with the markdown theme. Falls back
+    /// to whole-document markdown highlighting when there's no frontmatter.
+    private static func highlighted(_ text: String) -> AttributedString {
+        guard let parts = MarkdownFrontmatter.split(text) else {
+            return AttributedString(MarkdownHighlightTheme.attributed(text))
+        }
+        let combined = NSMutableAttributedString()
+        combined.append(YAMLHighlightTheme.attributed(parts.frontmatter))
+        combined.append(MarkdownHighlightTheme.attributed(parts.body))
+        return AttributedString(combined)
+    }
+
+    /// hub: Update / Audit / Remove.
+    @ViewBuilder
+    private var hubButtons: some View {
+        Button { onUpdate() } label: {
+            Label("Update", systemImage: "arrow.triangle.2.circlepath")
+        }
+        .disabled(busy || !mutationsAvailable)
+        .help("Pull the latest version from the source")
+
+        Button { onAudit() } label: {
+            Label("Audit", systemImage: "checkmark.shield")
+        }
+        .disabled(busy || !lifecycleAvailable)
+        .help("Re-scan this skill and show the security report")
+
+        Button(role: .destructive) { confirmingRemove = true } label: {
+            Label("Remove", systemImage: "trash")
+        }
+        .disabled(busy || !removeAvailable)
+        .help("Uninstall this skill from the Hermes host")
+    }
+
+    /// builtin: Repair (official only) / Reset.
+    @ViewBuilder
+    private var builtinButtons: some View {
+        if isOfficial {
+            Button { onRepair() } label: {
+                Label("Repair", systemImage: "bandage")
+            }
+            .disabled(busy || !lifecycleAvailable)
+            .help("Backfill this official skill's hub metadata")
+        }
+
+        Button { onReset() } label: {
+            Label("Reset", systemImage: "arrow.uturn.backward")
+        }
+        .disabled(busy || !lifecycleAvailable)
+        .help("Clear this skill's user-modified tracking")
+    }
+
+    /// local: Publish.
+    @ViewBuilder
+    private var localButtons: some View {
+        Button { onPublish() } label: {
+            Label("Publish", systemImage: "square.and.arrow.up")
+        }
+        .disabled(busy || !publishAvailable || !lifecycleAvailable)
+        .help("Publish this local skill to a registry")
+    }
+
+    /// Universal destructive force-delete of the skill directory. A plain
+    /// destructive button that opens a confirmation alert naming the path —
+    /// matching the hub clean-uninstall "Remove" flow, so removal is confirmed
+    /// the same way regardless of skill kind. The slashed-trash icon and "Force
+    /// remove" label keep it distinct from the clean "Remove" button.
+    private var forceRemoveButton: some View {
+        Button(role: .destructive) {
+            confirmingForceRemove = true
+        } label: {
+            Label("Force remove", systemImage: "trash.slash")
+        }
+        .disabled(busy || !forceRemoveAvailable)
+        .help("Permanently delete this skill's files from disk")
+    }
+
+    /// Explanatory captions for unavailable affordances. Uses `if case .X? =`
+    /// (not `==`) so SkillKind needn't be Equatable.
+    @ViewBuilder
+    private var captions: some View {
+        if case .hub? = kind, !mutationsAvailable {
+            captionText("Admin runner unavailable.")
+        } else if case .hub? = kind, !removeAvailable {
+            // `hermes skills uninstall` has no `--yes` and prompts on stdin,
+            // which only the local runner delivers — so clean Remove is
+            // local-only. (Force remove below still works on remote.)
+            captionText("Remove is unavailable on remote profiles; use Force remove.")
+        }
+        if !forceRemoveAvailable {
+            captionText("Force remove is unavailable on this profile.")
+        }
+    }
+
+    private func captionText(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 }
 
@@ -708,5 +1448,121 @@ private struct SkillPill: View {
             .background(color.opacity(0.15), in: Capsule())
             .foregroundStyle(color == .secondary ? Color.secondary : color)
             .lineLimit(1)
+    }
+}
+
+/// Sheet for publishing a **local** skill to a registry. Holds the editable
+/// registry / repo / path locally and reports the chosen values back through
+/// `onPublish`. `path` is seeded from a derived default (publish's positional
+/// arg is a directory `skills list` doesn't expose), so it stays editable.
+private struct PublishSheet: View {
+    let skillName: String
+    let onPublish: (String, SkillsPublishRegistry, String?) -> Void
+
+    @State private var path: String
+    @State private var registry: SkillsPublishRegistry = .github
+    @State private var repo: String = ""
+    @Environment(\.dismiss) private var dismiss
+
+    init(
+        skillName: String,
+        defaultPath: String,
+        onPublish: @escaping (String, SkillsPublishRegistry, String?) -> Void
+    ) {
+        self.skillName = skillName
+        self.onPublish = onPublish
+        self._path = State(initialValue: defaultPath)
+    }
+
+    /// github always needs a repo; clawhub's is optional. The path is always
+    /// required (it's publish's positional directory argument).
+    private var canPublish: Bool {
+        guard !path.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        if registry == .github {
+            return !repo.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        return true
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Publish “\(skillName)”")
+                .font(.headline)
+
+            Form {
+                Picker("Registry", selection: $registry) {
+                    Text("GitHub").tag(SkillsPublishRegistry.github)
+                    Text("ClawHub").tag(SkillsPublishRegistry.clawhub)
+                }
+                .pickerStyle(.segmented)
+
+                TextField(
+                    registry == .github ? "owner/repo" : "owner/repo (optional)",
+                    text: $repo
+                )
+
+                TextField("Skill directory path", text: $path)
+            }
+            .formStyle(.grouped)
+
+            if registry == .clawhub {
+                Text("ClawHub can infer the repository; leave it blank to use the default.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                    .help("Dismiss without publishing")
+                Button("Publish") {
+                    let trimmedRepo = repo.trimmingCharacters(in: .whitespaces)
+                    onPublish(
+                        path.trimmingCharacters(in: .whitespaces),
+                        registry,
+                        trimmedRepo.isEmpty ? nil : trimmedRepo
+                    )
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canPublish)
+                .help("Publish this skill to the selected registry")
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 420)
+    }
+}
+
+/// Sheet presenting a captured `skills audit` report — scrollable, monospaced,
+/// with a Done button. Dismissing clears `auditReport` via the `.sheet(item:)`
+/// binding.
+private struct AuditReportSheet: View {
+    let report: SkillAuditReport
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Audit: \(report.name)")
+                .font(.headline)
+
+            ScrollView {
+                Text(report.text)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(minHeight: 200, maxHeight: 360)
+
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+                    .help("Dismiss the audit report")
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 480)
     }
 }
