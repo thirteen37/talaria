@@ -102,7 +102,7 @@ struct HermesSkillsHubTests {
         let runner = RecordingAdminRunner()
         try await HermesSkillsHub.reset(runner: runner, name: "pixel-art")
         // Safe default — no `--restore`, so no stdin prompt is needed.
-        #expect(runner.lastCommand?.arguments == ["skills", "reset", "pixel-art"])
+        #expect(runner.lastCommand?.arguments == ["skills", "reset", "--", "pixel-art"])
         #expect(runner.lastCommand?.stdinInput == nil)
     }
 
@@ -111,7 +111,7 @@ struct HermesSkillsHubTests {
         let runner = RecordingAdminRunner()
         try await HermesSkillsHub.repairOfficial(runner: runner, name: "dogfood")
         // Safe default — no `--restore`, so no stdin prompt is needed.
-        #expect(runner.lastCommand?.arguments == ["skills", "repair-official", "dogfood"])
+        #expect(runner.lastCommand?.arguments == ["skills", "repair-official", "--", "dogfood"])
         #expect(runner.lastCommand?.stdinInput == nil)
     }
 

@@ -177,7 +177,7 @@ public enum HermesSkillsHub {
     @discardableResult
     public static func reset(runner: HermesAdminRunning, name: String) async throws -> String {
         let result = try await runner.run(HermesAdminCommand(
-            arguments: ["skills", "reset", name]
+            arguments: ["skills", "reset", "--", name]
         ))
         try ensureSuccess(result)
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -190,7 +190,7 @@ public enum HermesSkillsHub {
     @discardableResult
     public static func repairOfficial(runner: HermesAdminRunning, name: String) async throws -> String {
         let result = try await runner.run(HermesAdminCommand(
-            arguments: ["skills", "repair-official", name]
+            arguments: ["skills", "repair-official", "--", name]
         ))
         try ensureSuccess(result)
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
