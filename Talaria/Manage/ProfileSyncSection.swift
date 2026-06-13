@@ -393,6 +393,24 @@ final class ProfileSyncHarness {
             return outcomes.first?.error
         }
         await refreshProfile(profile)
+        flagSilentSkillNoop(item, profile: profile)
+    }
+
+    /// `hermes skills install`/`update` can exit 0 without taking effect. If the
+    /// push reported success but the skill is still drifting after the re-fetch,
+    /// surface that on the standard banner so it isn't silently lost.
+    private func flagSilentSkillNoop(_ item: SkillDriftItem, profile: String) {
+        let key = itemKey("skill", profile: profile, id: item.id)
+        guard itemErrors[key] == nil,
+              let still = skillsDrift[profile]?.items.first(where: { $0.name == item.name }) else { return }
+        let verb: String
+        switch still.kind {
+        case .missing: verb = "installed"
+        case .outdated: verb = "updated"
+        }
+        let message = "Hermes reported success, but “\(item.name)” still isn't \(verb) in “\(profile)”."
+        itemErrors[key] = message
+        banners?.surfaceError("profiles", message)
     }
 
     func syncAllSkills(profile: String) async {
@@ -400,8 +418,9 @@ final class ProfileSyncHarness {
         guard !actions.isEmpty else { return }
         pushingProfiles.insert(profile)
         defer { pushingProfiles.remove(profile) }
-        _ = await engine.pushSkills(actions: actions, toProfile: profile, runnerProvider: makeRunnerProvider())
+        let outcomes = await engine.pushSkills(actions: actions, toProfile: profile, runnerProvider: makeRunnerProvider())
         await refreshProfile(profile)
+        surfaceFailures(outcomes.compactMap(\.error), profile: profile, noun: "skill")
     }
 
     private func skillAction(for item: SkillDriftItem) -> SkillPushAction? {
@@ -432,8 +451,9 @@ final class ProfileSyncHarness {
         guard !edits.isEmpty else { return }
         pushingProfiles.insert(profile)
         defer { pushingProfiles.remove(profile) }
-        _ = await pushConfigEdits(edits, profile: profile)
+        let error = await pushConfigEdits(edits, profile: profile)
         await refreshProfile(profile)
+        if let error { banners?.surfaceError("profiles", error) }
     }
 
     /// Acquires the profile's scoped dashboard, pushes the edits, releases.
@@ -464,8 +484,9 @@ final class ProfileSyncHarness {
         guard !items.isEmpty else { return }
         pushingProfiles.insert(profile)
         defer { pushingProfiles.remove(profile) }
-        _ = await pushEnvItems(items, profile: profile)
+        let results = await pushEnvItems(items, profile: profile)
         await refreshProfile(profile)
+        surfaceFailures(results.compactMap { $0 }, profile: profile, noun: "credential")
     }
 
     /// Acquires the profile's scoped dashboard, pushes each key, releases.
@@ -586,7 +607,17 @@ final class ProfileSyncHarness {
         defer { pushingItems.remove(key) }
         if let error = await work() {
             itemErrors[key] = error
+            banners?.surfaceError("profiles", error)
         }
+    }
+
+    /// Surfaces a batch of push failures on the standard top-of-window banner.
+    private func surfaceFailures(_ errors: [String], profile: String, noun: String) {
+        guard let first = errors.first else { return }
+        let message = errors.count == 1
+            ? first
+            : "\(errors.count) \(noun) pushes to “\(profile)” failed: \(first)"
+        banners?.surfaceError("profiles", message)
     }
 }
 
