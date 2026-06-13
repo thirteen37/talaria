@@ -39,6 +39,10 @@ final class SkillsHarness {
     /// Names of installed skills that came from the hub (eligible for Update /
     /// Remove), derived from `hermes skills list`. Empty when no admin runner.
     var hubInstalledNames: Set<String> = []
+    /// Names of installed skills whose Source is exactly `local` (user-created,
+    /// neither builtin nor Hub), derived from the same `hermes skills list`.
+    /// Empty when no admin runner.
+    var localNames: Set<String> = []
     /// Hub skills with an upstream update available (from `hermes skills check`),
     /// populated off `refresh()` so each row can flag "Update available".
     var updatableNames: Set<String> = []
@@ -61,6 +65,8 @@ final class SkillsHarness {
     }
 
     func isHubManaged(_ name: String) -> Bool { hubInstalledNames.contains(name) }
+
+    func isLocal(_ name: String) -> Bool { localNames.contains(name) }
 
     func refresh() async {
         isLoading = true
@@ -86,13 +92,16 @@ final class SkillsHarness {
     private func refreshHubInstalled() async {
         guard let runner else {
             hubInstalledNames = []
+            localNames = []
             return
         }
         do {
             let installed = try await HermesSkillsHub.listInstalled(runner: runner)
             hubInstalledNames = Set(installed.filter(\.isHubManaged).map(\.name))
+            localNames = Set(installed.filter(\.isLocal).map(\.name))
         } catch {
             hubInstalledNames = []
+            localNames = []
             if lastError == nil {
                 lastError = error.localizedDescription
                 banners?.surfaceError(bannerKey, error.localizedDescription)
@@ -464,6 +473,7 @@ struct SkillsView: View {
                     skill: skill,
                     isExpanded: harness.selectionID == skill.name,
                     isHubManaged: harness.isHubManaged(skill.name),
+                    isLocal: harness.isLocal(skill.name),
                     updateAvailable: harness.updatableNames.contains(skill.name),
                     mutationsAvailable: mutationsAvailable,
                     removeAvailable: removeAvailable,
@@ -556,6 +566,7 @@ private struct SkillRow: View {
     let skill: DashboardSkill
     let isExpanded: Bool
     let isHubManaged: Bool
+    let isLocal: Bool
     let updateAvailable: Bool
     let mutationsAvailable: Bool
     let removeAvailable: Bool
@@ -583,6 +594,8 @@ private struct SkillRow: View {
                         .truncationMode(.middle)
                     if isHubManaged {
                         SkillPill(text: "Hub", color: .blue)
+                    } else if isLocal {
+                        SkillPill(text: "Local", color: .secondary)
                     }
                     if updateAvailable {
                         Image(systemName: "arrow.up.circle")

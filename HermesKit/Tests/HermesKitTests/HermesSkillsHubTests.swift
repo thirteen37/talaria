@@ -128,6 +128,40 @@ struct HermesSkillsHubTests {
     }
 
     @Test
+    func classifiesOriginAsLocalBuiltinOrHub() throws {
+        // The three origins must classify cleanly: local → isLocal only,
+        // builtin → neither flag, hub → isHubManaged only.
+        let text = """
+                                           Installed Skills
+        ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━┓
+        ┃ Name                      ┃ Category   ┃ Source  ┃ Trust     ┃ Status   ┃
+        ┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━┩
+        │ cmux                      │            │ local   │ local     │ enabled  │
+        │ dogfood                   │            │ builtin │ builtin   │ enabled  │
+        │ pixel-art                 │ creative   │ builtin │ builtin   │ disabled │
+        │ skills-sh/github/foo-bar  │ tools      │ skills-sh │ community │ enabled  │
+        └───────────────────────────┴────────────┴─────────┴───────────┴──────────┘
+        """
+        let rows = HermesSkillsHub.parseInstalledTable(text)
+
+        let cmux = try #require(rows.first(where: { $0.name == "cmux" }))
+        #expect(cmux.isLocal == true)
+        #expect(cmux.isHubManaged == false)
+
+        let dogfood = try #require(rows.first(where: { $0.name == "dogfood" }))
+        #expect(dogfood.isLocal == false)
+        #expect(dogfood.isHubManaged == false)
+
+        let pixel = try #require(rows.first(where: { $0.name == "pixel-art" }))
+        #expect(pixel.isLocal == false)
+        #expect(pixel.isHubManaged == false)
+
+        let hub = try #require(rows.first(where: { $0.name == "skills-sh/github/foo-bar" }))
+        #expect(hub.isLocal == false)
+        #expect(hub.isHubManaged == true)
+    }
+
+    @Test
     func mergesWrappedContinuationRow() {
         // A continuation row (empty first cell) appends its non-empty cells to
         // the previous record — here a Category that wrapped onto a second line.
