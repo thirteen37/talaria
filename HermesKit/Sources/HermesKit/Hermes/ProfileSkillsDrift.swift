@@ -79,13 +79,17 @@ public struct SkillDriftItem: Equatable, Sendable, Identifiable {
     public let name: String
     /// The default skill's `source` origin, for display.
     public let source: String
+    /// The default skill's category folder (e.g. `creative`), nil/empty when
+    /// uncategorized — needed to locate `skills/<category>/<name>/SKILL.md`.
+    public let category: String?
     public let kind: Kind
 
     public var id: String { name }
 
-    public init(name: String, source: String, kind: Kind) {
+    public init(name: String, source: String, category: String?, kind: Kind) {
         self.name = name
         self.source = source
+        self.category = category
         self.kind = kind
     }
 
@@ -161,13 +165,14 @@ public enum ProfileSkillsDriftPlanner {
                 // and its update check flags an available update. Enabled state
                 // is ignored.
                 if present.isHubManaged, updateByName[skill.name]?.updateAvailable == true {
-                    items.append(SkillDriftItem(name: skill.name, source: skill.source, kind: .outdated))
+                    items.append(SkillDriftItem(name: skill.name, source: skill.source, category: skill.category, kind: .outdated))
                 }
             } else {
                 let (identifier, blocker) = resolveInstall(for: skill, index: index)
                 items.append(SkillDriftItem(
                     name: skill.name,
                     source: skill.source,
+                    category: skill.category,
                     kind: .missing(identifier: identifier, blocker: blocker)
                 ))
             }

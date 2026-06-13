@@ -781,11 +781,11 @@ struct ProfileSyncView: View {
             do {
                 async let defaultText = HermesSkillContentReader.read(
                     profile: serverProfile, profileName: HermesProfiles.defaultProfileName,
-                    skillName: item.name, transfer: transfer
+                    skillName: item.name, category: item.category, transfer: transfer
                 )
                 async let profileText = HermesSkillContentReader.read(
                     profile: serverProfile, profileName: profileName,
-                    skillName: item.name, transfer: transfer
+                    skillName: item.name, category: item.category, transfer: transfer
                 )
                 let (left, right) = try await (defaultText, profileText)
                 guard skillDiff?.item == item else { return }

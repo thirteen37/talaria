@@ -5,18 +5,30 @@ import Testing
 @Suite
 struct HermesSkillContentReaderTests {
     @Test
-    func defaultProfilePathIsHomeRelative() {
+    func defaultProfilePathIncludesCategoryFolder() {
         #expect(
-            HermesSkillContentReader.skillRelativePath(profileName: "default", skillName: "weather")
-                == "skills/weather/SKILL.md"
+            HermesSkillContentReader.skillRelativePath(profileName: "default", skillName: "baoyu-article-illustrator", category: "creative")
+                == "skills/creative/baoyu-article-illustrator/SKILL.md"
         )
     }
 
     @Test
-    func namedProfilePathIsUnderProfilesDir() {
+    func namedProfilePathIsUnderProfilesDirWithCategory() {
         #expect(
-            HermesSkillContentReader.skillRelativePath(profileName: "work", skillName: "weather")
-                == "profiles/work/skills/weather/SKILL.md"
+            HermesSkillContentReader.skillRelativePath(profileName: "work", skillName: "weather", category: "tools")
+                == "profiles/work/skills/tools/weather/SKILL.md"
+        )
+    }
+
+    @Test
+    func uncategorizedSkillOmitsTheCategoryFolder() {
+        #expect(
+            HermesSkillContentReader.skillRelativePath(profileName: "default", skillName: "weather", category: nil)
+                == "skills/weather/SKILL.md"
+        )
+        #expect(
+            HermesSkillContentReader.skillRelativePath(profileName: "default", skillName: "weather", category: "")
+                == "skills/weather/SKILL.md"
         )
     }
 }

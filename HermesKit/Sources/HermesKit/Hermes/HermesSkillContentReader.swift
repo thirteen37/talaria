@@ -24,11 +24,16 @@ public enum HermesSkillContentError: Error, Equatable, Sendable, LocalizedError 
 /// fetchable — the index is metadata-only — so the only two comparable sides are
 /// the two profiles' installed copies).
 public enum HermesSkillContentReader {
-    /// Path of a skill's `SKILL.md` relative to the **Hermes home**:
-    /// `skills/<name>/SKILL.md` for the default profile,
-    /// `profiles/<profile>/skills/<name>/SKILL.md` otherwise.
-    public static func skillRelativePath(profileName: String, skillName: String) -> String {
-        let tail = "skills/\(skillName)/SKILL.md"
+    /// Path of a skill's `SKILL.md` relative to the **Hermes home**. Skills are
+    /// stored under their category folder, so the leaf is
+    /// `skills/<category>/<name>/SKILL.md` (or `skills/<name>/SKILL.md` when the
+    /// skill is uncategorized). The default profile reads from the home root;
+    /// every named profile reads from `profiles/<profile>/…`.
+    public static func skillRelativePath(profileName: String, skillName: String, category: String?) -> String {
+        let folder = category.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        let tail = folder.isEmpty
+            ? "skills/\(skillName)/SKILL.md"
+            : "skills/\(folder)/\(skillName)/SKILL.md"
         if profileName == HermesProfiles.defaultProfileName {
             return tail
         }
@@ -39,12 +44,13 @@ public enum HermesSkillContentReader {
         profile: ServerProfile,
         profileName: String,
         skillName: String,
+        category: String?,
         transfer: RemoteSnapshotTransfer? = nil
     ) async throws -> String {
         do {
             return try await HermesFileStore.read(
                 profile: profile,
-                location: .profileRelative(tail: skillRelativePath(profileName: profileName, skillName: skillName)),
+                location: .profileRelative(tail: skillRelativePath(profileName: profileName, skillName: skillName, category: category)),
                 transfer: transfer
             )
         } catch let error as HermesFileStoreError {
