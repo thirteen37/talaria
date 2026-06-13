@@ -817,27 +817,37 @@ struct ProfileSyncView: View {
     @ViewBuilder
     private func desktopComparison(_ harness: ProfileSyncHarness) -> some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Picker("Profile", selection: $selectedProfile) {
-                    ForEach(namedProfiles, id: \.self) { Text($0).tag($0 as String?) }
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text("Sync from").foregroundStyle(.secondary)
+                    Text(HermesProfiles.defaultProfileName).fontWeight(.semibold)
+                    Image(systemName: "arrow.right").foregroundStyle(.secondary)
+                    Picker("Target profile", selection: $selectedProfile) {
+                        ForEach(namedProfiles, id: \.self) { Text($0).tag($0 as String?) }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 200)
+                    Spacer()
+                    if let selected = selectedProfile {
+                        if harness.pushingProfiles.contains(selected) {
+                            ProgressView().controlSize(.small)
+                        }
+                        // Skills carries its own "Sync all" in its list; Config and
+                        // Environment get one here, pushing every difference at once.
+                        if section != .skills, sectionCount(section, profile: selected, harness: harness) > 0 {
+                            Button("Sync all") { syncAllForSection(selected, harness: harness) }
+                                .help("Push every \(section.rawValue.lowercased()) difference from default to “\(selected)”")
+                                .accessibilityLabel("Sync all \(section.rawValue.lowercased()) from default to \(selected)")
+                        }
+                        Button("Sync everything from default") { confirmingProfile = selected }
+                            .help("Install/update skills and copy config + credentials from default to “\(selected)”")
+                            .accessibilityLabel("Sync everything from default to \(selected)")
+                    }
                 }
-                .labelsHidden()
-                .frame(maxWidth: 260)
-                Spacer()
                 if let selected = selectedProfile {
-                    if harness.pushingProfiles.contains(selected) {
-                        ProgressView().controlSize(.small)
-                    }
-                    // Skills carries its own "Sync all" in its list; Config and
-                    // Environment get one here, pushing every difference at once.
-                    if section != .skills, sectionCount(section, profile: selected, harness: harness) > 0 {
-                        Button("Sync all") { syncAllForSection(selected, harness: harness) }
-                            .help("Push every \(section.rawValue.lowercased()) difference from default to “\(selected)”")
-                            .accessibilityLabel("Sync all \(section.rawValue.lowercased()) from default to \(selected)")
-                    }
-                    Button("Sync everything from default") { confirmingProfile = selected }
-                        .help("Install/update skills and copy config + credentials from default to “\(selected)”")
-                        .accessibilityLabel("Sync everything from default to \(selected)")
+                    Text("Install / Update / Sync change “\(selected)”. “\(HermesProfiles.defaultProfileName)” is the read-only source.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
             .padding()
