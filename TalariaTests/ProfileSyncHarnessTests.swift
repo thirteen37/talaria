@@ -267,6 +267,29 @@ struct ProfileSyncHarnessTests {
     }
 
     @Test
+    func blockedSkillIsNotCountedAsSyncable() async {
+        let harness = makeHarness(
+            windowHTTP: SyncStubHTTP(responses: [.init(path: "/api/config/schema", body: Self.schemaJSON)]),
+            // Catalog unavailable → the missing `notes` skill can't resolve an
+            // install identifier, so it's non-actionable (blocked).
+            catalogHTTP: SyncStubHTTP(responses: [.init(path: "/index.json", statusCode: 500, body: Data())]),
+            // Identical configs + empty env so skills are the only possible axis.
+            configReader: { _ in .object(["model": .string("a")]) },
+            envReader: { _ in [] }
+        )
+
+        await harness.refresh(namedProfiles: ["work"])
+
+        // The blocked skill exists in the drift…
+        #expect(harness.skillsDrift["work"]?.items.contains { !$0.isActionable } == true)
+        // …but it can't be synced, so it must not move the count/pill or enable
+        // "Sync everything" (whose summary would otherwise say "Nothing to sync").
+        #expect(harness.syncableSkillCount(for: "work") == 0)
+        #expect(harness.differenceCount(for: "work") == 0)
+        #expect(harness.canSyncEverything(profile: "work") == false)
+    }
+
+    @Test
     func revealTokenBumpsOnEachRefresh() async {
         let harness = makeHarness(
             windowHTTP: SyncStubHTTP(responses: [

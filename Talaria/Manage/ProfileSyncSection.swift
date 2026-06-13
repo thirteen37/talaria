@@ -385,9 +385,18 @@ final class ProfileSyncHarness {
     // MARK: - Difference counts
 
     func differenceCount(for profile: String) -> Int {
-        (skillsDrift[profile]?.items.count ?? 0)
+        syncableSkillCount(for: profile)
             + syncableConfigCount(for: profile)
             + (envDrift[profile]?.items.count ?? 0)
+    }
+
+    /// Skill differences that can actually be pushed — installable-missing or
+    /// outdated. Raw `items.count` includes skills that didn't resolve to a
+    /// catalog identifier (`isActionable == false`): counting those overstated the
+    /// pill and left "Sync everything" enabled while its summary said "Nothing to
+    /// sync" (`skillAction(for:)` returns nil). Mirrors ``syncableConfigCount``.
+    func syncableSkillCount(for profile: String) -> Int {
+        skillsDrift[profile]?.items.filter(\.isActionable).count ?? 0
     }
 
     /// Config differences the active filter would actually *push* — pushable rows,
@@ -936,10 +945,17 @@ struct ProfileSyncView: View {
                     .frame(maxWidth: 200)
                     Spacer()
                     if let selected = selectedProfile {
-                        if harness.pushingProfiles.contains(selected) {
+                        let syncing = harness.pushingProfiles.contains(selected)
+                        if syncing {
                             ProgressView().controlSize(.small)
                         }
                         Button("Sync everything from default") { confirmingProfile = selected }
+                            // Disable while a sync is in flight: a second concurrent
+                            // syncEverything would run unserialized skill/env legs and
+                            // corrupt the shared `pushingProfiles` flag (whichever
+                            // finishes first clears it). The phone row hides the button
+                            // the same way.
+                            .disabled(syncing)
                             .help("Install/update skills and copy config + credentials from default to “\(selected)”")
                             .accessibilityLabel("Sync everything from default to \(selected)")
                     }
@@ -1354,7 +1370,7 @@ private struct ProfileDriftRow: View {
 
     private var driftSummary: String {
         var parts: [String] = []
-        let s = harness.skillsDrift[profile]?.items.count ?? 0
+        let s = harness.syncableSkillCount(for: profile)
         let c = harness.syncableConfigCount(for: profile)
         let e = harness.envDrift[profile]?.items.count ?? 0
         if s > 0 { parts.append("\(s) skill\(s == 1 ? "" : "s")") }
