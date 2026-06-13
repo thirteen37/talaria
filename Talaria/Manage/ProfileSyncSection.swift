@@ -570,9 +570,14 @@ final class ProfileSyncHarness {
         defer { pushingItems.remove(key) }
         let error = await pushEnvItems([(key: id, value: value)], profile: profile).first ?? nil
         await refreshProfile(profile)
+        // Can only judge the write by the re-read when the re-read actually
+        // succeeded. If the env read failed (transient SSH/file error) the
+        // snapshot is nil/stale — treat the PUT's own OK as success rather than
+        // asserting a no-op we can't substantiate.
+        let envReadSucceeded = resourceErrors[profile]?[.env] == nil && snapshots[profile]?.env != nil
         if let error {
             banners?.surfaceError("profiles", error)
-        } else if plaintext(forKey: id, inProfile: profile) != value {
+        } else if envReadSucceeded, plaintext(forKey: id, inProfile: profile) != value {
             // PUT /api/env returned OK but the profile's re-read value isn't the
             // one we just wrote. Compare against the *written* value (not freshly
             // derived drift vs. default) so a default edited concurrently in
@@ -829,9 +834,14 @@ struct ProfileSyncView: View {
                 }
             }
         }
-        // Lazy: the first time this tab appears, build the harness and compute
-        // drift. Re-selecting the tab reuses the loaded state (Refresh re-reads).
-        .task {
+        // Lazy: build the harness and compute drift once the dashboard is online.
+        // Keyed on client availability so that if the tab opens *before* a slow
+        // (remote) dashboard finishes spawning, the load doesn't run against a nil
+        // client — which would enumerate default-only, set namedProfiles = [], mark
+        // hasLoaded, and strand the tab on "No named profiles". The task re-fires
+        // when the client lands. Re-selecting the tab reuses loaded state.
+        .task(id: windowClient() != nil) {
+            guard windowClient() != nil else { return }
             let harness = ensureHarness()
             guard !harness.hasLoaded, !harness.isLoading else { return }
             await reload(harness)
