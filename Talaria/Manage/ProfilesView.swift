@@ -787,6 +787,18 @@ struct ProfilesView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            TableColumn("Sync") { profile in
+                // `default` is the sync source, so it's never a target.
+                if let onShowSync, !isDefaultProfile(profile) {
+                    Button("Sync") { onShowSync(profile.name) }
+                        .buttonStyle(.link)
+                        .help("Push default's skills, config and credentials to “\(profile.name)”")
+                } else {
+                    Text("—")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .width(50)
         }
         .overlay {
             if harness.profiles.isEmpty, !harness.isLoading {
@@ -887,7 +899,13 @@ struct ProfilesView: View {
     /// so both are gated on a non-default selection.
     private func renameDeleteDisabled(_ harness: ProfilesHarness) -> Bool {
         guard let profile = harness.selectedProfile else { return true }
-        return profile.isDefault || profile.name == HermesProfiles.defaultProfileName
+        return isDefaultProfile(profile)
+    }
+
+    /// The default profile is the cross-profile sync *source*, so it's never a
+    /// sync target (no per-row Sync link).
+    private func isDefaultProfile(_ profile: HermesProfileInfo) -> Bool {
+        profile.isDefault || profile.name == HermesProfiles.defaultProfileName
     }
 
     /// Title for the pushed iPhone editor page, matching whichever secondary
