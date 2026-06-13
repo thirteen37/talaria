@@ -14,16 +14,32 @@ Run this script before a v1 release candidate.
    - Output renders in collapsible sections (headers recognised: `== Title ==`, `--- Title ---`, ALL-CAPS standalone titles).
    - Exit code is displayed next to the title bar.
    - *Copy bundle* puts raw report + Talaria version + profile summary on the clipboard.
-9. **Skills view**: open Manage → **Skills, Tools, MCP, Plugins** and select the *Skills* tab. Confirm:
-   - Rows from the dashboard render in the table with name, enabled toggle, and path/source metadata.
-   - Toggling a skill flips the enabled state on the next refresh.
+9. **Skills view**: open Manage → **Skills, Tools, MCP, Plugins** and select the *Skills* tab. It's a
+   master/detail split (resizable on macOS): a summary list on the left, a detail panel on the right.
+   Confirm:
+   - List rows show name, a Hub/Local pill, an "update available" hint, the category, a one-line
+     description preview, and the enabled toggle; toggling flips the enabled state on the next refresh.
+   - Selecting a row opens the detail panel: full description, a kind-appropriate action cluster, and a
+     **Preview** section showing the skill's `SKILL.md` source with YAML-frontmatter + markdown syntax
+     highlighting. (The preview resolves the real directory by frontmatter name, so a skill whose
+     `name` differs from its folder — e.g. `creative-ideation` named `ideation` — still previews.)
    - **Search the Skills Hub**: expand the section, search (e.g. `git`); results show full
      name · source · trust + description. (Works without a live Hermes — plain HTTP.)
-   - **Install** a small official skill from a search result → it appears in the table and toggles.
-   - **Install from identifier / URL**: paste an `official/…` id → green confirmation + the row appears.
-   - Select a hub-installed skill → detail pane offers **Update** and **Remove** (and flags
-     "Update available" when upstream is ahead); **Remove** confirms, then deletes the skill.
-   - A builtin/local (non-hub) skill shows **no** Update/Remove in its detail pane.
+   - **Install** a small official skill from a search result, or paste an `official/…` id into
+     **Install from identifier / URL** → green confirmation + the row appears.
+   - **Hub** skill detail → **Update**, **Audit** (shows a report sheet), **Remove** (confirms, then
+     clean-uninstalls), and **Force remove**; flags "Update available" when upstream is ahead.
+   - **Built-in** skill detail → **Reset** (and **Repair** for official-trust skills) + **Force remove**.
+   - **Local** skill detail → **Publish** (sheet: registry + repo + path) + **Force remove**.
+   - **Force remove** (all kinds) → confirmation alert naming the on-disk path (and a re-seed warning
+     for built-ins); it deletes the skill's directory and the row disappears after refresh. Verify the
+     directory is gone on disk.
+   - Toolbar **Bundled skills** menu → Opt out / Opt back in / Re-seed now (verify the
+     `~/.hermes/skills/.no-bundled-skills` marker appears/disappears).
+   - On a **remote (SSH)** profile: Audit/Reset/Repair/Publish/Force remove and the preview all work;
+     clean **Remove** is disabled (its stdin confirm can't cross SSH) — use Force remove instead.
+   - Point at a **< 0.15.1** Hermes (or simulate) → the lifecycle actions + Bundled-skills menu show
+     the capability-warning banner rather than erroring.
 10. **Tools view**: open Manage → **Skills, Tools, MCP, Plugins** and select the *Tools* tab. Confirm:
     - Rows from `hermes tools list` render with name, platform, enabled toggle.
     - Toggling persists across a manual *Refresh*.
