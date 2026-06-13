@@ -24,6 +24,12 @@ struct EditableComparisonView: View {
     /// cross-profile sync surface is one-way (default is the source of truth), so
     /// it never writes back into the source column.
     var allowReverseCopy = true
+    /// Dotpaths whose copy gutter is suppressed (rendered read-only), keyed by the
+    /// row's `key`. The sync surface passes `ConfigSyncScope.isExcludedFromPush`
+    /// so a per-row copy can't push a value the bulk payload deliberately excludes
+    /// (e.g. the stale `auxiliary.*.base_url` per-slot override). nil ⇒ every
+    /// differing row is copyable (the plain config editor).
+    var copyExcluded: ((String) -> Bool)?
     /// Purely presentational key/description search — composes with
     /// `showDifferencesOnly`; only changes which rows render, never
     /// `working`/dirty/save. Ephemeral view state (resets on a compare switch).
@@ -121,7 +127,8 @@ struct EditableComparisonView: View {
                                             source: source,
                                             dest: dest,
                                             immediateCopy: immediateCopy,
-                                            allowReverseCopy: allowReverseCopy
+                                            allowReverseCopy: allowReverseCopy,
+                                            copyDisabled: copyExcluded?(row.key) ?? false
                                         )
                                     }
                                 }
@@ -181,6 +188,10 @@ private struct ComparisonRowView: View {
     let dest: ConfigEditingState
     var immediateCopy = false
     var allowReverseCopy = true
+    /// When true, the copy gutter is replaced by a read-only marker — the row
+    /// still shows the difference but can't be pushed (it's excluded from the
+    /// sync payload). See ``EditableComparisonView/copyExcluded``.
+    var copyDisabled = false
 
     @State private var hovering = false
 
@@ -254,7 +265,14 @@ private struct ComparisonRowView: View {
     @ViewBuilder
     private var copyGutter: some View {
         VStack(spacing: 2) {
-            if hovering, let sourceField = row.sourceField, let destField = row.destField {
+            if copyDisabled, row.sourceField != nil, row.destField != nil {
+                // Excluded from sync (e.g. a stale per-slot `auxiliary.*.base_url`
+                // override): show the difference but never offer to copy it.
+                // Static — reads no live value, so it stays off the keystroke path.
+                Image(systemName: "lock")
+                    .foregroundStyle(.tertiary)
+                    .help("Read-only — excluded from sync (a stale per-slot override).")
+            } else if hovering, let sourceField = row.sourceField, let destField = row.destField {
                 let sourceValue = source.value(for: sourceField)
                 let destValue = dest.value(for: destField)
                 if sourceValue != destValue {

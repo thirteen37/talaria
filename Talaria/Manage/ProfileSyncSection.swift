@@ -164,6 +164,9 @@ final class ProfileSyncHarness {
         modifiedSkills.removeAll()
         skillContentLoading.removeAll()
         skillContentLoaded.removeAll()
+        // Bump so the Skills section's `.task` re-fires after a manual Refresh
+        // (selected profile unchanged → the token is the only id that moves).
+        skillContentToken &+= 1
         isLoading = true
         defer { isLoading = false }
 
@@ -1109,7 +1112,10 @@ struct ProfileSyncView: View {
                     dest: dest,
                     showDifferencesOnly: true,
                     immediateCopy: true,
-                    allowReverseCopy: false
+                    allowReverseCopy: false,
+                    // Per-row copy must honor the same exclusion the bulk payload
+                    // does — never let a stale `auxiliary.*.base_url` be pushed.
+                    copyExcluded: { ConfigSyncScope.isExcludedFromPush(dotpath: $0) }
                 )
             } else {
                 ProgressView("Loading config…").frame(maxWidth: .infinity, maxHeight: .infinity)

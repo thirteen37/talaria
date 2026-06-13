@@ -289,7 +289,11 @@ struct ProfileSyncHarnessTests {
 
         await harness.refresh(namedProfiles: ["work"])
         let first = harness.revealToken
+        let firstContent = harness.skillContentToken
         await harness.refresh(namedProfiles: ["work"])
         #expect(harness.revealToken > first)
+        // A manual Refresh must also re-fire the Skills content-drift task — the
+        // selected profile is unchanged, so the token is the only id that moves.
+        #expect(harness.skillContentToken > firstContent)
     }
 }
