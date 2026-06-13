@@ -403,21 +403,22 @@ final class ProfileSyncHarness {
 
     /// `hermes skills install`/`update` can exit 0 without taking effect. If the
     /// push reported success but the skill is still drifting after the re-fetch,
-    /// surface that on the standard banner — including what Hermes actually
-    /// printed — so the no-op (and its likely cause) isn't silently lost.
+    /// surface a short, actionable banner; the full Hermes output (often just
+    /// progress noise) goes to the App Log rather than the banner.
     private func flagSilentSkillNoop(_ item: SkillDriftItem, profile: String, output: String) {
         let key = itemKey("skill", profile: profile, id: item.id)
         guard itemErrors[key] == nil,
               let still = skillsDrift[profile]?.items.first(where: { $0.name == item.name }) else { return }
-        let verb: String
+        let action: String
+        let result: String
         switch still.kind {
-        case .missing: verb = "installed"
-        case .outdated: verb = "updated"
+        case .missing: action = "Installing"; result = "but the skill didn't appear"
+        case .outdated: action = "Updating"; result = "but it's still out of date"
         }
-        var message = "Hermes reported success, but “\(item.name)” still isn't \(verb) in “\(profile)”."
-        if let lastLine = output.split(separator: "\n").map(String.init).last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
-            message += " Hermes said: \(lastLine)"
+        if !output.isEmpty {
+            AppLog.general.error("Skill sync no-op: \(action, privacy: .public) “\(item.name, privacy: .public)” in “\(profile, privacy: .public)” reported success without effect. Hermes output: \(output, privacy: .public)")
         }
+        let message = "\(action) “\(item.name)” in “\(profile)” reported success \(result) (see App Logs)."
         itemErrors[key] = message
         banners?.surfaceError("profiles", message)
     }
