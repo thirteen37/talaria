@@ -236,18 +236,28 @@ public enum HermesSkillsHub {
 
     static func ensureSuccess(_ result: HermesAdminResult) throws {
         guard result.exitCode != 0 else { return }
-        let stderr = result.stderr.lowercased()
+        // hermes (and Rich) frequently print the actual error to **stdout**, not
+        // stderr — so scan and surface both. Without the stdout fallback a
+        // stderr-empty failure collapses to the useless "hermes skills failed
+        // (exit N)" banner, hiding the real cause.
+        let combined = (result.stderr + "\n" + result.stdout).lowercased()
         // Same argparse/Click "command not in this hermes" detection as
         // `HermesTools.ensureSuccess`, without swallowing `env: hermes: No such
         // file or directory` (a PATH miss, which is a genuine failure).
-        if stderr.contains("unknown command")
-            || stderr.contains("no such command")
-            || stderr.contains("no such subcommand") {
-            throw HermesSkillsHubError.commandUnavailable(
-                result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
+        if combined.contains("unknown command")
+            || combined.contains("no such command")
+            || combined.contains("no such subcommand") {
+            throw HermesSkillsHubError.commandUnavailable(detailOutput(result))
         }
-        throw HermesSkillsHubError.commandFailed(exitCode: result.exitCode, stderr: result.stderr)
+        throw HermesSkillsHubError.commandFailed(exitCode: result.exitCode, stderr: detailOutput(result))
+    }
+
+    /// The failure detail to surface: stderr if present, else stdout (where
+    /// hermes/Rich often write the error), else neither.
+    private static func detailOutput(_ result: HermesAdminResult) -> String {
+        let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !stderr.isEmpty { return stderr }
+        return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Scans stdout for soft-failure markers (used by install/uninstall, which
