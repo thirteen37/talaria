@@ -44,7 +44,7 @@ A few operations remain on CLI fallbacks because Hermes does not expose dashboar
 
 - Sessions rename: `hermes sessions rename`.
 - Tools enable/disable/list: `hermes tools ...`.
-- Skills Hub install/update/uninstall (+ `skills list`/`check` reads): `hermes skills ...`. Inherently local (security scan + filesystem writes). `uninstall` lacks `--yes` in v0.14.0, so Talaria confirms via stdin (`y\n`) — remote uninstall is deferred.
+- Skills: Hub install/update/uninstall, the lifecycle commands `audit`/`reset`/`repair-official`/`opt-in`/`opt-out`/`publish`, and `skills list`/`check` reads: `hermes skills ...`. Install/update/audit/reset/repair/opt-in/opt-out/publish run non-interactively (and over remote runners); clean `uninstall` lacks `--yes`, so Talaria confirms via stdin (`y\n`), which only the local runner delivers — clean uninstall is local-only, while **Force remove** removes any skill's directory directly (local `FileManager` / remote `rm -rf` over the host shell). The Skills detail panel also reads `SKILL.md` directly for its source preview. See `docs/security.md`.
 - Doctor report: `hermes doctor`.
 - Gateway lifecycle writes: `hermes gateway start/stop/restart/install/uninstall`.
 
