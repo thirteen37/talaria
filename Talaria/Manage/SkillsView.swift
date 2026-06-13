@@ -1386,8 +1386,10 @@ private struct SkillDetail: View {
     }
 
     /// Universal destructive force-delete of the skill directory, behind a
-    /// two-step pull-down ("Remove ▾" → "Force remove") so a single stray click
-    /// can't delete files — the menu must be opened, then its one entry clicked.
+    /// two-step pull-down ("Force remove ▾" → "Force remove") so a single stray
+    /// click can't delete files. Labelled distinctly from the hub clean-uninstall
+    /// "Remove" button (different text and a slashed-trash icon) so the two
+    /// destructive-looking controls don't read alike on a hub skill.
     private var forceRemoveButton: some View {
         Menu {
             Button(role: .destructive) {
@@ -1397,12 +1399,12 @@ private struct SkillDetail: View {
             }
             .help(forceRemoveMessage)
         } label: {
-            Label("Remove", systemImage: "trash")
+            Label("Force remove", systemImage: "trash.slash")
         }
         .menuIndicator(.visible)
         .fixedSize()
         .disabled(busy || !forceRemoveAvailable)
-        .help("Delete this skill's files directly from disk (two-step)")
+        .help("Permanently delete this skill's files from disk (two-step)")
     }
 
     /// Explanatory captions for unavailable affordances. Uses `if case .X? =`
