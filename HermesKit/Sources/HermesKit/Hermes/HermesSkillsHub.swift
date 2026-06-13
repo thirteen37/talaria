@@ -28,6 +28,10 @@ public struct InstalledHubSkill: Equatable, Sendable, Identifiable {
         return normalized != "builtin" && normalized != "local"
     }
 
+    /// True when this skill was created locally (Source column reads exactly
+    /// `local`) rather than shipped builtin or installed from the Skills Hub.
+    public var isLocal: Bool { source.lowercased() == "local" }
+
     public init(name: String, category: String?, source: String, trust: String?, enabled: Bool) {
         self.name = name
         self.category = category
