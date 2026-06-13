@@ -202,7 +202,10 @@ final class SkillsHarness {
         previewText = nil
         previewError = nil
         previewLoading = true
-        defer { previewLoading = false }
+        // Guard the clear by `previewName` like the writes below, so the losing
+        // side of a fast selection race doesn't drop the spinner while the
+        // winning task is still reading.
+        defer { if previewName == skill.name { previewLoading = false } }
         do {
             let tail = HermesSkillsFileStore.skillMarkdownTail(category: skill.category, name: skill.name)
             let text = try await HermesFileStore.read(
