@@ -351,13 +351,7 @@ final class ProfileSyncHarness {
 
     /// Total out-of-sync items across all named profiles.
     var totalDifferences: Int {
-        var total = 0
-        for name in namedProfiles {
-            total += skillsDrift[name]?.items.count ?? 0
-            total += configDrift[name]?.items.count ?? 0
-            total += envDrift[name]?.items.count ?? 0
-        }
-        return total
+        namedProfiles.reduce(0) { $0 + differenceCount(for: $1) }
     }
 
     /// Named profiles that have at least one difference.
@@ -367,8 +361,20 @@ final class ProfileSyncHarness {
 
     func differenceCount(for profile: String) -> Int {
         (skillsDrift[profile]?.items.count ?? 0)
-            + (configDrift[profile]?.items.count ?? 0)
+            + syncableConfigCount(for: profile)
             + (envDrift[profile]?.items.count ?? 0)
+    }
+
+    /// Config differences the active filter would actually *push* — pushable rows,
+    /// curated unless "Show all config differences" is on. Counting raw
+    /// `items.count` overstated the badge: it includes non-curated keys the
+    /// subsection hides by default and the display-only `auxiliary.*.base_url`
+    /// rows that are never pushed, so the pill could read "2 config" over an
+    /// in-sync subsection whose "Sync everything" summary said "Nothing to sync".
+    /// Matching the push payload keeps the badge, the subsection, and the summary
+    /// in agreement.
+    func syncableConfigCount(for profile: String) -> Int {
+        configDrift[profile]?.pushPayload(curatedOnly: !showAllConfigDifferences).count ?? 0
     }
 
     var allInSync: Bool { totalDifferences == 0 }
@@ -1287,7 +1293,7 @@ private struct ProfileDriftRow: View {
     private var driftSummary: String {
         var parts: [String] = []
         let s = harness.skillsDrift[profile]?.items.count ?? 0
-        let c = harness.configDrift[profile]?.items.count ?? 0
+        let c = harness.syncableConfigCount(for: profile)
         let e = harness.envDrift[profile]?.items.count ?? 0
         if s > 0 { parts.append("\(s) skill\(s == 1 ? "" : "s")") }
         if c > 0 { parts.append("\(c) config") }
@@ -1529,11 +1535,11 @@ private struct RevealableEnvValue: View {
     }
 
     private var displayText: String {
+        // Source → target, matching the config rows (`default → profile`) and the
+        // "Sync from default → <profile>" header. `defaultPart` (the revealable
+        // source value) sits on the left; the profile's current value on the right.
         let defaultPart = revealed ? (plaintext() ?? redactedDefault) : redactedDefault
-        if let redactedProfile {
-            return "\(redactedProfile) → \(defaultPart)"
-        }
-        return "— → \(defaultPart)"
+        return "\(defaultPart) → \(redactedProfile ?? "—")"
     }
 }
 

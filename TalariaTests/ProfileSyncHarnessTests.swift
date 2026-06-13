@@ -115,6 +115,12 @@ struct ProfileSyncHarnessTests {
         name == "work" ? [] : [EnvFileEntry(key: "OPENAI_API_KEY", value: "sk-longsecretvalue")]
     }
 
+    /// Drift only in a **non-curated** key (`temperature`): hidden by the default
+    /// curated filter, so the badge/summary must not count it.
+    nonisolated private func nonCuratedConfig(_ name: String) -> JSONValue {
+        name == "work" ? .object(["temperature": .number(0.5)]) : .object(["temperature": .number(0.9)])
+    }
+
     // MARK: - Tests
 
     @Test
@@ -226,6 +232,40 @@ struct ProfileSyncHarnessTests {
         let writes = windowHTTP.recorded.filter { $0.httpMethod == "PUT" }
         #expect(!writes.isEmpty)
         #expect(writes.allSatisfy { ($0.url?.query ?? "").contains("profile=work") })
+    }
+
+    @Test
+    func nonCuratedConfigDriftIsNotCountedUntilShowAll() async {
+        let harness = makeHarness(
+            windowHTTP: SyncStubHTTP(responses: [
+                .init(path: "/api/config/schema", body: Self.schemaJSON),
+                .init(path: "/api/config/schema", body: Self.schemaJSON),
+            ]),
+            catalogHTTP: SyncStubHTTP(responses: [
+                .init(path: "/index.json", body: Self.catalogJSON),
+                .init(path: "/index.json", body: Self.catalogJSON),
+            ]),
+            // No skills/env drift: `work` has the same skills as default, so config
+            // is the only axis that can move the count.
+            baseRunner: nil,
+            configReader: { self.nonCuratedConfig($0) },
+            envReader: { _ in [] }
+        )
+
+        await harness.refresh(namedProfiles: ["work"])
+
+        // The non-curated row exists in the drift…
+        #expect(harness.configDrift["work"]?.items.contains { $0.dotpath == "temperature" } == true)
+        // …but the curated default filter hides it, so the badge/summary count is 0
+        // (a profile-row pill of "1 config" over an in-sync subsection was the bug).
+        #expect(harness.syncableConfigCount(for: "work") == 0)
+        #expect(harness.differenceCount(for: "work") == 0)
+        #expect(harness.canSyncEverything(profile: "work") == false)
+
+        // With "Show all config differences" on, the pushable non-curated row counts.
+        harness.showAllConfigDifferences = true
+        #expect(harness.syncableConfigCount(for: "work") == 1)
+        #expect(harness.canSyncEverything(profile: "work") == true)
     }
 
     @Test
