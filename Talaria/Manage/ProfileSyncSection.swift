@@ -87,12 +87,26 @@ final class ProfileSyncHarness {
     private let drainScoped: @MainActor () async -> Void
     private let configReader: @Sendable (String) async throws -> JSONValue
     private let envReader: @Sendable (String) async throws -> [EnvFileEntry]
+    /// Server profile + transfer for the skill content-drift reads (the same
+    /// read-only `HermesFileStore` path config/env use).
+    private let serverProfile: ServerProfile?
+    private let snapshotTransfer: RemoteSnapshotTransfer?
 
     private let engine = ProfileSyncEngine()
     private var namedProfiles: [String] = []
     /// Catalog index built from the last successful `catalog.skills()`.
     private var index: HubSkillIdentifierIndex?
     private var schema: DashboardConfigSchema?
+
+    // MARK: - Skill content drift (unmanaged skills)
+
+    /// Per profile: unmanaged (builtin/local) skills present in both default and
+    /// the profile whose `SKILL.md` content differs — the customized/optimized
+    /// drift the side-by-side panel inspects. Computed lazily when the Skills
+    /// section opens.
+    private(set) var modifiedSkills: [String: [ModifiedSkill]] = [:]
+    private(set) var skillContentLoading: Set<String> = []
+    private var skillContentLoaded: Set<String> = []
 
     init(
         baseRunner: (any HermesAdminRunning)?,
@@ -114,6 +128,8 @@ final class ProfileSyncHarness {
         self.acquireScopedClient = acquireScopedClient
         self.releaseScopedClient = releaseScopedClient
         self.drainScoped = drainScoped
+        self.serverProfile = profile
+        self.snapshotTransfer = snapshotTransfer
 
         let isLocal = profile?.kind == .local
         let base = baseRunner
@@ -149,6 +165,9 @@ final class ProfileSyncHarness {
     /// the view calls this on first expand and on manual refresh.
     func refresh(namedProfiles: [String]) async {
         self.namedProfiles = namedProfiles
+        modifiedSkills.removeAll()
+        skillContentLoading.removeAll()
+        skillContentLoaded.removeAll()
         isLoading = true
         defer { isLoading = false }
 
@@ -212,6 +231,9 @@ final class ProfileSyncHarness {
     }
 
     private func refetch(_ name: String) async {
+        // A re-fetch invalidates this profile's cached content drift.
+        modifiedSkills[name] = nil
+        skillContentLoaded.remove(name)
         let runnerProvider = makeRunnerProvider()
         let result = await engine.fetchSnapshots(
             profiles: [name],
@@ -234,6 +256,74 @@ final class ProfileSyncHarness {
             return ProfileSyncEngine.scopedRunnerProvider(base: baseRunner)
         }
         return { _ in UnavailableAdminRunner() }
+    }
+
+    /// Computes content drift for **unmanaged** (builtin/local) skills present in
+    /// both default and `profile`: reads each side's `SKILL.md` and diffs them,
+    /// keeping the ones that differ (the customized/optimized skills). Hub-managed
+    /// skills are excluded — they're pulled from the Hub, not hand-edited, and a
+    /// default↔profile diff wouldn't reflect a Hub update anyway. Lazy + bounded;
+    /// a skill that can't be read on a side is skipped.
+    func loadSkillContentDrift(for profile: String) async {
+        guard let serverProfile else { return }
+        guard !skillContentLoaded.contains(profile), !skillContentLoading.contains(profile) else { return }
+        guard let defaultSkills = snapshots["default"]?.skills,
+              let profileSkills = snapshots[profile]?.skills else { return }
+
+        let profileNames = Set(profileSkills.map(\.name))
+        let candidates = defaultSkills.filter { !$0.isHubManaged && profileNames.contains($0.name) }
+        skillContentLoading.insert(profile)
+        defer {
+            skillContentLoading.remove(profile)
+            skillContentLoaded.insert(profile)
+        }
+        guard !candidates.isEmpty else { modifiedSkills[profile] = []; return }
+
+        let transfer = snapshotTransfer
+        var result: [ModifiedSkill] = []
+        await withTaskGroup(of: ModifiedSkill?.self) { group in
+            let cap = 4
+            var next = 0
+            while next < min(cap, candidates.count) {
+                let skill = candidates[next]; next += 1
+                group.addTask { await Self.contentDrift(serverProfile: serverProfile, profile: profile, skill: skill, transfer: transfer) }
+            }
+            while let item = await group.next() {
+                if let item { result.append(item) }
+                if next < candidates.count {
+                    let skill = candidates[next]; next += 1
+                    group.addTask { await Self.contentDrift(serverProfile: serverProfile, profile: profile, skill: skill, transfer: transfer) }
+                }
+            }
+        }
+        result.sort { $0.name < $1.name }
+        modifiedSkills[profile] = result
+    }
+
+    /// Reads and diffs one unmanaged skill's `SKILL.md` across the two profiles,
+    /// returning a ``ModifiedSkill`` when the content differs. `nonisolated` so it
+    /// runs off the main actor inside the read fan-out.
+    nonisolated private static func contentDrift(
+        serverProfile: ServerProfile,
+        profile: String,
+        skill: InstalledHubSkill,
+        transfer: RemoteSnapshotTransfer?
+    ) async -> ModifiedSkill? {
+        do {
+            async let defaultText = HermesSkillContentReader.read(
+                profile: serverProfile, profileName: HermesProfiles.defaultProfileName,
+                skillName: skill.name, category: skill.category, transfer: transfer
+            )
+            async let profileText = HermesSkillContentReader.read(
+                profile: serverProfile, profileName: profile,
+                skillName: skill.name, category: skill.category, transfer: transfer
+            )
+            let (left, right) = try await (defaultText, profileText)
+            let rows = SkillDiff.sideBySide(default: left, profile: right)
+            return rows.contains { $0.changed } ? ModifiedSkill(name: skill.name, category: skill.category, rows: rows) : nil
+        } catch {
+            return nil
+        }
     }
 
     private func recomputeDrift() {
@@ -783,35 +873,6 @@ struct ProfileSyncView: View {
         }
     }
 
-    /// Reads the default and the selected profile's `SKILL.md` and opens the
-    /// side-by-side comparison panel. The Hub's latest text isn't fetchable, so
-    /// the two readable sides — the two profiles' installed copies — are compared.
-    private func openSkillDiff(_ item: SkillDriftItem, profileName: String) {
-        guard let serverProfile = profile else { return }
-        skillDiff = SkillDiffPanel(item: item)
-        let transfer = snapshotTransfer
-        Task {
-            do {
-                async let defaultText = HermesSkillContentReader.read(
-                    profile: serverProfile, profileName: HermesProfiles.defaultProfileName,
-                    skillName: item.name, category: item.category, transfer: transfer
-                )
-                async let profileText = HermesSkillContentReader.read(
-                    profile: serverProfile, profileName: profileName,
-                    skillName: item.name, category: item.category, transfer: transfer
-                )
-                let (left, right) = try await (defaultText, profileText)
-                guard skillDiff?.item == item else { return }
-                skillDiff = SkillDiffPanel(
-                    item: item, isLoading: false,
-                    rows: SkillDiff.sideBySide(default: left, profile: right), error: nil
-                )
-            } catch {
-                guard skillDiff?.item == item else { return }
-                skillDiff = SkillDiffPanel(item: item, isLoading: false, rows: [], error: error.localizedDescription)
-            }
-        }
-    }
 
     private func sectionCount(_ section: SyncSection, profile: String, harness: ProfileSyncHarness) -> Int {
         switch section {
@@ -846,12 +907,9 @@ struct ProfileSyncView: View {
         case .skills:
             VStack(spacing: 0) {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        SkillsSubsection(
-                            harness: harness,
-                            profile: selected,
-                            onCompare: { openSkillDiff($0, profileName: selected) }
-                        )
+                    VStack(alignment: .leading, spacing: 12) {
+                        modifiedSkillsGroup(harness, profile: selected)
+                        SkillsSubsection(harness: harness, profile: selected)
                     }
                     .padding()
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -862,19 +920,51 @@ struct ProfileSyncView: View {
                         panel: panel,
                         defaultName: HermesProfiles.defaultProfileName,
                         profileName: selected,
-                        onUpdate: {
-                            Task { await harness.syncSkill(panel.item, profile: selected) }
-                            skillDiff = nil
-                        },
                         onClose: { skillDiff = nil }
                     )
                     .frame(height: 340)
                 }
             }
+            // Detect content drift for unmanaged skills lazily when the Skills
+            // section is shown (and when the selected profile changes).
+            .task(id: selected) { await harness.loadSkillContentDrift(for: selected) }
         case .config:
             configComparison(selected)
         case .environment:
             EnvComparisonView(harness: harness, profile: selected)
+        }
+    }
+
+    /// The customized/optimized unmanaged skills whose `SKILL.md` drifts from
+    /// default — each opens the read-only side-by-side panel from cached rows.
+    @ViewBuilder
+    private func modifiedSkillsGroup(_ harness: ProfileSyncHarness, profile: String) -> some View {
+        if harness.skillContentLoading.contains(profile) {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Checking customized skills…").font(.caption).foregroundStyle(.secondary)
+            }
+        } else if let modified = harness.modifiedSkills[profile], !modified.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Customized (differs from default)").font(.subheadline.weight(.semibold))
+                Text("Unmanaged skills edited in this profile. Select one to see the diff (read-only).")
+                    .font(.caption2).foregroundStyle(.secondary)
+                ForEach(modified) { skill in
+                    Button { skillDiff = SkillDiffPanel(skillName: skill.name, rows: skill.rows) } label: {
+                        HStack(spacing: 8) {
+                            Text("modified")
+                                .font(.caption2)
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Color.yellow.opacity(0.18), in: Capsule())
+                            Text(skill.name).font(.caption)
+                            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                            Spacer()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .help("Compare default's “\(skill.name)” with “\(profile)”'s customized copy")
+                }
+            }
         }
     }
 
@@ -1132,9 +1222,6 @@ private struct ProfileDriftRow: View {
 private struct SkillsSubsection: View {
     let harness: ProfileSyncHarness
     let profile: String
-    /// Opens the side-by-side comparison panel for an outdated skill. Nil (the
-    /// iPhone path) hides the Compare affordance.
-    var onCompare: ((SkillDriftItem) -> Void)?
 
     var body: some View {
         let drift = harness.skillsDrift[profile]
@@ -1161,35 +1248,17 @@ private struct SkillsSubsection: View {
     @ViewBuilder
     private func skillRow(_ item: SkillDriftItem) -> some View {
         HStack(spacing: 8) {
-            if isOutdated(item), let onCompare {
-                // Selecting an outdated skill opens the comparison panel — the
-                // Update action lives in the panel header.
-                Button { onCompare(item) } label: {
-                    HStack(spacing: 8) {
-                        kindBadge(item)
-                        Text(item.name).font(.caption)
-                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-                    }
-                }
-                .buttonStyle(.plain)
-                .help("Compare default's “\(item.name)” with “\(profile)”'s installed copy")
-                Spacer()
-                if harness.isPushingItem("skill", profile: profile, id: item.id) {
-                    ProgressView().controlSize(.small)
-                }
+            kindBadge(item)
+            Text(item.name).font(.caption)
+            Spacer()
+            if harness.isPushingItem("skill", profile: profile, id: item.id) {
+                ProgressView().controlSize(.small)
+            } else if item.isActionable {
+                Button(actionLabel(item)) { Task { await harness.syncSkill(item, profile: profile) } }
+                    .controlSize(.small)
+                    .help("\(actionLabel(item)) “\(item.name)” in “\(profile)”")
             } else {
-                kindBadge(item)
-                Text(item.name).font(.caption)
-                Spacer()
-                if harness.isPushingItem("skill", profile: profile, id: item.id) {
-                    ProgressView().controlSize(.small)
-                } else if item.isActionable {
-                    Button(actionLabel(item)) { Task { await harness.syncSkill(item, profile: profile) } }
-                        .controlSize(.small)
-                        .help("\(actionLabel(item)) “\(item.name)” in “\(profile)”")
-                } else {
-                    Text(blockedCaption(item)).font(.caption2).foregroundStyle(.secondary)
-                }
+                Text(blockedCaption(item)).font(.caption2).foregroundStyle(.secondary)
             }
         }
         if let error = harness.itemError("skill", profile: profile, id: item.id) {
@@ -1207,11 +1276,6 @@ private struct SkillsSubsection: View {
             .font(.caption2)
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(Color.orange.opacity(0.15), in: Capsule())
-    }
-
-    private func isOutdated(_ item: SkillDriftItem) -> Bool {
-        if case .outdated = item.kind { return true }
-        return false
     }
 
     private func actionLabel(_ item: SkillDriftItem) -> String {
@@ -1399,36 +1463,37 @@ private struct RevealableEnvValue: View {
 
 // MARK: - Skill comparison bottom panel
 
-/// State for the skill comparison shown in the Skills section's bottom panel.
-private struct SkillDiffPanel {
-    let item: SkillDriftItem
-    var isLoading = true
-    var rows: [SkillDiffRow] = []
-    var error: String?
+/// An unmanaged skill whose `SKILL.md` differs between default and a profile,
+/// with the precomputed side-by-side rows so opening the panel needs no re-read.
+struct ModifiedSkill: Identifiable, Equatable {
+    let name: String
+    let category: String?
+    let rows: [SkillDiffRow]
+    var id: String { name }
 }
 
-/// A bottom-anchored side-by-side comparison of an outdated skill's `SKILL.md`:
-/// the default profile (left) against the selected profile (right), with the
-/// Update action in the header. Anchored at the bottom (not the side) so the two
-/// columns get the full width.
+/// State for the skill comparison shown in the Skills section's bottom panel.
+/// Inspect-only — the rows are precomputed during content-drift detection.
+private struct SkillDiffPanel {
+    let skillName: String
+    let rows: [SkillDiffRow]
+}
+
+/// A bottom-anchored, read-only side-by-side comparison of a customized skill's
+/// `SKILL.md`: the default profile (left) against the selected profile (right).
+/// Anchored at the bottom (not the side) so the two columns get the full width.
 private struct SkillDiffPanelView: View {
     let panel: SkillDiffPanel
     let defaultName: String
     let profileName: String
-    let onUpdate: () -> Void
     let onClose: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "rectangle.split.2x1")
-                Text(panel.item.name).font(.headline).lineLimit(1)
+                Text(panel.skillName).font(.headline).lineLimit(1)
                 Spacer()
-                Button { onUpdate() } label: {
-                    Label("Update in “\(profileName)”", systemImage: "arrow.down.circle")
-                }
-                .controlSize(.small)
-                .help("Update “\(panel.item.name)” in “\(profileName)” to the latest from the Skills Hub")
                 Button { onClose() } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.borderless)
                     .accessibilityLabel("Close comparison")
@@ -1453,28 +1518,12 @@ private struct SkillDiffPanelView: View {
 
     @ViewBuilder
     private var content: some View {
-        if panel.isLoading {
-            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if let error = panel.error {
-            ContentUnavailableView(
-                "Couldn't load the skill",
-                systemImage: "doc.questionmark",
-                description: Text(error)
-            )
-        } else if !panel.rows.contains(where: \.changed) {
-            ContentUnavailableView(
-                "Identical",
-                systemImage: "equal.circle",
-                description: Text("Both profiles have the same SKILL.md.")
-            )
-        } else {
-            ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(panel.rows) { row in
-                        HStack(alignment: .top, spacing: 1) {
-                            diffCell(row.left, changed: row.changed)
-                            diffCell(row.right, changed: row.changed)
-                        }
+        ScrollView {
+            VStack(spacing: 0) {
+                ForEach(panel.rows) { row in
+                    HStack(alignment: .top, spacing: 1) {
+                        diffCell(row.left, changed: row.changed)
+                        diffCell(row.right, changed: row.changed)
                     }
                 }
             }
