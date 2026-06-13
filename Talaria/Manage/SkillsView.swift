@@ -80,27 +80,74 @@ final class SkillsHarness {
     private let client: DashboardClient
     let runner: HermesAdminRunning?
     private let catalog: SkillsHubCatalog
-    /// The profile's configured Hermes home (local profiles only), used to
-    /// resolve the on-disk skills root for Publish and Force remove.
-    let hermesHome: String?
+    /// The window's profile — its `hermesHome` resolves the on-disk skills root
+    /// (Publish / Force remove), and it drives the `SKILL.md` preview read
+    /// (local or remote SSH via ``HermesFileStore``).
+    let profile: ServerProfile?
+    /// Remote file transport for the preview read on SSH profiles; nil/unused
+    /// for local profiles.
+    let transfer: RemoteSnapshotTransfer?
+
+    /// SKILL.md preview for the selected skill (raw markdown, highlighted in the
+    /// detail panel). `previewName` keys the load so a slow read for a since-
+    /// deselected skill can't overwrite the current one.
+    var previewName: String?
+    var previewText: String?
+    var previewError: String?
+    var previewLoading: Bool = false
 
     init(
         client: DashboardClient,
         runner: HermesAdminRunning?,
-        hermesHome: String? = nil,
+        profile: ServerProfile? = nil,
+        transfer: RemoteSnapshotTransfer? = nil,
         catalog: SkillsHubCatalog = SkillsHubCatalog()
     ) {
         self.client = client
         self.runner = runner
-        self.hermesHome = hermesHome
+        self.profile = profile
+        self.transfer = transfer
         self.catalog = catalog
     }
 
     /// The local skills root (`<hermesHome>/skills`, default `~/.hermes/skills`).
-    var skillsRoot: URL { HermesSkillsFileStore.localSkillsRoot(hermesHome: hermesHome) }
+    var skillsRoot: URL { HermesSkillsFileStore.localSkillsRoot(hermesHome: profile?.hermesHome) }
 
     /// The currently-selected installed skill, or nil. Drives the detail panel.
     var selected: DashboardSkill? { rows.first { $0.name == selectionID } }
+
+    /// Reads the selected skill's `SKILL.md` for the detail-panel preview. Runs
+    /// on selection change (the view's `.task(id:)` cancels the prior load), and
+    /// re-checks the selection after the `await` so a stale read can't overwrite.
+    /// Best-effort: a missing/unreadable file surfaces as a soft "unavailable"
+    /// note, not a banner error.
+    func loadPreview() async {
+        guard let skill = selected, let profile else {
+            previewName = nil
+            previewText = nil
+            previewError = nil
+            previewLoading = false
+            return
+        }
+        previewName = skill.name
+        previewText = nil
+        previewError = nil
+        previewLoading = true
+        defer { previewLoading = false }
+        do {
+            let tail = HermesSkillsFileStore.skillMarkdownTail(category: skill.category, name: skill.name)
+            let text = try await HermesFileStore.read(
+                profile: profile,
+                location: .profileRelative(tail: tail),
+                transfer: transfer
+            )
+            guard previewName == skill.name else { return }
+            previewText = text
+        } catch {
+            guard previewName == skill.name else { return }
+            previewError = error.localizedDescription
+        }
+    }
 
     /// True once the manual install field has a non-empty identifier.
     var canInstallFromField: Bool {
@@ -406,7 +453,8 @@ struct SkillsView: View {
     let client: DashboardClient?
     let runner: HermesAdminRunning?
     let hermesVersion: HermesVersion?
-    let hermesHome: String?
+    let profile: ServerProfile?
+    let transfer: RemoteSnapshotTransfer?
 
     /// Window's top-of-window banner hub. Optional so a host that doesn't supply
     /// one degrades to no-op (hard errors then simply don't render).
@@ -431,12 +479,14 @@ struct SkillsView: View {
         client: DashboardClient?,
         runner: HermesAdminRunning? = nil,
         hermesVersion: HermesVersion? = nil,
-        hermesHome: String? = nil
+        profile: ServerProfile? = nil,
+        transfer: RemoteSnapshotTransfer? = nil
     ) {
         self.client = client
         self.runner = runner
         self.hermesVersion = hermesVersion
-        self.hermesHome = hermesHome
+        self.profile = profile
+        self.transfer = transfer
     }
 
     /// Whether the Skills Hub install/update affordances can run: they need the
@@ -493,7 +543,7 @@ struct SkillsView: View {
         .task(id: client != nil) {
             guard let client else { harness = nil; return }
             if harness != nil { consumeFocus(harness: harness!); return }
-            let h = SkillsHarness(client: client, runner: runner, hermesHome: hermesHome)
+            let h = SkillsHarness(client: client, runner: runner, profile: profile, transfer: transfer)
             h.banners = banners
             h.bannerKey = "skills"
             harness = h
@@ -520,8 +570,8 @@ struct SkillsView: View {
     private func content(harness: SkillsHarness) -> some View {
         // Reachable only from the desktop window's Browse sidebar (macOS +
         // iPad); the iPhone shell has no Browse, so this never renders there.
-        // A single self-contained list — each row expands in place to show the
-        // full description and hub actions, so there's no secondary pane.
+        // A master/detail split: the installed-skills list on the left, the
+        // selected skill's description, actions, and SKILL.md preview on the right.
         PlatformSplit(
             showsSecondary: Binding(
                 get: { harness.selected != nil },
@@ -584,6 +634,11 @@ struct SkillsView: View {
             set: { harness.auditReport = $0 }
         )) { report in
             AuditReportSheet(report: report)
+        }
+        // Load the selected skill's SKILL.md preview; re-fires (and cancels the
+        // prior load) whenever the selection changes.
+        .task(id: harness.selectionID) {
+            await harness.loadPreview()
         }
     }
 
@@ -784,6 +839,9 @@ struct SkillsView: View {
                 forceRemoveAvailable: forceRemoveAvailable,
                 forceRemovePath: skillDirectoryPath(for: skill),
                 busy: harness.busy.contains(skill.name),
+                previewText: harness.previewText,
+                previewError: harness.previewError,
+                previewLoading: harness.previewLoading,
                 onUpdate: { Task { await harness.update(skill.name) } },
                 onRemove: { Task { await harness.remove(skill.name) } },
                 onAudit: { Task { await harness.audit(skill.name) } },
@@ -801,7 +859,7 @@ struct SkillsView: View {
     /// default the Publish sheet pre-fills and the path the Force-remove
     /// confirmation names.
     private func skillDirectoryPath(for skill: DashboardSkill) -> String {
-        var url = HermesSkillsFileStore.localSkillsRoot(hermesHome: hermesHome)
+        var url = HermesSkillsFileStore.localSkillsRoot(hermesHome: profile?.hermesHome)
         if let category = skill.category, !category.isEmpty {
             url.appendPathComponent(category, isDirectory: true)
         }
@@ -964,6 +1022,11 @@ private struct SkillDetail: View {
     /// The on-disk directory Force remove deletes, named in its confirmation.
     let forceRemovePath: String
     let busy: Bool
+    /// Raw SKILL.md source for the highlighted preview (nil while loading or on
+    /// error).
+    let previewText: String?
+    let previewError: String?
+    let previewLoading: Bool
     let onUpdate: () -> Void
     let onRemove: () -> Void
     let onAudit: () -> Void
@@ -1016,6 +1079,9 @@ private struct SkillDetail: View {
 
                 Divider()
                 actions
+
+                Divider()
+                preview
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1062,6 +1128,34 @@ private struct SkillDetail: View {
             }
             captions
         }
+    }
+
+    /// The skill's `SKILL.md` source, rendered read-only with markdown syntax
+    /// highlighting (the same `MarkdownHighlightTheme` the Soul/Memory editors
+    /// use). Loading shows a spinner; a missing/unreadable file shows a soft
+    /// note. Renders inline so the whole detail panel scrolls for long skills.
+    @ViewBuilder
+    private var preview: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Preview")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            if previewLoading {
+                ProgressView().controlSize(.small)
+            } else if let previewText, !previewText.isEmpty {
+                Text(AttributedString(MarkdownHighlightTheme.attributed(previewText)))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+            } else {
+                Text(previewError ?? "Preview unavailable.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// hub: Update / Audit / Remove.

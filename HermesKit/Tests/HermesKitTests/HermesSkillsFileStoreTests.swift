@@ -34,6 +34,22 @@ struct HermesSkillsFileStoreTests {
         #expect(root.path.hasSuffix("/custom/skills"))
     }
 
+    // MARK: - skillMarkdownTail
+
+    @Test
+    func skillMarkdownTailWithoutCategory() {
+        #expect(HermesSkillsFileStore.skillMarkdownTail(category: nil, name: "cmux") == "skills/cmux/SKILL.md")
+        #expect(HermesSkillsFileStore.skillMarkdownTail(category: "", name: "cmux") == "skills/cmux/SKILL.md")
+    }
+
+    @Test
+    func skillMarkdownTailWithCategory() {
+        #expect(
+            HermesSkillsFileStore.skillMarkdownTail(category: "creative", name: "pixel-art")
+                == "skills/creative/pixel-art/SKILL.md"
+        )
+    }
+
     // MARK: - forceDelete happy paths
 
     @Test

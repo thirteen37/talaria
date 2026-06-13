@@ -25,7 +25,8 @@ struct ExtensionsTabsView: View {
                     client: harness.dashboardClient,
                     runner: harness.store.adminRunner,
                     hermesVersion: harness.effectiveHermesVersion,
-                    hermesHome: harness.profile.hermesHome
+                    profile: harness.profile,
+                    transfer: harness.snapshotTransfer
                 )
             },
             DestinationTab(id: "tools", title: "Tools", systemImage: "wrench.and.screwdriver") {

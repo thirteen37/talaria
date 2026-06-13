@@ -47,6 +47,19 @@ public enum HermesSkillsFileStore {
             .appendingPathComponent("skills", isDirectory: true)
     }
 
+    /// The profile-relative path of a skill's `SKILL.md`
+    /// (`skills/[<category>/]<name>/SKILL.md`), for `HermesFileStore`'s
+    /// `.profileRelative` reads — which prepend the Hermes home via
+    /// ``HermesHomePaths/relativePath(hermesHome:tail:)``. Used to preview a
+    /// skill's source on local *and* remote profiles.
+    public static func skillMarkdownTail(category: String?, name: String) -> String {
+        var tail = "skills"
+        if let category, !category.isEmpty {
+            tail += "/\(category)"
+        }
+        return tail + "/\(name)/SKILL.md"
+    }
+
     /// Validates and returns the directory a skill occupies under `skillsRoot`,
     /// refusing anything that escapes the root, equals it, doesn't end in `name`,
     /// or is a symlink. Standardizes `..`/`.` but deliberately does NOT resolve
