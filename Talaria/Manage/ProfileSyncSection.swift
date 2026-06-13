@@ -386,20 +386,26 @@ final class ProfileSyncHarness {
 
     func syncSkill(_ item: SkillDriftItem, profile: String) async {
         guard let action = skillAction(for: item) else { return }
-        await runItemPush(profile: profile, resource: "skill", id: item.id) {
-            let outcomes = await self.engine.pushSkills(
-                actions: [action], toProfile: profile, runnerProvider: self.makeRunnerProvider()
-            )
-            return outcomes.first?.error
+        let key = itemKey("skill", profile: profile, id: item.id)
+        pushingItems.insert(key)
+        itemErrors[key] = nil
+        let outcome = await engine.pushSkills(
+            actions: [action], toProfile: profile, runnerProvider: makeRunnerProvider()
+        ).first
+        pushingItems.remove(key)
+        if let error = outcome?.error {
+            itemErrors[key] = error
+            banners?.surfaceError("profiles", error)
         }
         await refreshProfile(profile)
-        flagSilentSkillNoop(item, profile: profile)
+        flagSilentSkillNoop(item, profile: profile, output: outcome?.output ?? "")
     }
 
     /// `hermes skills install`/`update` can exit 0 without taking effect. If the
     /// push reported success but the skill is still drifting after the re-fetch,
-    /// surface that on the standard banner so it isn't silently lost.
-    private func flagSilentSkillNoop(_ item: SkillDriftItem, profile: String) {
+    /// surface that on the standard banner — including what Hermes actually
+    /// printed — so the no-op (and its likely cause) isn't silently lost.
+    private func flagSilentSkillNoop(_ item: SkillDriftItem, profile: String, output: String) {
         let key = itemKey("skill", profile: profile, id: item.id)
         guard itemErrors[key] == nil,
               let still = skillsDrift[profile]?.items.first(where: { $0.name == item.name }) else { return }
@@ -408,7 +414,10 @@ final class ProfileSyncHarness {
         case .missing: verb = "installed"
         case .outdated: verb = "updated"
         }
-        let message = "Hermes reported success, but “\(item.name)” still isn't \(verb) in “\(profile)”."
+        var message = "Hermes reported success, but “\(item.name)” still isn't \(verb) in “\(profile)”."
+        if let lastLine = output.split(separator: "\n").map(String.init).last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+            message += " Hermes said: \(lastLine)"
+        }
         itemErrors[key] = message
         banners?.surfaceError("profiles", message)
     }

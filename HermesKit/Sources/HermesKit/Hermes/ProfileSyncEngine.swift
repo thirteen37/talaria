@@ -68,13 +68,18 @@ public struct SkillPushOutcome: Equatable, Sendable, Identifiable {
     /// nil on success; the surfaced reason otherwise (install/update continues
     /// past a failure, including `operationRejected`).
     public let error: String?
+    /// The command's trimmed stdout on success — `hermes skills install`/`update`
+    /// can report "Installed:" yet not take effect, so callers surface this when
+    /// the skill is still drifting after a re-fetch (diagnostics).
+    public let output: String
 
     public var id: String { name }
     public var succeeded: Bool { error == nil }
 
-    public init(name: String, kind: Kind, error: String?) {
+    public init(name: String, kind: Kind, error: String?, output: String = "") {
         self.name = name
         self.kind = kind
+        self.output = output
         self.error = error
     }
 }
@@ -238,11 +243,11 @@ public struct ProfileSyncEngine: Sendable {
             do {
                 switch action {
                 case let .install(identifier, name):
-                    _ = try await HermesSkillsHub.install(runner: runner, identifier: identifier)
-                    outcomes.append(SkillPushOutcome(name: name, kind: .install, error: nil))
+                    let output = try await HermesSkillsHub.install(runner: runner, identifier: identifier)
+                    outcomes.append(SkillPushOutcome(name: name, kind: .install, error: nil, output: output))
                 case let .update(name):
-                    _ = try await HermesSkillsHub.update(runner: runner, name: name)
-                    outcomes.append(SkillPushOutcome(name: name, kind: .update, error: nil))
+                    let output = try await HermesSkillsHub.update(runner: runner, name: name)
+                    outcomes.append(SkillPushOutcome(name: name, kind: .update, error: nil, output: output))
                 }
             } catch {
                 let kind: SkillPushOutcome.Kind = { if case .install = action { return .install } else { return .update } }()
