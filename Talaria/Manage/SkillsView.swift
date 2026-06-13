@@ -19,11 +19,14 @@ struct SkillAuditReport: Identifiable {
 
 /// Failures specific to the remote (host-shell) Force-remove path.
 enum SkillForceRemoveError: LocalizedError {
+    case notLocated
     case remoteShellUnavailable
     case remoteCommandFailed(String)
 
     var errorDescription: String? {
         switch self {
+        case .notLocated:
+            return "Couldn't locate this skill's directory on disk; nothing was removed."
         case .remoteShellUnavailable:
             return "Force remove is unavailable: no shell on the remote host."
         case .remoteCommandFailed(let detail):
@@ -114,6 +117,12 @@ final class SkillsHarness {
     var previewText: String?
     var previewError: String?
     var previewLoading: Bool = false
+    /// The selected skill's real on-disk directory (resolved by matching its
+    /// `SKILL.md` frontmatter name — the dashboard `name` is *not* the directory
+    /// name). Keyed by `resolvedDirName`; drives the Force-remove confirmation
+    /// path and is reused by Publish. nil when not yet resolved or not found.
+    var resolvedDir: String?
+    var resolvedDirName: String?
 
     init(
         client: DashboardClient,
@@ -158,13 +167,62 @@ final class SkillsHarness {
         }
     }
 
-    /// The Publish sheet's pre-filled path — fully expanded. Local is already
-    /// absolute; for remote, normalizes the profile's `hermesHome`
-    /// (`~`/`$HOME`/`${HOME}`/absolute) and prepends the remote `$HOME` resolved
-    /// over the host shell, so `hermes skills publish` receives an absolute path
-    /// (its arg goes through argv with no shell to expand `~`/`$HOME`). Falls
-    /// back to the editable `~`/configured form if the home can't be resolved.
+    /// True when the window's profile runs Hermes on this machine (so deletes use
+    /// `FileManager` and reads/`find` resolve against the local home).
+    var isLocalProfile: Bool {
+        switch profile?.kind {
+        case .local: return true
+        case .ssh, .none: return false
+        }
+    }
+
+    /// Resolves the selected skill's **real** on-disk directory by matching its
+    /// `SKILL.md` frontmatter `name` — because the dashboard `name` is that
+    /// frontmatter value, not the directory name (e.g. dir `creative-ideation`
+    /// has `name: ideation`). Lists the candidate dirs in the skill's (reliable)
+    /// category via the host shell, then reads each candidate's `SKILL.md` — the
+    /// matching-named candidate first, so the common `name == dir` case is one
+    /// read — until the frontmatter name matches. Returns the absolute directory,
+    /// or nil if it can't be located. Authoritative: the returned dir's `SKILL.md`
+    /// is verified to belong to this skill, so destructive actions never target a
+    /// guessed path.
+    func resolveSkillDirectory(for skill: DashboardSkill) async -> String? {
+        guard let profile, let hostShell else { return nil }
+        let command: String
+        do {
+            command = try HermesSkillsFileStore.skillCandidateListingCommand(
+                hermesHome: profile.hermesHome, category: skill.category
+            )
+        } catch {
+            return nil
+        }
+        guard let listing = try? await hostShell.runShell(command, workingDirectory: nil),
+              listing.exitCode == 0 else { return nil }
+        var candidates = HermesSkillsFileStore.parseDirectoryListing(listing.stdout)
+        // Try the directory whose name equals the skill name first (the common
+        // case), so `name == dir` resolves in a single read.
+        if let exactIndex = candidates.firstIndex(where: { ($0 as NSString).lastPathComponent == skill.name }) {
+            candidates.insert(candidates.remove(at: exactIndex), at: 0)
+        }
+        for dir in candidates.prefix(60) {
+            let skillMd = (dir as NSString).appendingPathComponent("SKILL.md")
+            guard let content = try? await HermesFileStore.read(
+                resolvedPath: skillMd, isLocal: isLocalProfile, transfer: transfer, profile: profile
+            ) else { continue }
+            if HermesSkillsFileStore.frontmatterName(content) == skill.name {
+                return dir
+            }
+        }
+        return nil
+    }
+
+    /// The Publish sheet's pre-filled path. Prefers the resolved on-disk
+    /// directory (authoritative); falls back to a best-effort constructed path
+    /// (editable in the sheet) when the directory can't be located — for remote,
+    /// normalizing `~`/`$HOME`/`${HOME}`/absolute `hermesHome` and prepending the
+    /// resolved remote `$HOME` so `hermes skills publish` gets an absolute path.
     func resolvedPublishPath(for skill: DashboardSkill) async -> String {
+        if let dir = await resolveSkillDirectory(for: skill) { return dir }
         switch profile?.kind {
         case .ssh:
             var resolvedHome: String?
@@ -181,21 +239,24 @@ final class SkillsHarness {
                 homeDirectory: resolvedHome
             )
         case .local, .none:
-            return skillDirectoryPath(for: skill)  // already absolute
+            return skillDirectoryPath(for: skill)
         }
     }
 
-    /// Reads the selected skill's `SKILL.md` for the detail-panel preview. Runs
-    /// on selection change (the view's `.task(id:)` cancels the prior load), and
-    /// re-checks the selection after the `await` so a stale read can't overwrite.
-    /// Best-effort: a missing/unreadable file surfaces as a soft "unavailable"
-    /// note, not a banner error.
+    /// Resolves the selected skill's directory, reads its `SKILL.md`, and renders
+    /// the preview. Runs on selection change (the view's `.task(id:)` cancels the
+    /// prior load), re-checking the selection after each `await` so a stale read
+    /// can't overwrite. Also caches the resolved directory (`resolvedDir`) for the
+    /// Force-remove confirmation. Best-effort: a missing/unlocatable skill shows a
+    /// soft note, not a banner error.
     func loadPreview() async {
-        guard let skill = selected, let profile else {
+        guard let skill = selected else {
             previewName = nil
             previewText = nil
             previewError = nil
             previewLoading = false
+            resolvedDir = nil
+            resolvedDirName = nil
             return
         }
         previewName = skill.name
@@ -206,12 +267,19 @@ final class SkillsHarness {
         // side of a fast selection race doesn't drop the spinner while the
         // winning task is still reading.
         defer { if previewName == skill.name { previewLoading = false } }
+
+        let dir = await resolveSkillDirectory(for: skill)
+        guard previewName == skill.name else { return }
+        resolvedDir = dir
+        resolvedDirName = skill.name
+        guard let dir else {
+            previewError = "Couldn't locate this skill on disk."
+            return
+        }
         do {
-            let tail = HermesSkillsFileStore.skillMarkdownTail(category: skill.category, name: skill.name)
+            let skillMd = (dir as NSString).appendingPathComponent("SKILL.md")
             let text = try await HermesFileStore.read(
-                profile: profile,
-                location: .profileRelative(tail: tail),
-                transfer: transfer
+                resolvedPath: skillMd, isLocal: isLocalProfile, transfer: transfer, profile: profile
             )
             guard previewName == skill.name else { return }
             previewText = text
@@ -402,24 +470,31 @@ final class SkillsHarness {
         }
     }
 
-    /// Force-removes a skill by deleting its directory directly — the fallback
-    /// for builtin/local skills (which `hermes skills uninstall` refuses) and for
-    /// a stuck hub uninstall. **Local** profiles delete via `FileManager`
-    /// (symlink-aware guard); **remote** profiles `rm -rf` over the host shell
-    /// (string-validated path, since the leaf can't be `stat`ed over SSH).
-    func forceRemove(_ name: String, category: String?) async {
+    /// Force-removes a skill by deleting its **resolved** directory directly —
+    /// the fallback for builtin/local skills (which `hermes skills uninstall`
+    /// refuses) and for a stuck hub uninstall. Resolves the real directory by
+    /// matching its `SKILL.md` frontmatter name (the dashboard `name` is not the
+    /// directory name), then deletes it: **local** via `FileManager`
+    /// (symlink-aware guard), **remote** via `rm -rf` over the host shell. Refuses
+    /// (deletes nothing) if the directory can't be located, so a wrong/guessed
+    /// path is never removed.
+    func forceRemove(_ skill: DashboardSkill) async {
         guard let profile else { return }
+        let name = skill.name
         busy.insert(name)
         defer { busy.remove(name) }
         do {
+            guard let dir = await resolveSkillDirectory(for: skill) else {
+                throw SkillForceRemoveError.notLocated
+            }
             switch profile.kind {
             case .local:
-                try HermesSkillsFileStore.forceDelete(skillsRoot: skillsRoot, category: category, name: name)
+                try HermesSkillsFileStore.forceDeleteDirectory(
+                    URL(fileURLWithPath: dir), underSkillsRoot: skillsRoot
+                )
             case .ssh:
                 guard let hostShell else { throw SkillForceRemoveError.remoteShellUnavailable }
-                let command = try HermesSkillsFileStore.remoteForceDeleteCommand(
-                    hermesHome: profile.hermesHome, category: category, name: name
-                )
+                let command = try HermesSkillsFileStore.remoteForceDeleteDirectoryCommand(directory: dir)
                 let result = try await hostShell.runShell(command, workingDirectory: nil)
                 guard result.exitCode == 0 else {
                     let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -429,6 +504,8 @@ final class SkillsHarness {
                 }
             }
             if selectionID == name { selectionID = nil }
+            resolvedDir = nil
+            resolvedDirName = nil
             await refresh()
         } catch {
             lastError = error.localizedDescription
@@ -935,7 +1012,7 @@ struct SkillsView: View {
                 lifecycleAvailable: lifecycleAvailable,
                 publishAvailable: publishAvailable,
                 forceRemoveAvailable: forceRemoveAvailable,
-                forceRemovePath: harness.skillDirectoryPath(for: skill),
+                forceRemovePath: harness.resolvedDir ?? harness.skillDirectoryPath(for: skill),
                 busy: harness.busy.contains(skill.name),
                 previewText: harness.previewText,
                 previewError: harness.previewError,
@@ -951,7 +1028,7 @@ struct SkillsView: View {
                         publishTarget = PublishTarget(skillName: skill.name, path: path)
                     }
                 },
-                onForceRemove: { Task { await harness.forceRemove(skill.name, category: skill.category) } }
+                onForceRemove: { Task { await harness.forceRemove(skill) } }
             )
         }
     }
@@ -1126,7 +1203,6 @@ private struct SkillDetail: View {
     let onForceRemove: () -> Void
 
     @State private var confirmingRemove = false
-    @State private var confirmingForceRemove = false
 
     var body: some View {
         ScrollView {
@@ -1181,12 +1257,6 @@ private struct SkillDetail: View {
             Button("Remove", role: .destructive) { onRemove() }
         } message: {
             Text("This deletes the installed skill from the Hermes host.")
-        }
-        .alert("Force remove \(skill.name)?", isPresented: $confirmingForceRemove) {
-            Button("Cancel", role: .cancel) {}
-            Button("Force remove", role: .destructive) { onForceRemove() }
-        } message: {
-            Text(forceRemoveMessage)
         }
     }
 
@@ -1311,13 +1381,24 @@ private struct SkillDetail: View {
         .help("Publish this local skill to a registry")
     }
 
-    /// Universal destructive force-delete of the skill directory.
+    /// Universal destructive force-delete of the skill directory, behind a
+    /// two-step pull-down ("Remove ▾" → "Force remove") so a single stray click
+    /// can't delete files — the menu must be opened, then its one entry clicked.
     private var forceRemoveButton: some View {
-        Button(role: .destructive) { confirmingForceRemove = true } label: {
-            Label("Force remove", systemImage: "trash.slash")
+        Menu {
+            Button(role: .destructive) {
+                onForceRemove()
+            } label: {
+                Label("Force remove", systemImage: "trash.slash")
+            }
+            .help(forceRemoveMessage)
+        } label: {
+            Label("Remove", systemImage: "trash")
         }
+        .menuIndicator(.visible)
+        .fixedSize()
         .disabled(busy || !forceRemoveAvailable)
-        .help("Delete this skill's files directly from disk")
+        .help("Delete this skill's files directly from disk (two-step)")
     }
 
     /// Explanatory captions for unavailable affordances. Uses `if case .X? =`

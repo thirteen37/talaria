@@ -50,6 +50,121 @@ struct HermesSkillsFileStoreTests {
         )
     }
 
+    // MARK: - forceDeleteDirectory (delete a resolved dir)
+
+    @Test
+    func forceDeleteDirectoryRemovesADirUnderRoot() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let dir = root.appendingPathComponent("creative/creative-ideation", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        try HermesSkillsFileStore.forceDeleteDirectory(dir, underSkillsRoot: root)
+        #expect(FileManager.default.fileExists(atPath: dir.path) == false)
+    }
+
+    @Test
+    func forceDeleteDirectoryRefusesOutsideRoot() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let outside = root.deletingLastPathComponent()
+            .appendingPathComponent("victim-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outside) }
+
+        #expect(throws: HermesSkillsFileStore.ForceDeleteError.outsideRoot) {
+            try HermesSkillsFileStore.forceDeleteDirectory(outside, underSkillsRoot: root)
+        }
+        #expect(FileManager.default.fileExists(atPath: outside.path) == true)
+    }
+
+    // MARK: - remoteForceDeleteDirectoryCommand
+
+    @Test
+    func remoteDeleteDirectoryCommandQuotesAbsolutePath() throws {
+        let cmd = try HermesSkillsFileStore.remoteForceDeleteDirectoryCommand(
+            directory: "/home/u/.hermes/skills/creative/creative-ideation"
+        )
+        #expect(cmd == "rm -rf -- '/home/u/.hermes/skills/creative/creative-ideation'")
+    }
+
+    @Test
+    func remoteDeleteDirectoryCommandRejectsUnsafeDirectories() {
+        // Relative, traversal, and paths with no `skills` component are refused.
+        for bad in ["relative/skills/foo", "/home/u/skills/../../etc", "/home/u/other/foo"] {
+            #expect(throws: HermesSkillsFileStore.RemoteForceDeleteError.unsafePath) {
+                try HermesSkillsFileStore.remoteForceDeleteDirectoryCommand(directory: bad)
+            }
+        }
+    }
+
+    // MARK: - frontmatterName
+
+    @Test
+    func frontmatterNameReadsTopLevelNameKey() {
+        let md = """
+        ---
+        name: ideation
+        description: Brainstorm
+        ---
+        # Body with a name: in it
+        """
+        #expect(HermesSkillsFileStore.frontmatterName(md) == "ideation")
+    }
+
+    @Test
+    func frontmatterNameStripsQuotesAndIgnoresIndentedKeys() {
+        let md = """
+        ---
+        meta:
+          name: nested-should-be-ignored
+        name: "pixel-art"
+        ---
+        body
+        """
+        #expect(HermesSkillsFileStore.frontmatterName(md) == "pixel-art")
+    }
+
+    @Test
+    func frontmatterNameNilWithoutFrontmatterOrName() {
+        #expect(HermesSkillsFileStore.frontmatterName("# Just a heading\n") == nil)
+        #expect(HermesSkillsFileStore.frontmatterName("---\ndescription: x\n---\nbody") == nil)
+    }
+
+    // MARK: - skillCandidateListingCommand
+
+    @Test
+    func listingCommandScopesToCategoryUnderHome() throws {
+        let cmd = try HermesSkillsFileStore.skillCandidateListingCommand(hermesHome: nil, category: "creative")
+        #expect(cmd == "find \"$HOME\"/'.hermes/skills/creative' -mindepth 1 -maxdepth 1 -type d 2>/dev/null")
+    }
+
+    @Test
+    func listingCommandUncategorizedScansSkillsRoot() throws {
+        let cmd = try HermesSkillsFileStore.skillCandidateListingCommand(hermesHome: "/opt/hermes", category: nil)
+        #expect(cmd == "find '/opt/hermes/skills' -mindepth 1 -maxdepth 1 -type d 2>/dev/null")
+    }
+
+    @Test
+    func listingCommandRejectsUnsafeCategory() {
+        #expect(throws: HermesSkillsFileStore.RemoteForceDeleteError.unsafeCategory) {
+            try HermesSkillsFileStore.skillCandidateListingCommand(hermesHome: nil, category: "../etc")
+        }
+    }
+
+    // MARK: - parseDirectoryListing
+
+    @Test
+    func parseDirectoryListingTrimsAndDropsBlanks() {
+        let output = "/home/u/.hermes/skills/creative/pixel-art\n/home/u/.hermes/skills/creative/creative-ideation\n\n"
+        #expect(
+            HermesSkillsFileStore.parseDirectoryListing(output) == [
+                "/home/u/.hermes/skills/creative/pixel-art",
+                "/home/u/.hermes/skills/creative/creative-ideation",
+            ]
+        )
+    }
+
     // MARK: - remoteSkillPath (Publish pre-fill)
 
     @Test
