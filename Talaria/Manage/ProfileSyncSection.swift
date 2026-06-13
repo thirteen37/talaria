@@ -1147,9 +1147,6 @@ private struct EnvComparisonView: View {
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            if let error = harness.itemError("env", profile: profile, id: item.key) {
-                Text(error).font(.caption2).foregroundStyle(.red)
-            }
         }
         .padding(.vertical, 2)
     }
@@ -1311,9 +1308,6 @@ private struct SkillsSubsection: View {
                 Text(blockedCaption(item)).font(.caption2).foregroundStyle(.secondary)
             }
         }
-        if let error = harness.itemError("skill", profile: profile, id: item.id) {
-            Text(error).font(.caption2).foregroundStyle(.red)
-        }
     }
 
     private func kindBadge(_ item: SkillDriftItem) -> some View {
@@ -1400,9 +1394,6 @@ private struct ConfigSubsection: View {
                 Text("read-only").font(.caption2).foregroundStyle(.secondary)
             }
         }
-        if let error = harness.itemError("config", profile: profile, id: item.dotpath) {
-            Text(error).font(.caption2).foregroundStyle(.red)
-        }
     }
 
     private func valueText(_ value: ConfigValue) -> String {
@@ -1467,9 +1458,6 @@ private struct EnvSubsection: View {
                 .controlSize(.small)
                 .help("Copy default's “\(item.key)” secret to “\(profile)”")
             }
-        }
-        if let error = harness.itemError("env", profile: profile, id: item.key) {
-            Text(error).font(.caption2).foregroundStyle(.red)
         }
     }
 }
