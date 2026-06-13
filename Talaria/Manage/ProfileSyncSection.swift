@@ -929,7 +929,9 @@ struct ProfileSyncView: View {
 
                 // Section-scoped "Sync all", below the tab bar (it acts on the
                 // selected section, so it belongs with it rather than the picker).
-                if sectionCount(section, profile: selected, harness: harness) > 0 {
+                // Gated on having something actionable — not raw count — so it
+                // never shows over a section whose only diffs are non-pushable.
+                if sectionHasActionable(section, profile: selected, harness: harness) {
                     HStack {
                         Spacer()
                         Button("Sync all") { syncAllForSection(selected, harness: harness) }
@@ -973,6 +975,24 @@ struct ProfileSyncView: View {
     private func sectionLabel(_ section: SyncSection, profile: String, harness: ProfileSyncHarness) -> String {
         let count = sectionCount(section, profile: profile, harness: harness)
         return count > 0 ? "\(section.rawValue) (\(count))" : section.rawValue
+    }
+
+    /// Whether the section's "Sync all" would actually push anything — mirrors the
+    /// per-subsection header gates (`isActionable` / `isPushable`). Raw
+    /// `sectionCount` includes non-actionable rows (blocked skills, read-only
+    /// config like `auxiliary.*.base_url`), so it can't gate the action: a button
+    /// shown over only-non-actionable diffs no-ops when pressed (`syncAll*` builds
+    /// an empty set and returns early). Config mirrors the desktop "Sync all",
+    /// which pushes every pushable row (`curatedOnly: false`).
+    private func sectionHasActionable(_ section: SyncSection, profile: String, harness: ProfileSyncHarness) -> Bool {
+        switch section {
+        case .skills:
+            return harness.skillsDrift[profile]?.items.contains { $0.isActionable } ?? false
+        case .config:
+            return harness.configDrift[profile]?.items.contains { $0.isPushable } ?? false
+        case .environment:
+            return harness.envDrift[profile]?.items.isEmpty == false
+        }
     }
 
     private func syncAllForSection(_ selected: String, harness: ProfileSyncHarness) {
