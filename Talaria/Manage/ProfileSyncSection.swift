@@ -57,8 +57,17 @@ final class ProfileSyncHarness {
     var isLoading = false
     private(set) var hasLoaded = false
     /// The curated⇄all toggle for config rows and for the section/profile push
-    /// payloads.
+    /// payloads. Only surfaced on iPhone (the stacked `ConfigSubsection`); on
+    /// desktop/iPad the comparison always shows *all* differences, so the curated
+    /// filter doesn't apply — see ``curatedConfigOnly``.
     var showAllConfigDifferences = false
+
+    /// Whether config push payloads should be restricted to the curated
+    /// provider/model sections. The curated filter is an iPhone-only affordance:
+    /// desktop/iPad show the full comparison and their "Sync all" pushes every
+    /// pushable row, so "Sync everything" must do the same there (otherwise it
+    /// would push a strict subset of what the Config section's own button does).
+    var curatedConfigOnly: Bool { Idiom.isPhone && !showAllConfigDifferences }
 
     /// Profiles with a profile-level "Sync everything" in flight.
     private(set) var pushingProfiles: Set<String> = []
@@ -393,7 +402,7 @@ final class ProfileSyncHarness {
     /// Matching the push payload keeps the badge, the subsection, and the summary
     /// in agreement.
     func syncableConfigCount(for profile: String) -> Int {
-        configDrift[profile]?.pushPayload(curatedOnly: !showAllConfigDifferences).count ?? 0
+        configDrift[profile]?.pushPayload(curatedOnly: curatedConfigOnly).count ?? 0
     }
 
     // MARK: - Push: skills
@@ -489,11 +498,27 @@ final class ProfileSyncHarness {
         windowClientProvider()?.scoped(toProfile: profile)
     }
 
-    /// Pushes config edits into `profile` over the scoped window client.
+    /// Tail of the per-profile config-push chain, so cycles for one profile run
+    /// strictly in order (see ``pushConfigEdits(_:profile:)``).
+    private var configPushChains: [String: Task<String?, Never>] = [:]
+
+    /// Pushes config edits into `profile` over the scoped window client,
+    /// **serialized per profile**. `pushConfig` is a non-atomic GET-merge-PUT, and
+    /// the per-row path gates only on a per-item key — so two rows pushed in quick
+    /// succession could interleave (GET, GET, PUT, PUT) and the second PUT, built
+    /// from a pre-first-PUT snapshot, would silently drop the first edit. Chaining
+    /// each push behind the previous one for the same profile closes that window.
     /// Returns an error string on failure, nil on success.
+    @discardableResult
     private func pushConfigEdits(_ edits: [String: ConfigValue], profile: String) async -> String? {
-        guard let client = scopedClient(profile) else { return Self.dashboardOfflineMessage }
-        return await engine.pushConfig(edits: edits, client: client).error
+        let previous = configPushChains[profile]
+        let task = Task { () -> String? in
+            _ = await previous?.value
+            guard let client = self.scopedClient(profile) else { return Self.dashboardOfflineMessage }
+            return await self.engine.pushConfig(edits: edits, client: client).error
+        }
+        configPushChains[profile] = task
+        return await task.value
     }
 
     // MARK: - Push: env
@@ -620,17 +645,16 @@ final class ProfileSyncHarness {
             errors += outcomes.compactMap(\.error)
         }
 
-        let configEdits = configDrift[profile]?.pushPayload(curatedOnly: !showAllConfigDifferences) ?? [:]
+        let configEdits = configDrift[profile]?.pushPayload(curatedOnly: curatedConfigOnly) ?? [:]
+        if !configEdits.isEmpty {
+            // Through the serialized path so a concurrent per-row config push for
+            // the same profile can't clobber this merge (or vice versa).
+            if let error = await pushConfigEdits(configEdits, profile: profile) { errors.append(error) }
+        }
         let envItems = envPushItems(for: profile)
-        if !configEdits.isEmpty || !envItems.isEmpty {
+        if !envItems.isEmpty {
             if let client = scopedClient(profile) {
-                if !configEdits.isEmpty {
-                    let outcome = await engine.pushConfig(edits: configEdits, client: client)
-                    if let error = outcome.error { errors.append(error) }
-                }
-                if !envItems.isEmpty {
-                    errors += await engine.pushEnv(items: envItems, client: client).compactMap(\.error)
-                }
+                errors += await engine.pushEnv(items: envItems, client: client).compactMap(\.error)
             } else {
                 errors.append(Self.dashboardOfflineMessage)
             }
@@ -649,7 +673,7 @@ final class ProfileSyncHarness {
         let updates = skills.count - installs
         if installs > 0 { parts.append("install \(installs) skill\(installs == 1 ? "" : "s")") }
         if updates > 0 { parts.append("update \(updates) skill\(updates == 1 ? "" : "s")") }
-        let configCount = configDrift[profile]?.pushPayload(curatedOnly: !showAllConfigDifferences).count ?? 0
+        let configCount = configDrift[profile]?.pushPayload(curatedOnly: curatedConfigOnly).count ?? 0
         if configCount > 0 { parts.append("push \(configCount) config value\(configCount == 1 ? "" : "s")") }
         let envCount = envPushItems(for: profile).count
         if envCount > 0 { parts.append("copy \(envCount) credential\(envCount == 1 ? "" : "s")") }
@@ -1492,7 +1516,12 @@ private struct ConfigSubsection: View {
     private func valueText(_ value: ConfigValue) -> String {
         switch value {
         case let .string(s): return s.isEmpty ? "\"\"" : s
-        case let .number(n): return n == n.rounded() ? String(Int(n)) : String(n)
+        case let .number(n):
+            // `Int(n)` traps for non-finite or out-of-range values; mirror
+            // `ProfileConfigForm.string`'s guard so a huge numeric leaf renders
+            // instead of crashing the row.
+            if n == n.rounded(), abs(n) < 1e15 { return String(Int64(n)) }
+            return String(n)
         case let .bool(b): return b ? "true" : "false"
         case let .list(items): return "[\(items.joined(separator: ", "))]"
         case .missing: return "—"

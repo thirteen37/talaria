@@ -239,18 +239,18 @@ struct ProfileSyncHarnessTests {
     }
 
     @Test
-    func nonCuratedConfigDriftIsNotCountedUntilShowAll() async {
+    func nonCuratedPushableConfigCountsOnDesktop() async {
+        // The curated filter is iPhone-only; on the desktop/iPad test platform
+        // (`Idiom.isPhone == false`) it never applies, so a pushable non-curated
+        // diff counts and would sync — matching the full comparison and the
+        // section's own "Sync all" (which pushes every pushable row there). This
+        // is what closes the gap where "Sync everything" pushed a strict subset of
+        // "Sync all (config)" on desktop.
         let harness = makeHarness(
-            windowHTTP: SyncStubHTTP(responses: [
-                .init(path: "/api/config/schema", body: Self.schemaJSON),
-                .init(path: "/api/config/schema", body: Self.schemaJSON),
-            ]),
-            catalogHTTP: SyncStubHTTP(responses: [
-                .init(path: "/index.json", body: Self.catalogJSON),
-                .init(path: "/index.json", body: Self.catalogJSON),
-            ]),
-            // No skills/env drift: `work` has the same skills as default, so config
-            // is the only axis that can move the count.
+            windowHTTP: SyncStubHTTP(responses: [.init(path: "/api/config/schema", body: Self.schemaJSON)]),
+            catalogHTTP: SyncStubHTTP(responses: [.init(path: "/index.json", body: Self.catalogJSON)]),
+            // No skills/env drift: `work` matches default there, so config is the
+            // only axis that can move the count.
             baseRunner: nil,
             configReader: { self.nonCuratedConfig($0) },
             envReader: { _ in [] }
@@ -258,17 +258,11 @@ struct ProfileSyncHarnessTests {
 
         await harness.refresh(namedProfiles: ["work"])
 
-        // The non-curated row exists in the drift…
         #expect(harness.configDrift["work"]?.items.contains { $0.dotpath == "temperature" } == true)
-        // …but the curated default filter hides it, so the badge/summary count is 0
-        // (a profile-row pill of "1 config" over an in-sync subsection was the bug).
-        #expect(harness.syncableConfigCount(for: "work") == 0)
-        #expect(harness.differenceCount(for: "work") == 0)
-        #expect(harness.canSyncEverything(profile: "work") == false)
-
-        // With "Show all config differences" on, the pushable non-curated row counts.
-        harness.showAllConfigDifferences = true
+        // Desktop: curated filter off, so the pushable non-curated row counts.
+        #expect(harness.curatedConfigOnly == false)
         #expect(harness.syncableConfigCount(for: "work") == 1)
+        #expect(harness.differenceCount(for: "work") == 1)
         #expect(harness.canSyncEverything(profile: "work") == true)
     }
 
