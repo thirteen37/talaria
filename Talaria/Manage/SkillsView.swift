@@ -222,6 +222,11 @@ final class SkillsHarness {
     /// normalizing `~`/`$HOME`/`${HOME}`/absolute `hermesHome` and prepending the
     /// resolved remote `$HOME` so `hermes skills publish` gets an absolute path.
     func resolvedPublishPath(for skill: DashboardSkill) async -> String {
+        // Reuse the directory `loadPreview` already resolved for this skill rather
+        // than re-running the find + SKILL.md reads (extra SSH round-trips). Publish
+        // isn't destructive, so the cached value is fine; Force remove deliberately
+        // re-resolves fresh.
+        if resolvedDirName == skill.name, let dir = resolvedDir { return dir }
         if let dir = await resolveSkillDirectory(for: skill) { return dir }
         switch profile?.kind {
         case .ssh:
@@ -683,15 +688,13 @@ struct SkillsView: View {
     /// Update/Audit (a runner plus the lifecycle capability).
     private var publishAvailable: Bool { mutationsAvailable }
 
-    /// Whether **Force remove** can run. Local profiles delete via `FileManager`;
-    /// remote profiles `rm -rf` over the host shell, so a remote profile needs a
-    /// host shell.
+    /// Whether **Force remove** can run. It needs a host shell for *both* kinds:
+    /// to list candidate directories while resolving the skill (`find`), and —
+    /// on remote — to `rm -rf` (local deletes via `FileManager`). So the gate is
+    /// a host shell regardless of profile kind, keeping the invariant explicit and
+    /// fail-safe if the runner construction ever changes.
     private var forceRemoveAvailable: Bool {
-        guard let profile else { return false }
-        switch profile.kind {
-        case .local: return true
-        case .ssh: return hostShell != nil
-        }
+        profile != nil && hostShell != nil
     }
 
     var body: some View {
