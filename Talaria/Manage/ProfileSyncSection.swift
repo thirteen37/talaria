@@ -538,6 +538,8 @@ struct ProfileSyncView: View {
     @State private var section: SyncSection = .skills
     @State private var configLoaded = false
     @State private var confirmingProfile: String?
+    /// The skill comparison shown in the bottom panel (Skills section).
+    @State private var skillDiff: SkillDiffPanel?
 
     private enum SyncSection: String, CaseIterable, Identifiable {
         case skills = "Skills"
@@ -755,13 +757,47 @@ struct ProfileSyncView: View {
         // Switching the picker lazily loads that profile's drift (default + the
         // earlier profiles stay cached).
         .onChange(of: selectedProfile) { _, newValue in
+            skillDiff = nil
             guard harness.hasLoaded, let newValue else { return }
             Task {
                 await harness.selectProfile(newValue)
                 if section == .config { activateConfigComparison() }
             }
         }
-        .onChange(of: section) { _, _ in if section == .config { activateConfigComparison() } }
+        .onChange(of: section) { _, _ in
+            skillDiff = nil
+            if section == .config { activateConfigComparison() }
+        }
+    }
+
+    /// Reads the default and the selected profile's `SKILL.md` and opens the
+    /// side-by-side comparison panel. The Hub's latest text isn't fetchable, so
+    /// the two readable sides — the two profiles' installed copies — are compared.
+    private func openSkillDiff(_ item: SkillDriftItem, profileName: String) {
+        guard let serverProfile = profile else { return }
+        skillDiff = SkillDiffPanel(item: item)
+        let transfer = snapshotTransfer
+        Task {
+            do {
+                async let defaultText = HermesSkillContentReader.read(
+                    profile: serverProfile, profileName: HermesProfiles.defaultProfileName,
+                    skillName: item.name, transfer: transfer
+                )
+                async let profileText = HermesSkillContentReader.read(
+                    profile: serverProfile, profileName: profileName,
+                    skillName: item.name, transfer: transfer
+                )
+                let (left, right) = try await (defaultText, profileText)
+                guard skillDiff?.item == item else { return }
+                skillDiff = SkillDiffPanel(
+                    item: item, isLoading: false,
+                    rows: SkillDiff.sideBySide(default: left, profile: right), error: nil
+                )
+            } catch {
+                guard skillDiff?.item == item else { return }
+                skillDiff = SkillDiffPanel(item: item, isLoading: false, rows: [], error: error.localizedDescription)
+            }
+        }
     }
 
     private func sectionCount(_ section: SyncSection, profile: String, harness: ProfileSyncHarness) -> Int {
@@ -795,12 +831,32 @@ struct ProfileSyncView: View {
     private func sectionContent(_ selected: String, harness: ProfileSyncHarness) -> some View {
         switch section {
         case .skills:
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    SkillsSubsection(harness: harness, profile: selected)
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        SkillsSubsection(
+                            harness: harness,
+                            profile: selected,
+                            onCompare: { openSkillDiff($0, profileName: selected) }
+                        )
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding()
-                .frame(maxWidth: .infinity, alignment: .leading)
+                if let panel = skillDiff {
+                    Divider()
+                    SkillDiffPanelView(
+                        panel: panel,
+                        defaultName: HermesProfiles.defaultProfileName,
+                        profileName: selected,
+                        onUpdate: {
+                            Task { await harness.syncSkill(panel.item, profile: selected) }
+                            skillDiff = nil
+                        },
+                        onClose: { skillDiff = nil }
+                    )
+                    .frame(height: 340)
+                }
             }
         case .config:
             configComparison(selected)
@@ -1063,6 +1119,9 @@ private struct ProfileDriftRow: View {
 private struct SkillsSubsection: View {
     let harness: ProfileSyncHarness
     let profile: String
+    /// Opens the side-by-side comparison panel for an outdated skill. Nil (the
+    /// iPhone path) hides the Compare affordance.
+    var onCompare: ((SkillDriftItem) -> Void)?
 
     var body: some View {
         let drift = harness.skillsDrift[profile]
@@ -1094,12 +1153,19 @@ private struct SkillsSubsection: View {
             Spacer()
             if harness.isPushingItem("skill", profile: profile, id: item.id) {
                 ProgressView().controlSize(.small)
-            } else if item.isActionable {
-                Button(actionLabel(item)) { Task { await harness.syncSkill(item, profile: profile) } }
-                    .controlSize(.small)
-                    .help("\(actionLabel(item)) “\(item.name)” in “\(profile)”")
             } else {
-                Text(blockedCaption(item)).font(.caption2).foregroundStyle(.secondary)
+                if case .outdated = item.kind, let onCompare {
+                    Button("Compare") { onCompare(item) }
+                        .controlSize(.small)
+                        .help("Compare default's “\(item.name)” with “\(profile)”'s installed copy")
+                }
+                if item.isActionable {
+                    Button(actionLabel(item)) { Task { await harness.syncSkill(item, profile: profile) } }
+                        .controlSize(.small)
+                        .help("\(actionLabel(item)) “\(item.name)” in “\(profile)”")
+                } else {
+                    Text(blockedCaption(item)).font(.caption2).foregroundStyle(.secondary)
+                }
             }
         }
         if let error = harness.itemError("skill", profile: profile, id: item.id) {
@@ -1299,6 +1365,108 @@ private struct RevealableEnvValue: View {
             return "\(redactedProfile) → \(defaultPart)"
         }
         return "— → \(defaultPart)"
+    }
+}
+
+// MARK: - Skill comparison bottom panel
+
+/// State for the skill comparison shown in the Skills section's bottom panel.
+private struct SkillDiffPanel {
+    let item: SkillDriftItem
+    var isLoading = true
+    var rows: [SkillDiffRow] = []
+    var error: String?
+}
+
+/// A bottom-anchored side-by-side comparison of an outdated skill's `SKILL.md`:
+/// the default profile (left) against the selected profile (right), with the
+/// Update action in the header. Anchored at the bottom (not the side) so the two
+/// columns get the full width.
+private struct SkillDiffPanelView: View {
+    let panel: SkillDiffPanel
+    let defaultName: String
+    let profileName: String
+    let onUpdate: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "rectangle.split.2x1")
+                Text(panel.item.name).font(.headline).lineLimit(1)
+                Spacer()
+                Button { onUpdate() } label: {
+                    Label("Update in “\(profileName)”", systemImage: "arrow.down.circle")
+                }
+                .controlSize(.small)
+                .help("Update “\(panel.item.name)” in “\(profileName)” to the latest from the Skills Hub")
+                Button { onClose() } label: { Image(systemName: "xmark.circle.fill") }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Close comparison")
+                    .help("Close the comparison")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+
+            HStack(spacing: 1) {
+                Text(defaultName).frame(maxWidth: .infinity, alignment: .leading)
+                Text(profileName).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 4)
+
+            Divider()
+            content
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if panel.isLoading {
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = panel.error {
+            ContentUnavailableView(
+                "Couldn't load the skill",
+                systemImage: "doc.questionmark",
+                description: Text(error)
+            )
+        } else if !panel.rows.contains(where: \.changed) {
+            ContentUnavailableView(
+                "Identical",
+                systemImage: "equal.circle",
+                description: Text("Both profiles have the same SKILL.md.")
+            )
+        } else {
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(panel.rows) { row in
+                        HStack(alignment: .top, spacing: 1) {
+                            diffCell(row.left, changed: row.changed)
+                            diffCell(row.right, changed: row.changed)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func diffCell(_ text: String?, changed: Bool) -> some View {
+        Text(text ?? " ")
+            .font(.system(.caption2, design: .monospaced))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(cellBackground(text: text, changed: changed))
+            .textSelection(.enabled)
+    }
+
+    private func cellBackground(text: String?, changed: Bool) -> Color {
+        guard changed else { return .clear }
+        // A present-but-different line is highlighted; a gap (the other side has a
+        // line this one lacks) gets a faint fill so the alignment reads.
+        return text == nil ? Color.secondary.opacity(0.08) : Color.yellow.opacity(0.18)
     }
 }
 
