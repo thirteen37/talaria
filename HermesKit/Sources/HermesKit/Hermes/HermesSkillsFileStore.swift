@@ -128,9 +128,13 @@ public enum HermesSkillsFileStore {
     /// ignored); surrounding quotes are stripped.
     public static func frontmatterName(_ skillMarkdown: String) -> String? {
         guard let parts = MarkdownFrontmatter.split(skillMarkdown) else { return nil }
-        for rawLine in parts.frontmatter.split(separator: "\n", omittingEmptySubsequences: false) {
+        // Split on `Character.isNewline` (not the literal `"\n"`), which treats a
+        // CRLF `\r\n` — preserved by `MarkdownFrontmatter.split` — as one line
+        // break; splitting on `"\n"` would miss it (Swift makes `\r\n` one
+        // grapheme) and never find the `name:` line in a CRLF document.
+        for rawLine in parts.frontmatter.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             guard rawLine.hasPrefix("name:") else { continue }
-            var value = rawLine.dropFirst("name:".count).trimmingCharacters(in: .whitespaces)
+            var value = rawLine.dropFirst("name:".count).trimmingCharacters(in: .whitespacesAndNewlines)
             if value.count >= 2,
                (value.hasPrefix("\"") && value.hasSuffix("\"")) || (value.hasPrefix("'") && value.hasSuffix("'")) {
                 value = String(value.dropFirst().dropLast())

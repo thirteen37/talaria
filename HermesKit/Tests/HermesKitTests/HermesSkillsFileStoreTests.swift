@@ -163,6 +163,14 @@ struct HermesSkillsFileStoreTests {
     }
 
     @Test
+    func frontmatterNameHandlesCRLF() {
+        // MarkdownFrontmatter.split preserves CRLF, so the name value must not
+        // keep a trailing \r (or it never matches the dashboard name).
+        #expect(HermesSkillsFileStore.frontmatterName("---\r\nname: ideation\r\n---\r\n# Body\r\n") == "ideation")
+        #expect(HermesSkillsFileStore.frontmatterName("---\r\nname: \"pixel-art\"\r\n---\r\n") == "pixel-art")
+    }
+
+    @Test
     func frontmatterNameNilWithoutFrontmatterOrName() {
         #expect(HermesSkillsFileStore.frontmatterName("# Just a heading\n") == nil)
         #expect(HermesSkillsFileStore.frontmatterName("---\ndescription: x\n---\nbody") == nil)
