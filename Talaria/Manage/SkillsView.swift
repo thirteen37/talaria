@@ -1144,7 +1144,7 @@ private struct SkillDetail: View {
             if previewLoading {
                 ProgressView().controlSize(.small)
             } else if let previewText, !previewText.isEmpty {
-                Text(AttributedString(MarkdownHighlightTheme.attributed(previewText)))
+                Text(Self.highlighted(previewText))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
@@ -1156,6 +1156,19 @@ private struct SkillDetail: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Highlights the SKILL.md source: the leading `---`-fenced YAML frontmatter
+    /// with the YAML theme, the markdown body with the markdown theme. Falls back
+    /// to whole-document markdown highlighting when there's no frontmatter.
+    private static func highlighted(_ text: String) -> AttributedString {
+        guard let parts = MarkdownFrontmatter.split(text) else {
+            return AttributedString(MarkdownHighlightTheme.attributed(text))
+        }
+        let combined = NSMutableAttributedString()
+        combined.append(YAMLHighlightTheme.attributed(parts.frontmatter))
+        combined.append(MarkdownHighlightTheme.attributed(parts.body))
+        return AttributedString(combined)
     }
 
     /// hub: Update / Audit / Remove.
