@@ -159,22 +159,30 @@ final class SkillsHarness {
     }
 
     /// The Publish sheet's pre-filled path — fully expanded. Local is already
-    /// absolute; for remote, resolves the remote `$HOME` over the host shell and
-    /// substitutes it for a leading `~`, so `hermes skills publish` receives an
-    /// absolute path rather than a `~` it may not expand. Falls back to the
-    /// unexpanded path if the home can't be resolved.
+    /// absolute; for remote, normalizes the profile's `hermesHome`
+    /// (`~`/`$HOME`/`${HOME}`/absolute) and prepends the remote `$HOME` resolved
+    /// over the host shell, so `hermes skills publish` receives an absolute path
+    /// (its arg goes through argv with no shell to expand `~`/`$HOME`). Falls
+    /// back to the editable `~`/configured form if the home can't be resolved.
     func resolvedPublishPath(for skill: DashboardSkill) async -> String {
-        let path = skillDirectoryPath(for: skill)
-        // Only a remote profile yields a `~`-prefixed path; local is absolute.
-        guard path.hasPrefix("~"), let hostShell else { return path }
-        do {
-            let result = try await hostShell.runShell("printf '%s' \"$HOME\"", workingDirectory: nil)
-            let home = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            if result.exitCode == 0, !home.isEmpty {
-                return home + path.dropFirst()  // "~/.hermes/…" → "<home>/.hermes/…"
+        switch profile?.kind {
+        case .ssh:
+            var resolvedHome: String?
+            if let hostShell,
+               let result = try? await hostShell.runShell("printf '%s' \"$HOME\"", workingDirectory: nil),
+               result.exitCode == 0 {
+                let home = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                resolvedHome = home.isEmpty ? nil : home
             }
-        } catch {}
-        return path
+            return HermesSkillsFileStore.remoteSkillPath(
+                hermesHome: profile?.hermesHome,
+                category: skill.category,
+                name: skill.name,
+                homeDirectory: resolvedHome
+            )
+        case .local, .none:
+            return skillDirectoryPath(for: skill)  // already absolute
+        }
     }
 
     /// Reads the selected skill's `SKILL.md` for the detail-panel preview. Runs

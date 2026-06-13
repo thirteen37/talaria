@@ -173,6 +173,30 @@ public enum HermesSkillsFileStore {
         return path.hasPrefix("/") ? "rm -rf -- \(quoted)" : "rm -rf -- $HOME/\(quoted)"
     }
 
+    /// The absolute path of a skill directory on a **remote** host, for the
+    /// Publish sheet's pre-fill. Normalizes the profile's `hermesHome` —
+    /// `~`/`$HOME`/`${HOME}` prefixes and absolute paths alike — via
+    /// ``HermesHomePaths/relativePath(hermesHome:tail:)``, then prepends the
+    /// caller-resolved remote `$HOME` (`homeDirectory`) for the home-relative
+    /// case so `hermes skills publish` receives an absolute path (its arg goes
+    /// through argv with no shell to expand `~`/`$HOME`). An absolute `hermesHome`
+    /// passes through unchanged; when `homeDirectory` is nil the home-relative
+    /// path is returned `~`-prefixed as a best-effort editable default.
+    public static func remoteSkillPath(
+        hermesHome: String?,
+        category: String?,
+        name: String,
+        homeDirectory: String?
+    ) -> String {
+        var tail = "skills"
+        if let category, !category.isEmpty { tail += "/\(category)" }
+        tail += "/\(name)"
+        let rel = HermesHomePaths.relativePath(hermesHome: hermesHome, tail: tail)
+        if rel.hasPrefix("/") { return rel }
+        if let homeDirectory, !homeDirectory.isEmpty { return "\(homeDirectory)/\(rel)" }
+        return "~/\(rel)"
+    }
+
     /// A single path segment safe to interpolate into a shell path: non-empty,
     /// not `.`/`..`, and only letters/digits/`.`/`-`/`_` (no separators or shell
     /// metacharacters).

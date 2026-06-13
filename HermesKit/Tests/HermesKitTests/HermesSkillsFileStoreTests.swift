@@ -50,6 +50,48 @@ struct HermesSkillsFileStoreTests {
         )
     }
 
+    // MARK: - remoteSkillPath (Publish pre-fill)
+
+    @Test
+    func remoteSkillPathPrependsResolvedHomeForTilde() {
+        let path = HermesSkillsFileStore.remoteSkillPath(
+            hermesHome: "~/.hermes", category: nil, name: "cmux", homeDirectory: "/home/u"
+        )
+        #expect(path == "/home/u/.hermes/skills/cmux")
+    }
+
+    @Test
+    func remoteSkillPathExpandsDollarHomePrefix() {
+        // `$HOME`/`${HOME}` are forms relativePath supports; they must resolve the
+        // same as `~` (the bug: they previously fell through unexpanded).
+        #expect(
+            HermesSkillsFileStore.remoteSkillPath(
+                hermesHome: "$HOME/.hermes", category: nil, name: "cmux", homeDirectory: "/home/u"
+            ) == "/home/u/.hermes/skills/cmux"
+        )
+        #expect(
+            HermesSkillsFileStore.remoteSkillPath(
+                hermesHome: "${HOME}/custom", category: "creative", name: "pixel-art", homeDirectory: "/home/u"
+            ) == "/home/u/custom/skills/creative/pixel-art"
+        )
+    }
+
+    @Test
+    func remoteSkillPathPassesAbsoluteHomeThrough() {
+        let path = HermesSkillsFileStore.remoteSkillPath(
+            hermesHome: "/opt/hermes", category: nil, name: "cmux", homeDirectory: "/home/u"
+        )
+        #expect(path == "/opt/hermes/skills/cmux")
+    }
+
+    @Test
+    func remoteSkillPathFallsBackToTildeWhenHomeUnknown() {
+        let path = HermesSkillsFileStore.remoteSkillPath(
+            hermesHome: nil, category: nil, name: "cmux", homeDirectory: nil
+        )
+        #expect(path == "~/.hermes/skills/cmux")
+    }
+
     // MARK: - remoteForceDeleteCommand
 
     @Test
