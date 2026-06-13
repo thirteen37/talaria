@@ -61,10 +61,9 @@ struct ConfigEditorContainer: View {
         .onChange(of: profiles) { _, newProfiles in
             editor?.setAvailableProfiles(newProfiles)
         }
-        // Release every scoped dashboard the editor acquired (Compare spawns a
-        // live SSH/dashboard connection per compared profile) when the view goes
-        // away — navigating to another Browse destination, dismissing the iPhone
-        // Browse sheet, or the window rebuilding on a profile switch.
+        // Cancel in-flight load/compare chains when the view goes away —
+        // navigating to another Browse destination, dismissing the iPhone Browse
+        // sheet, or the window rebuilding on a profile switch.
         .onDisappear {
             let harness = editor
             Task { await harness?.teardown() }
@@ -75,17 +74,12 @@ struct ConfigEditorContainer: View {
         ConfigEditorHarness(
             profiles: profiles,
             editedProfileName: windowHarness.hermesProfileName,
+            // The window's shared client; each editing state scopes it to its own
+            // profile via `?profile=<name>` — one dashboard serves all profiles,
+            // including the Compare column's target.
             defaultClient: { [weak windowHarness] in windowHarness?.dashboardClient },
             profile: windowHarness.profile,
-            transfer: windowHarness.snapshotTransfer,
-            // Comparison reaches a profile other than the window's active one, so
-            // it acquires that profile's own scoped dashboard.
-            acquireScoped: { name in
-                try await windowHarness.acquireScopedDashboardClient(hermesProfileName: name)
-            },
-            releaseScoped: { supervisor in
-                await windowHarness.releaseScopedDashboard(supervisor)
-            }
+            transfer: windowHarness.snapshotTransfer
         )
     }
 

@@ -233,7 +233,13 @@ extension ServerWindowHarness {
             )
             try Task.checkCancellation()
             guard !dashboardReleased else { return }
-            dashboardClient = endpoint.session.client()
+            // Scope the client to this window's Hermes profile so every HTTP
+            // route carries `?profile=<name>`. The newer dashboard is one server
+            // that serves the *default* home regardless of how it was spawned and
+            // scopes per request via this param; without it a non-default window
+            // would read/write the default profile. (default → no param, so
+            // default windows are unchanged.)
+            dashboardClient = endpoint.session.client().scoped(toProfile: hermesProfileName)
             store.dashboardClient = dashboardClient
             dashboardError = nil
             startupPhase = nil
@@ -255,25 +261,6 @@ extension ServerWindowHarness {
     /// cache.
     func forceReleaseDashboardSupervisor(_ supervisor: DashboardSupervisor) async {
         await DashboardCoordinator.shared.forceRelease(supervisor)
-    }
-
-    /// Acquires a dashboard scoped to a *named* Hermes profile, separate from
-    /// this window's shared dashboard. Used by the Configuration editor's
-    /// comparison column to reach a profile other than the window's active one.
-    /// The caller (the editor's `ScopedDashboardPool`) holds the returned
-    /// supervisor and releases it via ``releaseScopedDashboard(_:)``.
-    func acquireScopedDashboardClient(
-        hermesProfileName: String
-    ) async throws -> (DashboardSupervisor, DashboardClient) {
-        let (endpoint, supervisor) = try await DashboardCoordinator.shared.acquire(
-            profile: profile,
-            hermesProfileName: hermesProfileName
-        )
-        return (supervisor, endpoint.session.client())
-    }
-
-    func releaseScopedDashboard(_ supervisor: DashboardSupervisor) async {
-        await DashboardCoordinator.shared.release(supervisor)
     }
 
     /// Cancels long-lived per-window resources when the SwiftUI window

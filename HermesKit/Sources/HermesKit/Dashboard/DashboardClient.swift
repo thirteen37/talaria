@@ -725,6 +725,13 @@ public struct DashboardClient: Sendable {
     private let token: @Sendable () -> String?
     private let onUnauthorized: @Sendable () async -> Void
     private let http: any DashboardHTTP
+    /// The Hermes profile this client targets, or nil for the dashboard's own
+    /// (default/active) home. When set, every request carries `?profile=<name>`
+    /// so a single dashboard process serves any profile — the newer Hermes
+    /// dashboard is one server that scopes each request via this param rather
+    /// than per-profile `-p` spawns (which it now ignores). See
+    /// ``scoped(toProfile:)``.
+    public let profileName: String?
     private static let queryComponentAllowed: CharacterSet = {
         var allowed = CharacterSet.alphanumerics
         allowed.insert(charactersIn: "-._~")
@@ -735,12 +742,40 @@ public struct DashboardClient: Sendable {
         baseURL: URL,
         token: @escaping @Sendable () -> String?,
         onUnauthorized: @escaping @Sendable () async -> Void = {},
-        http: any DashboardHTTP = URLSession.shared
+        http: any DashboardHTTP = URLSession.shared,
+        profileName: String? = nil
     ) {
         self.baseURL = baseURL
         self.token = token
         self.onUnauthorized = onUnauthorized
         self.http = http
+        self.profileName = Self.normalizedProfile(profileName)
+    }
+
+    /// Returns a copy of this client targeting `name` (or the default home when
+    /// `name` is nil/empty/"default"). Used to address another profile through
+    /// the *same* dashboard process — e.g. cross-profile sync and the config
+    /// editor push the default window's dashboard client scoped to the target.
+    public func scoped(toProfile name: String?) -> DashboardClient {
+        DashboardClient(
+            baseURL: baseURL,
+            token: token,
+            onUnauthorized: onUnauthorized,
+            http: http,
+            profileName: name
+        )
+    }
+
+    /// Normalizes a profile name to the query value, collapsing the default
+    /// profile (any case) and empties to nil so default-scoped clients send no
+    /// `?profile=` and behave exactly as before.
+    private static func normalizedProfile(_ name: String?) -> String? {
+        guard let name else { return nil }
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty || trimmed.caseInsensitiveCompare("default") == .orderedSame {
+            return nil
+        }
+        return trimmed
     }
 
     public func getStatus() async throws -> DashboardStatus {
@@ -1340,8 +1375,16 @@ public struct DashboardClient: Sendable {
     ) async throws -> (Data, URLResponse) {
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
         components.path = path
-        if !queryItems.isEmpty {
-            components.percentEncodedQuery = Self.percentEncodedQuery(for: queryItems)
+        // A profile-scoped client appends `?profile=<name>` to every route so
+        // the single dashboard serves the target profile. An explicit per-call
+        // `profile` query item (rare) wins. Unknown-param-tolerant routes ignore
+        // it, so this is safe to send universally.
+        var allItems = queryItems
+        if let profileName, !queryItems.contains(where: { $0.name == "profile" }) {
+            allItems.append(URLQueryItem(name: "profile", value: profileName))
+        }
+        if !allItems.isEmpty {
+            components.percentEncodedQuery = Self.percentEncodedQuery(for: allItems)
         }
         var request = URLRequest(url: components.url!)
         request.httpMethod = method

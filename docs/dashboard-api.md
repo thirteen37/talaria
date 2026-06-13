@@ -180,12 +180,14 @@ every numeric field as optional and coalesces to `0`.
 | Method | Path                  | Body              | Returns / notes |
 | ------ | --------------------- | ----------------- | --------------- |
 | GET    | `/api/config/schema`  | —                 | Field schema for the structured editor. **Public** route. Parsed via Yams (order-preserving), not `JSONDecoder`. |
-| GET    | `/api/config`         | —                 | Current config of the **dashboard process's profile**, verbatim `JSONValue` (arbitrary keys round-trip). |
-| PUT    | `/api/config`         | `{config: {...}}` | Whole-config atomic write (`ConfigUpdate` wraps under `config`). |
+| GET    | `/api/config`         | —                 | Current config of the target profile (`?profile=<name>`, else the dashboard's own), verbatim `JSONValue` (arbitrary keys round-trip). |
+| PUT    | `/api/config`         | `{config: {...}}` | Whole-config atomic write (`ConfigUpdate` wraps under `config`). Honors `?profile=<name>`. |
 
-> Config is scoped to whichever profile the dashboard process was launched with — editing a *named*
-> profile spins up a separate `hermes -p <name> dashboard`. Soul is the explicit per-call exception
-> (it takes `{profile}` in the path), so it works through the shared default dashboard.
+> The dashboard is a single multi-profile server: config (and env) routes take a **`?profile=<name>`
+> query param** that scopes that one request to the named profile via a context-local `HERMES_HOME`
+> override (default: the dashboard's own home). `DashboardClient.scoped(toProfile:)` appends it.
+> (Spawning a separate `hermes -p <name> dashboard` does **not** scope the dashboard's request handling
+> on current Hermes — the param does.) Soul takes `{profile}` in the path for the same reason.
 
 ### Logs
 

@@ -125,6 +125,52 @@ struct DashboardClientEnvTests {
         }
     }
 
+    // MARK: - Profile scoping (?profile=)
+
+    @Test
+    func scopedClientAppendsProfileQueryToWrites() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/env", body: Data(#"{"ok":true,"key":"K"}"#.utf8))
+        ])
+        let client = makeClient(http: http).scoped(toProfile: "dev")
+
+        try await client.setEnvVar(key: "K", value: "v")
+
+        let request = try #require(http.recordedRequests.first)
+        #expect(request.url?.path == "/api/env")
+        #expect(request.url?.query?.contains("profile=dev") == true)
+    }
+
+    @Test
+    func defaultScopedClientSendsNoProfileQuery() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/env", body: Data(#"{"ok":true,"key":"K"}"#.utf8))
+        ])
+        // nil, empty, and "default" (any case) all collapse to no `?profile=`.
+        let client = makeClient(http: http).scoped(toProfile: "Default")
+
+        try await client.setEnvVar(key: "K", value: "v")
+
+        let request = try #require(http.recordedRequests.first)
+        #expect(request.url?.query?.contains("profile=") != true)
+        #expect(client.profileName == nil)
+    }
+
+    @Test
+    func scopingReplacesRatherThanStacks() async throws {
+        let http = StubHTTP(responses: [
+            .init(path: "/api/env", body: try loadFixtureData("env.json"))
+        ])
+        // A client already scoped to `dev`, re-scoped to `work`, targets `work`.
+        let client = makeClient(http: http).scoped(toProfile: "dev").scoped(toProfile: "work")
+
+        _ = try await client.listEnvVars()
+
+        let request = try #require(http.recordedRequests.first)
+        #expect(request.url?.query?.contains("profile=work") == true)
+        #expect(request.url?.query?.contains("profile=dev") != true)
+    }
+
     // MARK: - Helpers
 
     private func makeClient(http: StubHTTP) -> DashboardClient {

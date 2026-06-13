@@ -79,25 +79,21 @@ struct ProfileSyncHarnessTests {
         DashboardClient(baseURL: URL(string: "http://127.0.0.1:9119")!, token: { nil }, http: http)
     }
 
-    /// Builds a harness with file reads stubbed and a recording acquire/release
-    /// seam. `acquireCounter`/`releaseCounter` observe the scoped-dashboard
-    /// lifecycle; `scopedHTTP` backs the pushed client.
+    /// Builds a harness with file reads stubbed. Pushes go through the window
+    /// client scoped to the target (`?profile=<name>`), so they hit `windowHTTP`
+    /// — there is no separate scoped dashboard to back.
     private func makeHarness(
         windowHTTP: SyncStubHTTP,
         catalogHTTP: SyncStubHTTP,
-        scopedHTTP: SyncStubHTTP,
         baseRunner: (any HermesAdminRunning)? = SkillsRunner(),
         configReader: @escaping @Sendable (String) async throws -> JSONValue,
-        envReader: @escaping @Sendable (String) async throws -> [EnvFileEntry],
-        acquireCounter: Counter,
-        releaseCounter: Counter
+        envReader: @escaping @Sendable (String) async throws -> [EnvFileEntry]
     ) -> ProfileSyncHarness {
         let catalog = SkillsHubCatalog(
             indexURL: URL(string: "http://stub.local/index.json")!,
             cacheURL: nil,
             http: catalogHTTP
         )
-        let scopedClient = client(scopedHTTP)
         let windowClient = client(windowHTTP)
         return ProfileSyncHarness(
             baseRunner: baseRunner,
@@ -106,9 +102,6 @@ struct ProfileSyncHarnessTests {
             snapshotTransfer: nil,
             hermesVersion: HermesVersion("0.15.0"),
             catalog: catalog,
-            acquireScopedClient: { _ in acquireCounter.increment(); return scopedClient },
-            releaseScopedClient: { _ in releaseCounter.increment() },
-            drainScoped: {},
             configReader: configReader,
             envReader: envReader
         )
@@ -129,11 +122,8 @@ struct ProfileSyncHarnessTests {
         let harness = makeHarness(
             windowHTTP: SyncStubHTTP(responses: [.init(path: "/api/config/schema", body: Self.schemaJSON)]),
             catalogHTTP: SyncStubHTTP(responses: [.init(path: "/index.json", body: Self.catalogJSON)]),
-            scopedHTTP: SyncStubHTTP(responses: []),
             configReader: { self.defaultVsWorkConfig($0) },
-            envReader: { self.defaultVsWorkEnv($0) },
-            acquireCounter: Counter(),
-            releaseCounter: Counter()
+            envReader: { self.defaultVsWorkEnv($0) }
         )
 
         await harness.refresh(namedProfiles: ["work"])
@@ -151,11 +141,8 @@ struct ProfileSyncHarnessTests {
         let harness = makeHarness(
             windowHTTP: SyncStubHTTP(responses: [.init(path: "/api/config/schema", statusCode: 404, body: Data())]),
             catalogHTTP: SyncStubHTTP(responses: [.init(path: "/index.json", body: Self.catalogJSON)]),
-            scopedHTTP: SyncStubHTTP(responses: []),
             configReader: { self.defaultVsWorkConfig($0) },
-            envReader: { self.defaultVsWorkEnv($0) },
-            acquireCounter: Counter(),
-            releaseCounter: Counter()
+            envReader: { self.defaultVsWorkEnv($0) }
         )
 
         await harness.refresh(namedProfiles: ["work"])
@@ -172,11 +159,8 @@ struct ProfileSyncHarnessTests {
         let harness = makeHarness(
             windowHTTP: SyncStubHTTP(responses: [.init(path: "/api/config/schema", body: Self.schemaJSON)]),
             catalogHTTP: SyncStubHTTP(responses: [.init(path: "/index.json", statusCode: 500, body: Data())]),
-            scopedHTTP: SyncStubHTTP(responses: []),
             configReader: { self.defaultVsWorkConfig($0) },
-            envReader: { self.defaultVsWorkEnv($0) },
-            acquireCounter: Counter(),
-            releaseCounter: Counter()
+            envReader: { self.defaultVsWorkEnv($0) }
         )
 
         await harness.refresh(namedProfiles: ["work"])
@@ -194,14 +178,11 @@ struct ProfileSyncHarnessTests {
         let harness = makeHarness(
             windowHTTP: SyncStubHTTP(responses: [.init(path: "/api/config/schema", body: Self.schemaJSON)]),
             catalogHTTP: SyncStubHTTP(responses: [.init(path: "/index.json", body: Self.catalogJSON)]),
-            scopedHTTP: SyncStubHTTP(responses: []),
             configReader: { name in
                 if name == "work" { throw ProfileSyncError.fileReadUnavailable }
                 return self.defaultVsWorkConfig(name)
             },
-            envReader: { self.defaultVsWorkEnv($0) },
-            acquireCounter: Counter(),
-            releaseCounter: Counter()
+            envReader: { self.defaultVsWorkEnv($0) }
         )
 
         await harness.refresh(namedProfiles: ["work"])
@@ -214,35 +195,37 @@ struct ProfileSyncHarnessTests {
     }
 
     @Test
-    func syncEverythingAcquiresScopedDashboardOnceThenReleases() async {
-        let acquireCounter = Counter()
-        let releaseCounter = Counter()
-        // Scoped client serves: re-GET config, PUT config, PUT env (one key).
-        let scopedHTTP = SyncStubHTTP(responses: [
+    func syncEverythingPushesConfigAndEnvScopedToTheTarget() async {
+        // The window client serves the refresh schema, then the target-scoped
+        // pushes (re-GET config, PUT config, PUT env) — all on one HTTP backing
+        // since the scoped client is just the window client with `?profile=work`.
+        let windowHTTP = SyncStubHTTP(responses: [
+            .init(path: "/api/config/schema", body: Self.schemaJSON),
             .init(path: "/api/config", body: Data(#"{"model":"b"}"#.utf8)),
             .init(path: "/api/config", statusCode: 200, body: Data()),
             .init(path: "/api/env", statusCode: 200, body: Data()),
         ])
         let harness = makeHarness(
-            windowHTTP: SyncStubHTTP(responses: [.init(path: "/api/config/schema", body: Self.schemaJSON)]),
+            windowHTTP: windowHTTP,
             catalogHTTP: SyncStubHTTP(responses: [.init(path: "/index.json", body: Self.catalogJSON)]),
-            scopedHTTP: scopedHTTP,
             configReader: { self.defaultVsWorkConfig($0) },
-            envReader: { self.defaultVsWorkEnv($0) },
-            acquireCounter: acquireCounter,
-            releaseCounter: releaseCounter
+            envReader: { self.defaultVsWorkEnv($0) }
         )
 
         await harness.refresh(namedProfiles: ["work"])
         await harness.syncEverything(profile: "work")
 
-        // Config + env pushed under a single scoped-dashboard acquisition.
-        #expect(acquireCounter.value == 1)
-        #expect(releaseCounter.value == 1)
-        let methods = scopedHTTP.recorded.map { "\($0.httpMethod ?? "")\($0.url?.path ?? "")" }
+        // The config + env writes hit the dashboard scoped to `work` via the query
+        // param (no separate process), and the reads/writes reach the right routes.
+        let pushes = windowHTTP.recorded.filter { ($0.url?.path ?? "").hasPrefix("/api/config") || $0.url?.path == "/api/env" }
+        let methods = pushes.map { "\($0.httpMethod ?? "")\($0.url?.path ?? "")" }
         #expect(methods.contains("GET/api/config"))
         #expect(methods.contains("PUT/api/config"))
         #expect(methods.contains("PUT/api/env"))
+        // Every push carries `?profile=work`.
+        let writes = windowHTTP.recorded.filter { $0.httpMethod == "PUT" }
+        #expect(!writes.isEmpty)
+        #expect(writes.allSatisfy { ($0.url?.query ?? "").contains("profile=work") })
     }
 
     @Test
@@ -256,11 +239,8 @@ struct ProfileSyncHarnessTests {
                 .init(path: "/index.json", body: Self.catalogJSON),
                 .init(path: "/index.json", body: Self.catalogJSON),
             ]),
-            scopedHTTP: SyncStubHTTP(responses: []),
             configReader: { self.defaultVsWorkConfig($0) },
-            envReader: { self.defaultVsWorkEnv($0) },
-            acquireCounter: Counter(),
-            releaseCounter: Counter()
+            envReader: { self.defaultVsWorkEnv($0) }
         )
 
         await harness.refresh(namedProfiles: ["work"])
@@ -268,12 +248,4 @@ struct ProfileSyncHarnessTests {
         await harness.refresh(namedProfiles: ["work"])
         #expect(harness.revealToken > first)
     }
-}
-
-/// Thread-safe call counter for the `@Sendable` scoped seam closures.
-private final class Counter: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "ProfileSyncCounter")
-    private var _value = 0
-    var value: Int { queue.sync { _value } }
-    func increment() { queue.sync { _value += 1 } }
 }

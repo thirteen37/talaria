@@ -82,9 +82,6 @@ final class ProfileSyncHarness {
     private let windowClientProvider: @MainActor () -> DashboardClient?
     private let catalog: SkillsHubCatalog
     private let hermesVersion: HermesVersion?
-    private let acquireScopedClient: @MainActor (String) async throws -> DashboardClient
-    private let releaseScopedClient: @MainActor (String) async -> Void
-    private let drainScoped: @MainActor () async -> Void
     private let configReader: @Sendable (String) async throws -> JSONValue
     private let envReader: @Sendable (String) async throws -> [EnvFileEntry]
     /// Server profile + transfer for the skill content-drift reads (the same
@@ -115,9 +112,6 @@ final class ProfileSyncHarness {
         snapshotTransfer: RemoteSnapshotTransfer?,
         hermesVersion: HermesVersion?,
         catalog: SkillsHubCatalog = SkillsHubCatalog(),
-        acquireScopedClient: @escaping @MainActor (String) async throws -> DashboardClient,
-        releaseScopedClient: @escaping @MainActor (String) async -> Void,
-        drainScoped: @escaping @MainActor () async -> Void,
         configReader: (@Sendable (String) async throws -> JSONValue)? = nil,
         envReader: (@Sendable (String) async throws -> [EnvFileEntry])? = nil
     ) {
@@ -125,9 +119,6 @@ final class ProfileSyncHarness {
         self.windowClientProvider = windowClient
         self.catalog = catalog
         self.hermesVersion = hermesVersion
-        self.acquireScopedClient = acquireScopedClient
-        self.releaseScopedClient = releaseScopedClient
-        self.drainScoped = drainScoped
         self.serverProfile = profile
         self.snapshotTransfer = snapshotTransfer
 
@@ -466,17 +457,20 @@ final class ProfileSyncHarness {
         if let error { banners?.surfaceError("profiles", error) }
     }
 
-    /// Acquires the profile's scoped dashboard, pushes the edits, releases.
+    private static let dashboardOfflineMessage = "The Hermes dashboard isn’t online yet. Wait for it to connect and try again."
+
+    /// The window's dashboard client scoped to push into `profile` via
+    /// `?profile=<name>` — the single dashboard serves every profile, so there's
+    /// no separate process to acquire/release. Nil until the dashboard is online.
+    private func scopedClient(_ profile: String) -> DashboardClient? {
+        windowClientProvider()?.scoped(toProfile: profile)
+    }
+
+    /// Pushes config edits into `profile` over the scoped window client.
     /// Returns an error string on failure, nil on success.
     private func pushConfigEdits(_ edits: [String: ConfigValue], profile: String) async -> String? {
-        do {
-            let client = try await acquireScopedClient(profile)
-            let outcome = await engine.pushConfig(edits: edits, client: client)
-            await releaseScopedClient(profile)
-            return outcome.error
-        } catch {
-            return error.localizedDescription
-        }
+        guard let client = scopedClient(profile) else { return Self.dashboardOfflineMessage }
+        return await engine.pushConfig(edits: edits, client: client).error
     }
 
     // MARK: - Push: env
@@ -517,9 +511,8 @@ final class ProfileSyncHarness {
         let fallback = "Couldn’t copy “\(id)” to “\(profile)”: Hermes reported success, but re-reading the profile’s .env still shows the old value. See the App Log for details."
 
         var dashboardEnvPath: String?
-        if let client = try? await acquireScopedClient(profile) {
+        if let client = scopedClient(profile) {
             dashboardEnvPath = try? await client.getStatus().envPath
-            await releaseScopedClient(profile)
         }
 
         var readerEnvPath: String?
@@ -556,17 +549,13 @@ final class ProfileSyncHarness {
         surfaceFailures(results.compactMap { $0 }, profile: profile, noun: "credential")
     }
 
-    /// Acquires the profile's scoped dashboard, pushes each key, releases.
+    /// Pushes each key into `profile` over the scoped window client.
     /// Returns the per-key error strings (nil == success).
     private func pushEnvItems(_ items: [(key: String, value: String)], profile: String) async -> [String?] {
-        do {
-            let client = try await acquireScopedClient(profile)
-            let outcomes = await engine.pushEnv(items: items, client: client)
-            await releaseScopedClient(profile)
-            return outcomes.map(\.error)
-        } catch {
-            return items.map { _ in error.localizedDescription }
+        guard let client = scopedClient(profile) else {
+            return items.map { _ in Self.dashboardOfflineMessage }
         }
+        return await engine.pushEnv(items: items, client: client).map(\.error)
     }
 
     /// The default profile's plaintext for `key` (from the in-memory snapshot;
@@ -591,8 +580,8 @@ final class ProfileSyncHarness {
     // MARK: - Push: everything
 
     /// Profile-level "Sync everything from default" — skills via CLI, then config
-    /// and env over a single scoped-dashboard acquisition, then re-snapshot.
-    /// Honors the curated⇄all toggle for the config payload.
+    /// and env over the scoped window client, then re-snapshot. Honors the
+    /// curated⇄all toggle for the config payload.
     func syncEverything(profile: String) async {
         pushingProfiles.insert(profile)
         defer { pushingProfiles.remove(profile) }
@@ -605,8 +594,7 @@ final class ProfileSyncHarness {
         let configEdits = configDrift[profile]?.pushPayload(curatedOnly: !showAllConfigDifferences) ?? [:]
         let envItems = envPushItems(for: profile)
         if !configEdits.isEmpty || !envItems.isEmpty {
-            do {
-                let client = try await acquireScopedClient(profile)
+            if let client = scopedClient(profile) {
                 if !configEdits.isEmpty {
                     let outcome = await engine.pushConfig(edits: configEdits, client: client)
                     if let error = outcome.error { banners?.surfaceError("profiles", error) }
@@ -614,9 +602,8 @@ final class ProfileSyncHarness {
                 if !envItems.isEmpty {
                     _ = await engine.pushEnv(items: envItems, client: client)
                 }
-                await releaseScopedClient(profile)
-            } catch {
-                banners?.surfaceError("profiles", error.localizedDescription)
+            } else {
+                banners?.surfaceError("profiles", Self.dashboardOfflineMessage)
             }
         }
 
@@ -641,12 +628,6 @@ final class ProfileSyncHarness {
     }
 
     func canSyncEverything(profile: String) -> Bool { differenceCount(for: profile) > 0 }
-
-    // MARK: - Teardown
-
-    func teardown() async {
-        await drainScoped()
-    }
 
     // MARK: - Item bookkeeping
 
@@ -713,13 +694,10 @@ struct ProfileSyncView: View {
     /// A deep-link target set by the Profiles tab: when non-nil and valid, the
     /// view selects that profile and clears it.
     @Binding var syncTarget: String?
-    let acquireScoped: @MainActor (String) async throws -> (DashboardSupervisor, DashboardClient)
-    let releaseScoped: @MainActor (DashboardSupervisor) async -> Void
 
     @Environment(BannerCenter.self) private var banners: BannerCenter?
 
     @State private var harness: ProfileSyncHarness?
-    @State private var pool: ScopedDashboardPool<DashboardSupervisor, DashboardClient>?
     /// Config comparison reuses the config editor's two-column view, source pinned
     /// to `default`. Desktop/iPad only (nil on iPhone, where Compare can't render).
     @State private var configEditor: ConfigEditorHarness?
@@ -781,32 +759,23 @@ struct ProfileSyncView: View {
             if selectedProfile != target { selectedProfile = target }
         }
         .onDisappear {
-            let h = harness
             let editor = configEditor
-            Task { await h?.teardown(); await editor?.teardown() }
+            Task { await editor?.teardown() }
         }
     }
 
     /// Builds (once) and returns the harness, so the initial `.task` can use it
     /// immediately without waiting for the `@State` write to land. Also builds the
-    /// config comparison harness (its dashboards spawn only when Config is opened).
+    /// config comparison harness (which scopes the window client per profile).
     private func ensureHarness() -> ProfileSyncHarness {
         if let harness { return harness }
-        let pool = ScopedDashboardPool<DashboardSupervisor, DashboardClient>(
-            acquire: acquireScoped,
-            release: releaseScoped
-        )
-        self.pool = pool
         let provider = windowClient
         let h = ProfileSyncHarness(
             baseRunner: baseRunner,
             windowClient: provider,
             profile: profile,
             snapshotTransfer: snapshotTransfer,
-            hermesVersion: hermesVersion,
-            acquireScopedClient: { try await pool.acquire($0) },
-            releaseScopedClient: { await pool.release($0) },
-            drainScoped: { await pool.drain() }
+            hermesVersion: hermesVersion
         )
         h.banners = banners
         harness = h
@@ -817,9 +786,7 @@ struct ProfileSyncView: View {
                 sourceProfileName: HermesProfiles.defaultProfileName,
                 defaultClient: provider,
                 profile: profile,
-                transfer: snapshotTransfer,
-                acquireScoped: acquireScoped,
-                releaseScoped: releaseScoped
+                transfer: snapshotTransfer
             )
             editor.banners = banners
             configEditor = editor

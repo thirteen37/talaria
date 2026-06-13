@@ -48,9 +48,7 @@ struct ProfilesTabsView: View {
                     snapshotTransfer: harness.snapshotTransfer,
                     hermesVersion: harness.effectiveHermesVersion,
                     activeProfile: harness.hermesProfileName,
-                    syncTarget: $syncTarget,
-                    acquireScoped: { try await harness.acquireScopedDashboardClient(hermesProfileName: $0) },
-                    releaseScoped: { await harness.releaseScopedDashboard($0) }
+                    syncTarget: $syncTarget
                 )
             },
         ])

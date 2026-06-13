@@ -36,7 +36,7 @@ Dashboard-backed surfaces today:
 - Memory: `GET /api/memory` for read-only provider status only. The built-in `MEMORY.md` / `USER.md` text has no dashboard route, so the Memory editor reads **and writes** those files directly on disk.
 - Logs: polled `/api/logs`.
 - Updates: `/api/status`, `/api/hermes/update`, `/api/actions/hermes-update/status`.
-- Profiles config editor: schema + current config via `/api/config/schema` and `/api/config`, non-destructive writes via `PUT /api/config`, and the profile list via `/api/profiles`. Soul and Personalities editors ride this surface (`/api/profiles/{profile}/soul` and `agent.personalities` in the config). Editing the default profile reuses the window's shared dashboard; editing a *named* profile launches an isolated profile-scoped dashboard (`hermes -p <name> dashboard`). An editable YAML mirror and the read-only two-profile comparison share the same surface.
+- Profiles config editor: schema + current config via `/api/config/schema` and `/api/config`, non-destructive writes via `PUT /api/config`, and the profile list via `/api/profiles`. Soul and Personalities editors ride this surface (`/api/profiles/{profile}/soul` and `agent.personalities` in the config). All profiles — the window's own and the comparison's target — are reached through the **window's shared dashboard client scoped via `?profile=<name>`** (`DashboardClient.scoped(toProfile:)`); the single dashboard serves every profile, so no separate per-profile dashboard is spawned. An editable YAML mirror and the read-only two-profile comparison share the same surface.
 
 The full per-route table lives in `docs/dashboard-api.md`; `docs/integration-coverage.md` tracks the integration boundary and capability gates.
 

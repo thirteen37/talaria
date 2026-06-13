@@ -12,8 +12,9 @@ import SwiftUI
 /// post-`await` guards collapse to a plain cancellation check (there is no
 /// "selection moved on" to detect within a single instance).
 ///
-/// The dashboard is reached only through injected acquire/release closures (wired
-/// to the harness's `ScopedDashboardPool`), so this type stays platform-neutral.
+/// The dashboard is reached by scoping the window's shared client to this
+/// state's `profileName` (`?profile=<name>`) — the single dashboard serves every
+/// profile — so this type stays platform-neutral and holds no process of its own.
 @MainActor
 @Observable
 final class ConfigEditingState: Identifiable {
@@ -60,20 +61,6 @@ final class ConfigEditingState: Identifiable {
     private let defaultClientProvider: @MainActor () -> DashboardClient?
     private let serverProfile: ServerProfile
     private let transfer: RemoteSnapshotTransfer?
-    private let acquireScoped: @MainActor (String) async throws -> DashboardClient
-    private let releaseScoped: @MainActor (String) async -> Void
-
-    /// True when this state edits the window's **active** Hermes profile, whose
-    /// dashboard the window already runs (`hermes -p <name>`). Such a state reads
-    /// the window's shared client live (so it upgrades when the dashboard
-    /// arrives) instead of acquiring its own from the pool. A comparison column
-    /// targeting any *other* profile is scoped (`false`).
-    private let usesWindowClient: Bool
-
-    // One scoped hold per state: acquired lazily on first use, released in
-    // `teardown()`. A window-client state never touches the pool.
-    private var scopedClient: DashboardClient?
-    private var didAcquireScoped = false
 
     // Serializes config loads so a save-triggered reload can't overlap an
     // in-flight load (which would race the client resolution / clobber state).
@@ -81,20 +68,14 @@ final class ConfigEditingState: Identifiable {
 
     init(
         profileName: String,
-        usesWindowClient: Bool,
         defaultClient: @escaping @MainActor () -> DashboardClient?,
         serverProfile: ServerProfile,
-        transfer: RemoteSnapshotTransfer?,
-        acquireScoped: @escaping @MainActor (String) async throws -> DashboardClient,
-        releaseScoped: @escaping @MainActor (String) async -> Void
+        transfer: RemoteSnapshotTransfer?
     ) {
         self.profileName = profileName
-        self.usesWindowClient = usesWindowClient
         self.defaultClientProvider = defaultClient
         self.serverProfile = serverProfile
         self.transfer = transfer
-        self.acquireScoped = acquireScoped
-        self.releaseScoped = releaseScoped
     }
 
     var isDirty: Bool {
@@ -157,10 +138,9 @@ final class ConfigEditingState: Identifiable {
     }
 
     /// Re-runs the load when the window's dashboard comes online after an initial
-    /// degraded render (the editor opened before the spawn finished). Only a
-    /// window-client state observes the window client.
+    /// degraded render (the editor opened before the spawn finished).
     func reloadIfDashboardAppeared() {
-        guard dashboardUnavailable, usesWindowClient, defaultClientProvider() != nil else { return }
+        guard dashboardUnavailable, defaultClientProvider() != nil else { return }
         load()
     }
 
@@ -187,39 +167,20 @@ final class ConfigEditingState: Identifiable {
         }
     }
 
-    /// Resolves this state's dashboard client. A window-client state reads the
-    /// window's shared client live; any other profile acquires its scoped client
-    /// from the pool exactly once and caches it for the state's lifetime.
+    /// This state's dashboard client: the window's shared client scoped to this
+    /// state's profile (`?profile=<name>`). The single dashboard serves every
+    /// profile, so there's no separate process to acquire — nil only while the
+    /// window dashboard is still offline.
     private func currentClient() async -> DashboardClient? {
-        if usesWindowClient {
-            return defaultClientProvider()
-        }
-        if let scopedClient {
-            return scopedClient
-        }
-        do {
-            let client = try await acquireScoped(profileName)
-            scopedClient = client
-            didAcquireScoped = true
-            return client
-        } catch {
-            lastError = error.localizedDescription
-            return nil
-        }
+        defaultClientProvider()?.scoped(toProfile: profileName)
     }
 
-    /// Releases this state's scoped dashboard hold. Awaits the in-flight load
-    /// chain first so a release can't race an acquire that hasn't registered yet
-    /// (mirrors the window harness's chained-release reasoning).
+    /// Cancels any in-flight load chain. No dashboard process is owned by this
+    /// state (it borrows the window's), so there's nothing to release.
     func teardown() async {
         loadTask?.cancel()
         await loadTask?.value
         loadTask = nil
-        if didAcquireScoped {
-            await releaseScoped(profileName)
-            didAcquireScoped = false
-            scopedClient = nil
-        }
     }
 
     // MARK: - Mode switching
