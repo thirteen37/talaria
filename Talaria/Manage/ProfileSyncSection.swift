@@ -104,6 +104,11 @@ final class ProfileSyncHarness {
     private(set) var modifiedSkills: [String: [ModifiedSkill]] = [:]
     private(set) var skillContentLoading: Set<String> = []
     private var skillContentLoaded: Set<String> = []
+    /// Bumped whenever a refetch invalidates a profile's cached content drift, so
+    /// the Skills section's lazy `.task` re-fires and recomputes it (a push
+    /// refetches the selected profile, which would otherwise leave the
+    /// "Customized" group gone until the user switches profiles and back).
+    private(set) var skillContentToken = 0
 
     init(
         baseRunner: (any HermesAdminRunning)?,
@@ -235,9 +240,11 @@ final class ProfileSyncHarness {
     }
 
     private func refetch(_ name: String) async {
-        // A re-fetch invalidates this profile's cached content drift.
+        // A re-fetch invalidates this profile's cached content drift; bump the
+        // token so the Skills section's `.task` re-fires and recomputes it.
         modifiedSkills[name] = nil
         skillContentLoaded.remove(name)
+        skillContentToken &+= 1
         let runnerProvider = makeRunnerProvider()
         let result = await engine.fetchSnapshots(
             profiles: [name],
@@ -599,9 +606,15 @@ final class ProfileSyncHarness {
         pushingProfiles.insert(profile)
         defer { pushingProfiles.remove(profile) }
 
+        // Collect every leg's failures and surface them together — otherwise a
+        // failed skill install or credential copy in the batch is silent (the rows
+        // just reappear after the refetch), unlike the per-section paths.
+        var errors: [String] = []
+
         let actions = (skillsDrift[profile]?.items ?? []).compactMap(skillAction(for:))
         if !actions.isEmpty {
-            _ = await engine.pushSkills(actions: actions, toProfile: profile, runnerProvider: makeRunnerProvider())
+            let outcomes = await engine.pushSkills(actions: actions, toProfile: profile, runnerProvider: makeRunnerProvider())
+            errors += outcomes.compactMap(\.error)
         }
 
         let configEdits = configDrift[profile]?.pushPayload(curatedOnly: !showAllConfigDifferences) ?? [:]
@@ -610,17 +623,18 @@ final class ProfileSyncHarness {
             if let client = scopedClient(profile) {
                 if !configEdits.isEmpty {
                     let outcome = await engine.pushConfig(edits: configEdits, client: client)
-                    if let error = outcome.error { banners?.surfaceError("profiles", error) }
+                    if let error = outcome.error { errors.append(error) }
                 }
                 if !envItems.isEmpty {
-                    _ = await engine.pushEnv(items: envItems, client: client)
+                    errors += await engine.pushEnv(items: envItems, client: client).compactMap(\.error)
                 }
             } else {
-                banners?.surfaceError("profiles", Self.dashboardOfflineMessage)
+                errors.append(Self.dashboardOfflineMessage)
             }
         }
 
         await refreshProfile(profile)
+        surfaceFailures(errors, profile: profile, noun: "sync")
     }
 
     /// A human summary of what "Sync everything" will do, for the confirmation
@@ -1041,8 +1055,11 @@ struct ProfileSyncView: View {
                 }
             }
             // Detect content drift for unmanaged skills lazily when the Skills
-            // section is shown (and when the selected profile changes).
-            .task(id: selected) { await harness.loadSkillContentDrift(for: selected) }
+            // section is shown, when the selected profile changes, and when a push
+            // invalidates the cached drift (skillContentToken bumps on refetch).
+            .task(id: "\(selected)#\(harness.skillContentToken)") {
+                await harness.loadSkillContentDrift(for: selected)
+            }
         case .config:
             configComparison(selected)
         case .environment:

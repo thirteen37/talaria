@@ -232,6 +232,10 @@ struct ProfileSyncHarnessTests {
         let writes = windowHTTP.recorded.filter { $0.httpMethod == "PUT" }
         #expect(!writes.isEmpty)
         #expect(writes.allSatisfy { ($0.url?.query ?? "").contains("profile=work") })
+        // The post-push refetch bumped the content-drift token so the Skills
+        // section's lazy task re-fires (the "Customized" group would otherwise
+        // vanish until the user switched profiles and back).
+        #expect(harness.skillContentToken > 0)
     }
 
     @Test
