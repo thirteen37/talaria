@@ -57,6 +57,16 @@ public struct GatewayPlatform: Codable, Equatable, Sendable {
 public struct DashboardStatus: Codable, Equatable, Sendable {
     public let version: String
     public let releaseDate: String?
+    /// The Hermes home this dashboard resolved at startup, and the config/env
+    /// files under it. These are the paths the dashboard's own routes
+    /// (`PUT /api/env`, `PUT /api/config`) read and write — surfaced so a
+    /// caller can confirm a profile-scoped dashboard actually landed on the
+    /// profile's home (and diagnose a write that reports success but targets a
+    /// different home than the reader checks). Optional so this still decodes
+    /// against an older dashboard that omits them.
+    public let hermesHome: String?
+    public let configPath: String?
+    public let envPath: String?
     /// Gateway fields are optional so this still decodes against a pre-gateway
     /// dashboard payload, and callers that read only `version` keep working
     /// unchanged. The dashboard's
@@ -74,6 +84,9 @@ public struct DashboardStatus: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case version
         case releaseDate = "release_date"
+        case hermesHome = "hermes_home"
+        case configPath = "config_path"
+        case envPath = "env_path"
         case gatewayRunning = "gateway_running"
         case gatewayPid = "gateway_pid"
         case gatewayState = "gateway_state"

@@ -495,14 +495,55 @@ final class ProfileSyncHarness {
         if let error {
             banners?.surfaceError("profiles", error)
         } else if envDrift[profile]?.items.contains(where: { $0.key == id }) == true {
-            // PUT /api/env returned OK but the value still differs after the
-            // re-read. The only way Hermes reports success without writing is a
-            // *managed* install (NixOS/systemd), which blocks runtime env edits.
-            AppLog.general.error("Env copy no-op: “\(id, privacy: .public)” → “\(profile, privacy: .public)” reported success but the value didn't change — likely a managed Hermes install.")
-            banners?.surfaceError("profiles", "Couldn't copy “\(id)” to “\(profile)”: this Hermes is a managed install (NixOS/systemd) that blocks runtime env changes — edit it in your system config.")
+            // PUT /api/env returned OK but the re-read still shows the old value.
+            // Don't guess why — capture the two paths actually involved (the home
+            // the dashboard wrote to vs. the env file the reader checked) so the
+            // divergence is visible instead of asserted.
+            let diagnosis = await diagnoseEnvNoop(id: id, profile: profile)
+            banners?.surfaceError("profiles", diagnosis)
         } else {
             banners?.surfaceSuccess("profiles", "Copied “\(id)” to “\(profile)”.")
         }
+    }
+
+    /// A `PUT /api/env` reported success yet the re-read still shows drift. Pin
+    /// down *where* the write went vs. where we read by comparing the scoped
+    /// dashboard's own resolved `env_path` (its write target) with the path the
+    /// reader resolves via `hermes -p <profile> config env-path`. Both go to the
+    /// App Log; the returned banner states the divergence (or, when the paths
+    /// agree, that the write didn't land at the expected file). Best-effort — if
+    /// either probe fails we fall back to a plain "didn't take effect" message.
+    private func diagnoseEnvNoop(id: String, profile: String) async -> String {
+        let fallback = "Couldn’t copy “\(id)” to “\(profile)”: Hermes reported success, but re-reading the profile’s .env still shows the old value. See the App Log for details."
+
+        var dashboardEnvPath: String?
+        if let client = try? await acquireScopedClient(profile) {
+            dashboardEnvPath = try? await client.getStatus().envPath
+            await releaseScopedClient(profile)
+        }
+
+        var readerEnvPath: String?
+        if let baseRunner {
+            let runner = ProfileScopedHermesAdminRunner(inner: baseRunner, hermesProfileName: profile)
+            if let result = try? await runner.run(HermesAdminCommand(arguments: ["config", "env-path"])) {
+                let path = result.stdout
+                    .split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+                    .last(where: { !$0.isEmpty })
+                readerEnvPath = path.flatMap { $0.isEmpty ? nil : $0 }
+            }
+        }
+
+        AppLog.general.error("""
+        Env copy no-op: “\(id, privacy: .public)” → “\(profile, privacy: .public)” reported success but the re-read still shows the old value. \
+        Dashboard write target (env_path from /api/status): \(dashboardEnvPath ?? "unknown", privacy: .public). \
+        Reader target (hermes -p \(profile, privacy: .public) config env-path): \(readerEnvPath ?? "unknown", privacy: .public).
+        """)
+
+        guard let dashboardEnvPath, let readerEnvPath else { return fallback }
+        if dashboardEnvPath != readerEnvPath {
+            return "Couldn’t copy “\(id)” to “\(profile)”: the dashboard wrote to \(dashboardEnvPath), but the profile reads from \(readerEnvPath). The scoped dashboard isn’t pointed at this profile’s home."
+        }
+        return "Couldn’t copy “\(id)” to “\(profile)”: Hermes reported success and targets \(readerEnvPath), but that file still shows the old value after the write. Check its write permissions."
     }
 
     func syncAllEnv(profile: String) async {
