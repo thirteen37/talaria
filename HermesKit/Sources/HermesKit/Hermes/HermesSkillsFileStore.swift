@@ -62,15 +62,23 @@ public enum HermesSkillsFileStore {
 
     /// Validates and returns the directory a skill occupies under `skillsRoot`,
     /// refusing anything that escapes the root, equals it, doesn't end in `name`,
-    /// or is a symlink. Standardizes `..`/`.` but deliberately does NOT resolve
-    /// symlinks (so the leaf symlink check is meaningful); root and candidate are
-    /// standardized identically so they share a path prefix.
+    /// or is a symlink. `name`/`category` must each be a single safe path segment
+    /// (no separators, `..`, or shell metacharacters), mirroring the remote path.
+    /// Containment is checked against the **symlink-resolved** root and candidate
+    /// *parent*, so neither an intermediate symlinked category (`<root>/<cat>` →
+    /// `/elsewhere`) nor a symlinked root can escape; the leaf is left unresolved
+    /// so a symlinked *skill folder* is detected and refused rather than followed.
     public static func resolvedSkillPath(
         skillsRoot: URL,
         category: String?,
         name: String,
         fileManager: FileManager = .default
     ) throws -> URL {
+        guard isSafePathSegment(name) else { throw ForceDeleteError.nameMismatch }
+        if let category, !category.isEmpty, !isSafePathSegment(category) {
+            throw ForceDeleteError.outsideRoot
+        }
+
         let root = skillsRoot.standardizedFileURL
         var candidate = root
         if let category, !category.isEmpty {
@@ -81,7 +89,18 @@ public enum HermesSkillsFileStore {
 
         guard candidate.lastPathComponent == name else { throw ForceDeleteError.nameMismatch }
         guard candidate.path != root.path else { throw ForceDeleteError.isRoot }
-        guard candidate.path.hasPrefix(root.path + "/") else { throw ForceDeleteError.outsideRoot }
+
+        // Resolve symlinks in the root and the candidate's *parent* (catching an
+        // intermediate symlinked category), but keep the leaf unresolved so the
+        // leaf symlink check below stays meaningful. Both sides are resolved the
+        // same way, so a symlinked root (e.g. /tmp → /private/tmp on macOS)
+        // doesn't trip a false escape.
+        let resolvedRoot = root.resolvingSymlinksInPath()
+        let resolvedParent = candidate.deletingLastPathComponent().resolvingSymlinksInPath()
+        let resolvedCandidate = resolvedParent.appendingPathComponent(candidate.lastPathComponent)
+        guard resolvedCandidate.path.hasPrefix(resolvedRoot.path + "/") else {
+            throw ForceDeleteError.outsideRoot
+        }
 
         let attrs = try? fileManager.attributesOfItem(atPath: candidate.path)
         if let type = attrs?[.type] as? FileAttributeType, type == .typeSymbolicLink {

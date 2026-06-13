@@ -149,6 +149,28 @@ struct HermesSkillsFileStoreTests {
     }
 
     @Test
+    func symlinkedCategoryIsRefusedAndOutsideSurvives() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // A real directory OUTSIDE the root, holding a "victim" skill dir.
+        let outside = root.deletingLastPathComponent()
+            .appendingPathComponent("outside-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let victim = outside.appendingPathComponent("pixel-art", isDirectory: true)
+        try FileManager.default.createDirectory(at: victim, withIntermediateDirectories: true)
+        // An *intermediate* symlinked category inside the root pointing outside.
+        let categoryLink = root.appendingPathComponent("creative", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: categoryLink, withDestinationURL: outside)
+
+        // category "creative" resolves to `outside`, so the delete would escape.
+        #expect(throws: (any Error).self) {
+            try HermesSkillsFileStore.forceDelete(skillsRoot: root, category: "creative", name: "pixel-art")
+        }
+        #expect(FileManager.default.fileExists(atPath: victim.path) == true)
+    }
+
+    @Test
     func symlinkedSkillIsRefusedAndTargetSurvives() throws {
         let root = try makeTempRoot()
         defer { try? FileManager.default.removeItem(at: root) }
