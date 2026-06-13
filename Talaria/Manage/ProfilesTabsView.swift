@@ -18,6 +18,9 @@ struct ProfilesTabsView: View {
     var onProfilesChanged: () -> Void = {}
 
     @State private var tab = "profiles"
+    /// Set when the Profiles tab deep-links to a specific profile's Sync; the
+    /// Sync view consumes it (selects that profile, then clears it).
+    @State private var syncTarget: String?
 
     var body: some View {
         TabbedDestinationView(selection: $tab, tabs: [
@@ -31,7 +34,10 @@ struct ProfilesTabsView: View {
                     activeProfile: activeProfile,
                     hermesVersion: harness.effectiveHermesVersion,
                     onProfilesChanged: onProfilesChanged,
-                    onShowSync: { tab = "sync" }
+                    onShowSync: { profile in
+                        syncTarget = profile
+                        tab = "sync"
+                    }
                 )
             },
             DestinationTab(id: "sync", title: "Sync", systemImage: "arrow.triangle.2.circlepath") {
@@ -42,6 +48,7 @@ struct ProfilesTabsView: View {
                     snapshotTransfer: harness.snapshotTransfer,
                     hermesVersion: harness.effectiveHermesVersion,
                     activeProfile: harness.hermesProfileName,
+                    syncTarget: $syncTarget,
                     acquireScoped: { try await harness.acquireScopedDashboardClient(hermesProfileName: $0) },
                     releaseScoped: { await harness.releaseScopedDashboard($0) }
                 )

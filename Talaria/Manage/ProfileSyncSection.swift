@@ -522,6 +522,9 @@ struct ProfileSyncView: View {
     /// The window's active Hermes profile — decides which side of the config
     /// comparison may read the window's shared client.
     let activeProfile: String
+    /// A deep-link target set by the Profiles tab: when non-nil and valid, the
+    /// view selects that profile and clears it.
+    @Binding var syncTarget: String?
     let acquireScoped: @MainActor (String) async throws -> (DashboardSupervisor, DashboardClient)
     let releaseScoped: @MainActor (DashboardSupervisor) async -> Void
 
@@ -582,6 +585,13 @@ struct ProfileSyncView: View {
             guard !harness.hasLoaded, !harness.isLoading else { return }
             await reload(harness)
         }
+        // A deep-link arriving while the tab is already loaded selects that
+        // profile (reload handles the first-appearance case).
+        .onChange(of: syncTarget) { _, target in
+            guard let harness, harness.hasLoaded, let target, namedProfiles.contains(target) else { return }
+            syncTarget = nil
+            if selectedProfile != target { selectedProfile = target }
+        }
         .onDisappear {
             let h = harness
             let editor = configEditor
@@ -640,7 +650,10 @@ struct ProfileSyncView: View {
         namedProfiles = profiles
             .filter { !$0.isDefault && $0.name != HermesProfiles.defaultProfileName }
             .map(\.name)
-        if selectedProfile == nil || !namedProfiles.contains(selectedProfile ?? "") {
+        if let target = syncTarget, namedProfiles.contains(target) {
+            selectedProfile = target
+            syncTarget = nil
+        } else if selectedProfile == nil || !namedProfiles.contains(selectedProfile ?? "") {
             selectedProfile = namedProfiles.first
         }
         configEditor?.setAvailableProfiles(profiles)
@@ -1148,18 +1161,29 @@ private struct SkillsSubsection: View {
     @ViewBuilder
     private func skillRow(_ item: SkillDriftItem) -> some View {
         HStack(spacing: 8) {
-            kindBadge(item)
-            Text(item.name).font(.caption)
-            Spacer()
-            if harness.isPushingItem("skill", profile: profile, id: item.id) {
-                ProgressView().controlSize(.small)
-            } else {
-                if case .outdated = item.kind, let onCompare {
-                    Button("Compare") { onCompare(item) }
-                        .controlSize(.small)
-                        .help("Compare default's “\(item.name)” with “\(profile)”'s installed copy")
+            if isOutdated(item), let onCompare {
+                // Selecting an outdated skill opens the comparison panel — the
+                // Update action lives in the panel header.
+                Button { onCompare(item) } label: {
+                    HStack(spacing: 8) {
+                        kindBadge(item)
+                        Text(item.name).font(.caption)
+                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                    }
                 }
-                if item.isActionable {
+                .buttonStyle(.plain)
+                .help("Compare default's “\(item.name)” with “\(profile)”'s installed copy")
+                Spacer()
+                if harness.isPushingItem("skill", profile: profile, id: item.id) {
+                    ProgressView().controlSize(.small)
+                }
+            } else {
+                kindBadge(item)
+                Text(item.name).font(.caption)
+                Spacer()
+                if harness.isPushingItem("skill", profile: profile, id: item.id) {
+                    ProgressView().controlSize(.small)
+                } else if item.isActionable {
                     Button(actionLabel(item)) { Task { await harness.syncSkill(item, profile: profile) } }
                         .controlSize(.small)
                         .help("\(actionLabel(item)) “\(item.name)” in “\(profile)”")
@@ -1183,6 +1207,11 @@ private struct SkillsSubsection: View {
             .font(.caption2)
             .padding(.horizontal, 5).padding(.vertical, 1)
             .background(Color.orange.opacity(0.15), in: Capsule())
+    }
+
+    private func isOutdated(_ item: SkillDriftItem) -> Bool {
+        if case .outdated = item.kind { return true }
+        return false
     }
 
     private func actionLabel(_ item: SkillDriftItem) -> String {

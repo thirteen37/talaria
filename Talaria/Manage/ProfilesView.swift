@@ -562,9 +562,10 @@ struct ProfilesView: View {
     let activeProfile: String
     let hermesVersion: HermesVersion?
     let onProfilesChanged: () -> Void
-    /// Switches the Profiles destination to its **Sync** tab. Nil hides the link
-    /// (e.g. a host that renders `ProfilesView` standalone).
-    var onShowSync: (() -> Void)?
+    /// Switches the Profiles destination to its **Sync** tab, deep-linking to the
+    /// given profile (the selected row). Nil hides the link (e.g. a host that
+    /// renders `ProfilesView` standalone).
+    var onShowSync: ((_ profile: String?) -> Void)?
 
     /// Window's top-of-window banner hub. Optional so a host that doesn't supply
     /// one degrades to no-op (hard errors then simply don't render).
@@ -587,7 +588,7 @@ struct ProfilesView: View {
         activeProfile: String = HermesProfiles.defaultProfileName,
         hermesVersion: HermesVersion? = nil,
         onProfilesChanged: @escaping () -> Void = {},
-        onShowSync: (() -> Void)? = nil
+        onShowSync: ((_ profile: String?) -> Void)? = nil
     ) {
         self.client = client
         self.runner = runner
@@ -803,10 +804,10 @@ struct ProfilesView: View {
             .disabled(harness.isLoading)
             .help("Reload the profile list")
             if let onShowSync {
-                Button { onShowSync() } label: {
+                Button { onShowSync(harness.selectedProfile?.name) } label: {
                     Label("Sync from default", systemImage: "arrow.triangle.2.circlepath")
                 }
-                .help("Open the Sync tab to push default's skills, config and credentials to a profile")
+                .help("Open the Sync tab to push default's skills, config and credentials to the selected profile")
             }
             Button {
                 guard let profile = harness.selectedProfile else { return }
