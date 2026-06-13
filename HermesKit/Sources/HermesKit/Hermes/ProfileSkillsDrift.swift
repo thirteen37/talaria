@@ -40,12 +40,21 @@ public struct HubSkillIdentifierIndex: Sendable {
     }
 
     public func identifier(for skill: InstalledHubSkill) -> String? {
-        if let canonical = identifiersByLowercased[skill.name.lowercased()] {
-            return canonical
-        }
+        // 1. Exact (name, source) match — the most specific, and tried FIRST so a
+        //    bare-name installed skill (e.g. official `1password`) resolves to its
+        //    own source's identifier (`official/security/1password`) rather than a
+        //    *different* source whose identifier happens to equal that bare name
+        //    (the Nous index has clawhub entries whose identifier IS the bare
+        //    name, which the name-is-identifier step below would otherwise grab).
         if let id = bySourcedName["\(skill.name.lowercased())|\(skill.source.lowercased())"] {
             return id
         }
+        // 2. The installed name is itself a catalog identifier — the skills-sh
+        //    shape, where `skills list` prints the full identifier as the name.
+        if let canonical = identifiersByLowercased[skill.name.lowercased()] {
+            return canonical
+        }
+        // 3. The name is unique across the whole catalog.
         if let ids = identifiersByName[skill.name.lowercased()], ids.count == 1 {
             return ids[0]
         }

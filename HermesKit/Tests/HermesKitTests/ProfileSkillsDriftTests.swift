@@ -56,6 +56,19 @@ struct ProfileSkillsDriftTests {
     }
 
     @Test
+    func sourcedMatchWinsOverABareNameIdentifierFromAnotherSource() {
+        // The Nous index has clawhub skills whose identifier IS a bare name. An
+        // *official* skill named "1password" must resolve to its own
+        // "official/security/1password", not the clawhub bare-name "1password".
+        let index = HubSkillIdentifierIndex(catalog: [
+            catalog("1password", source: "clawhub", identifier: "1password"),
+            catalog("1password", source: "official", identifier: "official/security/1password"),
+        ])
+        let installed = hub("1password", source: "official")
+        #expect(index.identifier(for: installed) == "official/security/1password")
+    }
+
+    @Test
     func identifierIsNilWhenNameIsAmbiguousAcrossSources() {
         let index = HubSkillIdentifierIndex(catalog: [
             catalog("common", source: "github", identifier: "github/a/common"),
