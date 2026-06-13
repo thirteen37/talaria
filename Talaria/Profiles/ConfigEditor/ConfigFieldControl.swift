@@ -13,31 +13,38 @@ import SwiftUI
 struct ConfigFieldControl: View {
     let state: ConfigEditingState
     let field: ConfigFormField
+    /// When false, the control renders **without its own label** — used by the
+    /// two-column comparison, which shows one shared label per row instead of
+    /// repeating the field title in both columns. Defaults to true so the
+    /// single-profile structured editor is unchanged.
+    var showsLabel = true
 
     var body: some View {
         switch effectiveType {
         case .string:
-            LabeledContent(title) {
+            labeled {
                 TextField("", text: state.stringBinding(for: field))
                     .multilineTextAlignment(.trailing)
                     .textFieldStyle(.roundedBorder)
                     .clearButton(state.stringBinding(for: field))
             }
         case .select:
-            Picker(title, selection: state.stringBinding(for: field)) {
-                let current = state.stringBinding(for: field).wrappedValue
-                let options = field.schema?.options ?? []
-                ForEach(options, id: \.self) { Text($0.isEmpty ? "(none)" : $0).tag($0) }
-                // Any current value the option list doesn't include — a custom
-                // entry, or the empty string for a key the config omits — gets a
-                // matching tag so the Picker has a valid selection (otherwise
-                // SwiftUI logs "no associated tag" and shows nothing selected).
-                if !options.contains(current) {
-                    Text(current.isEmpty ? "(none)" : "\(current) (custom)").tag(current)
+            labeledPicker {
+                Picker(showsLabel ? title : "", selection: state.stringBinding(for: field)) {
+                    let current = state.stringBinding(for: field).wrappedValue
+                    let options = field.schema?.options ?? []
+                    ForEach(options, id: \.self) { Text($0.isEmpty ? "(none)" : $0).tag($0) }
+                    // Any current value the option list doesn't include — a custom
+                    // entry, or the empty string for a key the config omits — gets a
+                    // matching tag so the Picker has a valid selection (otherwise
+                    // SwiftUI logs "no associated tag" and shows nothing selected).
+                    if !options.contains(current) {
+                        Text(current.isEmpty ? "(none)" : "\(current) (custom)").tag(current)
+                    }
                 }
             }
         case .number:
-            LabeledContent(title) {
+            labeled {
                 HStack(spacing: 6) {
                     // No clear button: a number key has no meaningful empty
                     // state in the structured editor. Setting "" would store
@@ -54,13 +61,42 @@ struct ConfigFieldControl: View {
                 }
             }
         case .boolean:
-            Toggle(title, isOn: state.boolBinding(for: field))
+            labeledToggle {
+                Toggle(showsLabel ? title : "", isOn: state.boolBinding(for: field))
+            }
         case .list:
-            ListFieldEditor(title: title, items: state.listBinding(for: field))
+            ListFieldEditor(title: showsLabel ? title : nil, items: state.listBinding(for: field))
         }
     }
 
-    private var title: String {
+    /// Wraps a trailing control in a `LabeledContent` when labels are shown, else
+    /// returns the bare control (the comparison row supplies the shared label).
+    @ViewBuilder
+    private func labeled(@ViewBuilder _ content: () -> some View) -> some View {
+        if showsLabel {
+            LabeledContent(title) { content() }
+        } else {
+            content()
+        }
+    }
+
+    /// A `Picker`/`Toggle` carries its own label, so in label-less mode it just
+    /// needs `.labelsHidden()` rather than dropping a `LabeledContent` wrapper.
+    @ViewBuilder
+    private func labeledPicker(@ViewBuilder _ content: () -> some View) -> some View {
+        if showsLabel { content() } else { content().labelsHidden() }
+    }
+
+    @ViewBuilder
+    private func labeledToggle(@ViewBuilder _ content: () -> some View) -> some View {
+        if showsLabel { content() } else { content().labelsHidden() }
+    }
+
+    private var title: String { ConfigFieldControl.label(for: field) }
+
+    /// The human label for a field: its schema description, else the dotpath key.
+    /// Exposed so the comparison row can render it once above both columns.
+    static func label(for field: ConfigFormField) -> String {
         if let description = field.schema?.description, !description.isEmpty {
             return description
         }
@@ -82,12 +118,14 @@ struct ConfigFieldControl: View {
 
 /// Inline add/remove editor for a list-typed field.
 struct ListFieldEditor: View {
-    let title: String
+    /// Optional so the two-column comparison can render it label-less (the row
+    /// supplies one shared label).
+    var title: String?
     @Binding var items: [String]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title)
+            if let title { Text(title) }
             ForEach(items.indices, id: \.self) { index in
                 HStack(spacing: 6) {
                     TextField("Value", text: Binding(

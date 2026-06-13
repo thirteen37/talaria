@@ -17,8 +17,10 @@ struct ProfilesTabsView: View {
     /// switcher and reconciles the active profile if it was renamed/deleted.
     var onProfilesChanged: () -> Void = {}
 
+    @State private var tab = "profiles"
+
     var body: some View {
-        TabbedDestinationView(tabs: [
+        TabbedDestinationView(selection: $tab, tabs: [
             DestinationTab(id: "profiles", title: "Profiles", systemImage: "person.2.crop.square.stack") {
                 ProfilesView(
                     client: harness.dashboardClient,
@@ -28,16 +30,18 @@ struct ProfilesTabsView: View {
                     hostShell: harness.hostShell,
                     activeProfile: activeProfile,
                     hermesVersion: harness.effectiveHermesVersion,
-                    onProfilesChanged: onProfilesChanged
+                    onProfilesChanged: onProfilesChanged,
+                    onShowSync: { tab = "sync" }
                 )
             },
             DestinationTab(id: "sync", title: "Sync", systemImage: "arrow.triangle.2.circlepath") {
                 ProfileSyncView(
                     baseRunner: harness.baseAdminRunner,
-                    windowClient: harness.dashboardClient,
+                    windowClient: { harness.dashboardClient },
                     profile: harness.profile,
                     snapshotTransfer: harness.snapshotTransfer,
                     hermesVersion: harness.effectiveHermesVersion,
+                    activeProfile: harness.hermesProfileName,
                     acquireScoped: { try await harness.acquireScopedDashboardClient(hermesProfileName: $0) },
                     releaseScoped: { await harness.releaseScopedDashboard($0) }
                 )

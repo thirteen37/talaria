@@ -562,6 +562,9 @@ struct ProfilesView: View {
     let activeProfile: String
     let hermesVersion: HermesVersion?
     let onProfilesChanged: () -> Void
+    /// Switches the Profiles destination to its **Sync** tab. Nil hides the link
+    /// (e.g. a host that renders `ProfilesView` standalone).
+    var onShowSync: (() -> Void)?
 
     /// Window's top-of-window banner hub. Optional so a host that doesn't supply
     /// one degrades to no-op (hard errors then simply don't render).
@@ -583,7 +586,8 @@ struct ProfilesView: View {
         hostShell: HostShellRunning? = nil,
         activeProfile: String = HermesProfiles.defaultProfileName,
         hermesVersion: HermesVersion? = nil,
-        onProfilesChanged: @escaping () -> Void = {}
+        onProfilesChanged: @escaping () -> Void = {},
+        onShowSync: (() -> Void)? = nil
     ) {
         self.client = client
         self.runner = runner
@@ -593,6 +597,7 @@ struct ProfilesView: View {
         self.activeProfile = activeProfile
         self.hermesVersion = hermesVersion
         self.onProfilesChanged = onProfilesChanged
+        self.onShowSync = onShowSync
     }
 
     /// Distribution affordances are enabled only with a CLI runner and a Hermes
@@ -797,6 +802,12 @@ struct ProfilesView: View {
             }
             .disabled(harness.isLoading)
             .help("Reload the profile list")
+            if let onShowSync {
+                Button { onShowSync() } label: {
+                    Label("Sync from default", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .help("Open the Sync tab to push default's skills, config and credentials to a profile")
+            }
             Button {
                 guard let profile = harness.selectedProfile else { return }
                 harness.beginClone(source: profile.name)

@@ -98,9 +98,10 @@ struct ProfileSyncHarnessTests {
             http: catalogHTTP
         )
         let scopedClient = client(scopedHTTP)
+        let windowClient = client(windowHTTP)
         return ProfileSyncHarness(
             baseRunner: baseRunner,
-            windowClient: client(windowHTTP),
+            windowClient: { windowClient },
             profile: ProfileDirectory.localProfile,
             snapshotTransfer: nil,
             hermesVersion: HermesVersion("0.15.0"),

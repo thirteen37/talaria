@@ -21,9 +21,16 @@ final class ConfigEditorHarness {
     /// (a slow remote `profile list`); the container feeds updates in via
     /// ``setAvailableProfiles(_:)`` so the dropdown isn't stuck empty.
     private(set) var profiles: [HermesProfileInfo]
-    /// The Hermes profile this editor edits (the window's active profile). The
-    /// source column is fixed to it; it's also the comparison's source side.
+    /// The window's **active** Hermes profile — the one whose dashboard the window
+    /// already runs. Used only to decide which editing state may read the window's
+    /// shared client (`usesWindowClient`); it is *not* necessarily the comparison's
+    /// source.
     let editedProfileName: String
+    /// The comparison's **source** profile (the left/fixed column). Defaults to
+    /// ``editedProfileName`` (the config editor edits the active profile), but the
+    /// cross-profile sync surface pins it to `default` so every named profile is
+    /// compared against default regardless of which profile the window is on.
+    let sourceProfileName: String
 
     /// Editing state for the edited (window-active) profile.
     private(set) var source: ConfigEditingState
@@ -74,14 +81,17 @@ final class ConfigEditorHarness {
     init(
         profiles: [HermesProfileInfo],
         editedProfileName: String,
+        sourceProfileName: String? = nil,
         defaultClient: @escaping @MainActor () -> DashboardClient?,
         profile: ServerProfile,
         transfer: RemoteSnapshotTransfer?,
         acquireScoped: @escaping @MainActor (String) async throws -> (DashboardSupervisor, DashboardClient),
         releaseScoped: @escaping @MainActor (DashboardSupervisor) async -> Void
     ) {
+        let sourceName = sourceProfileName ?? editedProfileName
         self.profiles = profiles
         self.editedProfileName = editedProfileName
+        self.sourceProfileName = sourceName
         self.defaultClientProvider = defaultClient
         self.serverProfile = profile
         self.transfer = transfer
@@ -90,9 +100,9 @@ final class ConfigEditorHarness {
             release: releaseScoped
         )
         self.pool = pool
-        self.compareProfile = profiles.first(where: { $0.name != editedProfileName })?.name ?? ""
+        self.compareProfile = profiles.first(where: { $0.name != sourceName })?.name ?? ""
         self.source = ConfigEditorHarness.makeState(
-            for: editedProfileName,
+            for: sourceName,
             editedProfileName: editedProfileName,
             defaultClient: defaultClient,
             serverProfile: profile,
@@ -156,7 +166,7 @@ final class ConfigEditorHarness {
         let compareStillValid = !compareProfile.isEmpty
             && newProfiles.contains(where: { $0.name == compareProfile })
         guard !compareStillValid else { return }
-        compareProfile = newProfiles.first(where: { $0.name != editedProfileName })?.name ?? ""
+        compareProfile = newProfiles.first(where: { $0.name != sourceProfileName })?.name ?? ""
         if comparing {
             if compareProfile.isEmpty {
                 stopComparing()
@@ -197,8 +207,8 @@ final class ConfigEditorHarness {
         if comparing {
             stopComparing()
         } else {
-            if compareProfile.isEmpty || compareProfile == editedProfileName {
-                compareProfile = profiles.first(where: { $0.name != editedProfileName })?.name ?? ""
+            if compareProfile.isEmpty || compareProfile == sourceProfileName {
+                compareProfile = profiles.first(where: { $0.name != sourceProfileName })?.name ?? ""
             }
             guard !compareProfile.isEmpty else { return }
             buildDest(for: compareProfile)
@@ -206,7 +216,7 @@ final class ConfigEditorHarness {
     }
 
     func setCompareProfile(_ name: String) {
-        guard name != compareProfile, name != editedProfileName else { return }
+        guard name != compareProfile, name != sourceProfileName else { return }
         compareProfile = name
         buildDest(for: name)
     }

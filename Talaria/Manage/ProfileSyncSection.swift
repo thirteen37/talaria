@@ -77,7 +77,9 @@ final class ProfileSyncHarness {
     // MARK: - Dependencies
 
     private let baseRunner: (any HermesAdminRunning)?
-    private let windowClient: DashboardClient?
+    /// Reads the window's dashboard client live — it may come online after the
+    /// Sync tab first appears, so a captured snapshot would stay stale.
+    private let windowClientProvider: @MainActor () -> DashboardClient?
     private let catalog: SkillsHubCatalog
     private let hermesVersion: HermesVersion?
     private let acquireScopedClient: @MainActor (String) async throws -> DashboardClient
@@ -94,7 +96,7 @@ final class ProfileSyncHarness {
 
     init(
         baseRunner: (any HermesAdminRunning)?,
-        windowClient: DashboardClient?,
+        windowClient: @escaping @MainActor () -> DashboardClient?,
         profile: ServerProfile?,
         snapshotTransfer: RemoteSnapshotTransfer?,
         hermesVersion: HermesVersion?,
@@ -106,7 +108,7 @@ final class ProfileSyncHarness {
         envReader: (@Sendable (String) async throws -> [EnvFileEntry])? = nil
     ) {
         self.baseRunner = baseRunner
-        self.windowClient = windowClient
+        self.windowClientProvider = windowClient
         self.catalog = catalog
         self.hermesVersion = hermesVersion
         self.acquireScopedClient = acquireScopedClient
@@ -153,7 +155,7 @@ final class ProfileSyncHarness {
         // Schema (config categories) — best-effort; config still diffs without it.
         schema = nil
         schemaError = nil
-        if let windowClient {
+        if let windowClient = windowClientProvider() {
             do {
                 schema = try await windowClient.getConfigSchema()
             } catch {
@@ -186,9 +188,30 @@ final class ProfileSyncHarness {
         hasLoaded = true
     }
 
+    /// Loads a single named profile on demand (the default snapshot + schema +
+    /// catalog from the last ``refresh(namedProfiles:)`` are reused), so switching
+    /// the picker doesn't re-fetch every profile. A no-op once it's cached.
+    func selectProfile(_ name: String) async {
+        if snapshots[name] != nil {
+            if !namedProfiles.contains(name) {
+                namedProfiles.append(name)
+                recomputeDrift()
+            }
+            return
+        }
+        await refreshProfile(name, addingToNamed: true)
+    }
+
     /// Re-fetches just one profile (plus default stays cached) after a push, so a
     /// successful sync collapses that profile's rows without a full sweep.
-    private func refreshProfile(_ name: String) async {
+    private func refreshProfile(_ name: String, addingToNamed: Bool = false) async {
+        if addingToNamed, !namedProfiles.contains(name) {
+            namedProfiles.append(name)
+        }
+        return await refetch(name)
+    }
+
+    private func refetch(_ name: String) async {
         let runnerProvider = makeRunnerProvider()
         let result = await engine.fetchSnapshots(
             profiles: [name],
@@ -313,9 +336,9 @@ final class ProfileSyncHarness {
         await refreshProfile(profile)
     }
 
-    func syncAllConfig(profile: String) async {
+    func syncAllConfig(profile: String, curatedOnly: Bool) async {
         guard let drift = configDrift[profile] else { return }
-        let edits = drift.pushPayload(curatedOnly: !showAllConfigDifferences)
+        let edits = drift.pushPayload(curatedOnly: curatedOnly)
         guard !edits.isEmpty else { return }
         pushingProfiles.insert(profile)
         defer { pushingProfiles.remove(profile) }
@@ -371,7 +394,13 @@ final class ProfileSyncHarness {
     /// The default profile's plaintext for `key` (from the in-memory snapshot;
     /// never an API call).
     func plaintext(forKey key: String) -> String? {
-        snapshots["default"]?.env?.first { $0.key == key }?.value
+        plaintext(forKey: key, inProfile: HermesProfiles.defaultProfileName)
+    }
+
+    /// A specific profile's plaintext for `key` (from the in-memory snapshot;
+    /// never an API call) — used to reveal either column of the env comparison.
+    func plaintext(forKey key: String, inProfile profile: String) -> String? {
+        snapshots[profile]?.env?.first { $0.key == key }?.value
     }
 
     private func envPushItems(for profile: String) -> [(key: String, value: String)] {
@@ -484,10 +513,15 @@ final class ProfileSyncHarness {
 /// lazily computes drift on first appearance.
 struct ProfileSyncView: View {
     let baseRunner: (any HermesAdminRunning)?
-    let windowClient: DashboardClient?
+    /// Live window dashboard client — it may come online after this tab opens, so
+    /// it's read through a provider rather than captured.
+    let windowClient: @MainActor () -> DashboardClient?
     let profile: ServerProfile?
     let snapshotTransfer: RemoteSnapshotTransfer?
     let hermesVersion: HermesVersion?
+    /// The window's active Hermes profile — decides which side of the config
+    /// comparison may read the window's shared client.
+    let activeProfile: String
     let acquireScoped: @MainActor (String) async throws -> (DashboardSupervisor, DashboardClient)
     let releaseScoped: @MainActor (DashboardSupervisor) async -> Void
 
@@ -495,12 +529,26 @@ struct ProfileSyncView: View {
 
     @State private var harness: ProfileSyncHarness?
     @State private var pool: ScopedDashboardPool<DashboardSupervisor, DashboardClient>?
+    /// Config comparison reuses the config editor's two-column view, source pinned
+    /// to `default`. Desktop/iPad only (nil on iPhone, where Compare can't render).
+    @State private var configEditor: ConfigEditorHarness?
+    @State private var allProfiles: [HermesProfileInfo] = []
     @State private var namedProfiles: [String] = []
+    @State private var selectedProfile: String?
+    @State private var section: SyncSection = .skills
+    @State private var configLoaded = false
     @State private var confirmingProfile: String?
+
+    private enum SyncSection: String, CaseIterable, Identifiable {
+        case skills = "Skills"
+        case config = "Config"
+        case environment = "Environment"
+        var id: String { rawValue }
+    }
 
     var body: some View {
         Group {
-            if windowClient == nil {
+            if windowClient() == nil {
                 ContentUnavailableView(
                     "Dashboard not ready",
                     systemImage: "arrow.triangle.2.circlepath",
@@ -534,12 +582,14 @@ struct ProfileSyncView: View {
         }
         .onDisappear {
             let h = harness
-            Task { await h?.teardown() }
+            let editor = configEditor
+            Task { await h?.teardown(); await editor?.teardown() }
         }
     }
 
     /// Builds (once) and returns the harness, so the initial `.task` can use it
-    /// immediately without waiting for the `@State` write to land.
+    /// immediately without waiting for the `@State` write to land. Also builds the
+    /// config comparison harness (its dashboards spawn only when Config is opened).
     private func ensureHarness() -> ProfileSyncHarness {
         if let harness { return harness }
         let pool = ScopedDashboardPool<DashboardSupervisor, DashboardClient>(
@@ -547,9 +597,10 @@ struct ProfileSyncView: View {
             release: releaseScoped
         )
         self.pool = pool
+        let provider = windowClient
         let h = ProfileSyncHarness(
             baseRunner: baseRunner,
-            windowClient: windowClient,
+            windowClient: provider,
             profile: profile,
             snapshotTransfer: snapshotTransfer,
             hermesVersion: hermesVersion,
@@ -559,55 +610,81 @@ struct ProfileSyncView: View {
         )
         h.banners = banners
         harness = h
+        if let profile, !Idiom.isPhone {
+            let editor = ConfigEditorHarness(
+                profiles: allProfiles,
+                editedProfileName: activeProfile,
+                sourceProfileName: HermesProfiles.defaultProfileName,
+                defaultClient: provider,
+                profile: profile,
+                transfer: snapshotTransfer,
+                acquireScoped: acquireScoped,
+                releaseScoped: releaseScoped
+            )
+            editor.banners = banners
+            configEditor = editor
+        }
         return h
     }
 
-    /// Re-enumerates the server's named profiles, then recomputes drift. A
-    /// just-cloned profile thus appears without leaving the tab.
+    /// Re-enumerates the server's named profiles (cheap — one `/api/profiles`),
+    /// then computes drift for **only** the selected profile on desktop/iPad (the
+    /// per-profile reads — skills `check`, config + `.env` — are the slow part, so
+    /// the unselected profiles are loaded lazily on demand). iPhone's stacked list
+    /// shows every profile, so it still loads them all.
     private func reload(_ harness: ProfileSyncHarness) async {
-        let profiles = await HermesProfiles.selectorProfiles(client: windowClient)
+        let profiles = await HermesProfiles.selectorProfiles(client: windowClient())
+        allProfiles = profiles
         namedProfiles = profiles
             .filter { !$0.isDefault && $0.name != HermesProfiles.defaultProfileName }
             .map(\.name)
-        await harness.refresh(namedProfiles: namedProfiles)
+        if selectedProfile == nil || !namedProfiles.contains(selectedProfile ?? "") {
+            selectedProfile = namedProfiles.first
+        }
+        configEditor?.setAvailableProfiles(profiles)
+        let toLoad = Idiom.isPhone ? namedProfiles : selectedProfile.map { [$0] } ?? []
+        await harness.refresh(namedProfiles: toLoad)
+        if section == .config { activateConfigComparison() }
+    }
+
+    /// Loads the config comparison's source (default) once and points its dest at
+    /// the selected profile — so dashboards spawn only when Config is opened.
+    private func activateConfigComparison() {
+        guard let editor = configEditor, let selected = selectedProfile else { return }
+        if !configLoaded {
+            configLoaded = true
+            Task { await editor.start() }
+        }
+        if editor.compareProfile != selected {
+            editor.setCompareProfile(selected)
+        } else if !editor.comparing {
+            editor.toggleComparing()
+        }
     }
 
     @ViewBuilder
     private func content(_ harness: ProfileSyncHarness) -> some View {
-        @Bindable var harness = harness
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                header(harness)
-
-                if let warning = harness.capabilityWarning {
-                    ManageBanner(severity: .warning, message: warning)
-                }
-                if !harness.hasBaseRunner {
-                    ManageBanner(severity: .warning, message: "Hermes CLI unavailable for this window — skills and credentials can't be synced.")
-                }
-
-                if harness.isLoading, !harness.hasLoaded {
-                    ProgressView().frame(maxWidth: .infinity)
-                } else if namedProfiles.isEmpty {
-                    ContentUnavailableView(
-                        "No named profiles",
-                        systemImage: "square.stack.3d.up",
-                        description: Text("Clone the default profile on the Profiles tab to create one to sync to.")
-                    )
-                } else {
-                    Toggle("Show all config differences", isOn: $harness.showAllConfigDifferences)
-                        .font(.caption)
-                        .toggleStyle(.checkbox)
-                        .help("Reveal config rows outside the curated provider/model sections")
-
-                    ForEach(namedProfiles, id: \.self) { name in
-                        ProfileDriftRow(harness: harness, profile: name, confirmingProfile: $confirmingProfile)
-                        Divider()
-                    }
-                }
+        VStack(spacing: 0) {
+            if let warning = harness.capabilityWarning {
+                ManageBanner(severity: .warning, message: warning)
             }
-            .padding()
-            .frame(maxWidth: .infinity, alignment: .leading)
+            if !harness.hasBaseRunner {
+                ManageBanner(severity: .warning, message: "Hermes CLI unavailable for this window — skills and credentials can't be synced.")
+            }
+
+            if harness.isLoading, !harness.hasLoaded {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if namedProfiles.isEmpty {
+                ContentUnavailableView(
+                    "No named profiles",
+                    systemImage: "square.stack.3d.up",
+                    description: Text("Clone the default profile on the Profiles tab to create one to sync to.")
+                )
+            } else if Idiom.isPhone {
+                phoneList(harness)
+            } else {
+                desktopComparison(harness)
+            }
         }
         .confirmationDialog(
             "Sync everything from default?",
@@ -618,7 +695,10 @@ struct ProfileSyncView: View {
             presenting: confirmingProfile
         ) { name in
             Button("Sync everything") {
-                Task { await harness.syncEverything(profile: name) }
+                Task {
+                    await harness.syncEverything(profile: name)
+                    await configEditor?.refresh()
+                }
                 confirmingProfile = nil
             }
             Button("Cancel", role: .cancel) { confirmingProfile = nil }
@@ -627,22 +707,295 @@ struct ProfileSyncView: View {
         }
     }
 
+    // MARK: - Desktop / iPad: picker + segmented comparison
+
     @ViewBuilder
-    private func header(_ harness: ProfileSyncHarness) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if harness.hasLoaded {
-                if harness.allInSync {
-                    Label("All in sync", systemImage: "checkmark.circle.fill")
-                        .font(.subheadline).foregroundStyle(.green)
-                } else {
-                    Text("\(harness.totalDifferences) difference\(harness.totalDifferences == 1 ? "" : "s") across \(harness.profilesWithDrift) profile\(harness.profilesWithDrift == 1 ? "" : "s")")
-                        .font(.subheadline.weight(.medium)).foregroundStyle(.orange)
+    private func desktopComparison(_ harness: ProfileSyncHarness) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Picker("Profile", selection: $selectedProfile) {
+                    ForEach(namedProfiles, id: \.self) { Text($0).tag($0 as String?) }
+                }
+                .labelsHidden()
+                .frame(maxWidth: 260)
+                Spacer()
+                if let selected = selectedProfile {
+                    if harness.pushingProfiles.contains(selected) {
+                        ProgressView().controlSize(.small)
+                    }
+                    // Skills carries its own "Sync all" in its list; Config and
+                    // Environment get one here, pushing every difference at once.
+                    if section != .skills, sectionCount(section, profile: selected, harness: harness) > 0 {
+                        Button("Sync all") { syncAllForSection(selected, harness: harness) }
+                            .help("Push every \(section.rawValue.lowercased()) difference from default to “\(selected)”")
+                            .accessibilityLabel("Sync all \(section.rawValue.lowercased()) from default to \(selected)")
+                    }
+                    Button("Sync everything from default") { confirmingProfile = selected }
+                        .help("Install/update skills and copy config + credentials from default to “\(selected)”")
+                        .accessibilityLabel("Sync everything from default to \(selected)")
                 }
             }
-            Text("Pushes the default profile's current values: skills install the latest from the Skills Hub; config and credentials copy default's values. Nothing is deleted from a profile.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            .padding()
+
+            if let selected = selectedProfile {
+                Picker("Section", selection: $section) {
+                    ForEach(SyncSection.allCases) { section in
+                        Text(sectionLabel(section, profile: selected, harness: harness)).tag(section)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+
+                Divider()
+                sectionContent(selected, harness: harness)
+            }
         }
+        // Switching the picker lazily loads that profile's drift (default + the
+        // earlier profiles stay cached).
+        .onChange(of: selectedProfile) { _, newValue in
+            guard harness.hasLoaded, let newValue else { return }
+            Task {
+                await harness.selectProfile(newValue)
+                if section == .config { activateConfigComparison() }
+            }
+        }
+        .onChange(of: section) { _, _ in if section == .config { activateConfigComparison() } }
+    }
+
+    private func sectionCount(_ section: SyncSection, profile: String, harness: ProfileSyncHarness) -> Int {
+        switch section {
+        case .skills: return harness.skillsDrift[profile]?.items.count ?? 0
+        case .config: return harness.configDrift[profile]?.items.count ?? 0
+        case .environment: return harness.envDrift[profile]?.items.count ?? 0
+        }
+    }
+
+    private func sectionLabel(_ section: SyncSection, profile: String, harness: ProfileSyncHarness) -> String {
+        let count = sectionCount(section, profile: profile, harness: harness)
+        return count > 0 ? "\(section.rawValue) (\(count))" : section.rawValue
+    }
+
+    private func syncAllForSection(_ selected: String, harness: ProfileSyncHarness) {
+        switch section {
+        case .skills:
+            Task { await harness.syncAllSkills(profile: selected) }
+        case .config:
+            Task {
+                await harness.syncAllConfig(profile: selected, curatedOnly: false)
+                await configEditor?.refresh()
+            }
+        case .environment:
+            Task { await harness.syncAllEnv(profile: selected) }
+        }
+    }
+
+    @ViewBuilder
+    private func sectionContent(_ selected: String, harness: ProfileSyncHarness) -> some View {
+        switch section {
+        case .skills:
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    SkillsSubsection(harness: harness, profile: selected)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        case .config:
+            configComparison(selected)
+        case .environment:
+            EnvComparisonView(harness: harness, profile: selected)
+        }
+    }
+
+    @ViewBuilder
+    private func configComparison(_ selected: String) -> some View {
+        if let editor = configEditor {
+            if let dest = editor.dest, dest.profileName == selected {
+                EditableComparisonView(
+                    source: editor.source,
+                    dest: dest,
+                    showDifferencesOnly: true,
+                    immediateCopy: true,
+                    allowReverseCopy: false
+                )
+            } else {
+                ProgressView("Loading config…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else {
+            ContentUnavailableView(
+                "Config comparison unavailable",
+                systemImage: "rectangle.on.rectangle.slash",
+                description: Text("This window can't open a config dashboard for these profiles.")
+            )
+        }
+    }
+
+    // MARK: - iPhone: stacked read-only-ish list
+
+    @ViewBuilder
+    private func phoneList(_ harness: ProfileSyncHarness) -> some View {
+        @Bindable var harness = harness
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle("Show all config differences", isOn: $harness.showAllConfigDifferences)
+                    .font(.caption)
+                    .help("Reveal config rows outside the curated provider/model sections")
+                ForEach(namedProfiles, id: \.self) { name in
+                    ProfileDriftRow(harness: harness, profile: name, confirmingProfile: $confirmingProfile)
+                    Divider()
+                }
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+// MARK: - Environment comparison (two-column, redacted)
+
+/// Two-column environment comparison styled like the config comparison: each row
+/// is a key with the **default**'s redacted value, a one-way copy gutter, and the
+/// **profile**'s redacted value. Reveal is local (the plaintext is already in the
+/// snapshot); copy-→ pushes default's secret immediately via the scoped dashboard.
+private struct EnvComparisonView: View {
+    let harness: ProfileSyncHarness
+    let profile: String
+
+    var body: some View {
+        let drift = harness.envDrift[profile]
+        let error = harness.resourceErrors[profile]?[.env] ?? harness.defaultResourceErrors[.env]
+        VStack(spacing: 0) {
+            header
+            Divider()
+            if let error {
+                ManageBanner(severity: .warning, message: error)
+                Spacer()
+            } else if let drift {
+                if drift.items.isEmpty, drift.extras.isEmpty {
+                    ContentUnavailableView(
+                        "Environment in sync",
+                        systemImage: "equal.circle",
+                        description: Text("Every credential matches the default profile.")
+                    )
+                } else {
+                    List {
+                        if !drift.items.isEmpty {
+                            Section("Differences") {
+                                ForEach(drift.items) { row($0) }
+                            }
+                        }
+                        if !drift.extras.isEmpty {
+                            Section("Only in “\(profile)” (not removed)") {
+                                ForEach(drift.extras) { extra in
+                                    Text(extra.key).font(.system(.caption, design: .monospaced))
+                                }
+                            }
+                        }
+                    }
+                    #if os(macOS)
+                    .listStyle(.inset)
+                    #else
+                    .listStyle(.insetGrouped)
+                    #endif
+                }
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text(HermesProfiles.defaultProfileName).font(.headline).frame(maxWidth: .infinity, alignment: .leading)
+            Color.clear.frame(width: 36, height: 0)
+            Text(profile).font(.headline).frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func row(_ item: EnvDriftItem) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(item.key)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.tertiary)
+            HStack(alignment: .top, spacing: 8) {
+                EnvValueCell(
+                    redacted: item.redactedDefaultValue,
+                    plaintext: { harness.plaintext(forKey: item.key) },
+                    remaskToken: harness.revealToken
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                copyGutter(item)
+                // A missing key (no value) and a present-but-empty value both
+                // render as "—" so the column reads consistently.
+                EnvValueCell(
+                    redacted: item.redactedProfileValue ?? "",
+                    plaintext: { harness.plaintext(forKey: item.key, inProfile: profile) },
+                    remaskToken: harness.revealToken
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let error = harness.itemError("env", profile: profile, id: item.key) {
+                Text(error).font(.caption2).foregroundStyle(.red)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func copyGutter(_ item: EnvDriftItem) -> some View {
+        VStack {
+            if harness.isPushingItem("env", profile: profile, id: item.key) {
+                ProgressView().controlSize(.small)
+            } else {
+                Button {
+                    Task { await harness.syncEnvItem(item, profile: profile) }
+                } label: {
+                    Image(systemName: "arrow.right")
+                }
+                .buttonStyle(.borderless)
+                .imageScale(.small)
+                .help("Copy default's “\(item.key)” secret to “\(profile)” (saves immediately)")
+            }
+        }
+        .frame(width: 36)
+    }
+}
+
+/// One redacted env value with a local reveal toggle. The plaintext is already in
+/// memory (the snapshot), so reveal is a no-op API-wise; it re-masks on collapse
+/// and on the harness's `revealToken` bump.
+private struct EnvValueCell: View {
+    let redacted: String
+    let plaintext: () -> String?
+    let remaskToken: Int
+
+    @State private var revealed = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if redacted.isEmpty {
+                // Missing key, or a present-but-empty value — render the same so
+                // the column reads consistently.
+                Text("—").foregroundStyle(.secondary)
+            } else {
+                Text(revealed ? (plaintext() ?? redacted) : redacted)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                Button { revealed.toggle() } label: {
+                    Image(systemName: revealed ? "eye.slash" : "eye")
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .accessibilityLabel(revealed ? "Hide value" : "Show value")
+                .help(revealed ? "Hide the value" : "Reveal the value")
+            }
+        }
+        .onChange(of: remaskToken) { _, _ in revealed = false }
+        .onDisappear { revealed = false }
     }
 }
 
@@ -798,7 +1151,7 @@ private struct ConfigSubsection: View {
                 inSync: rows.isEmpty,
                 error: harness.resourceErrors[profile]?[.config] ?? harness.defaultResourceErrors[.config],
                 showSyncAll: rows.contains { $0.isPushable },
-                syncAll: { Task { await harness.syncAllConfig(profile: profile) } }
+                syncAll: { Task { await harness.syncAllConfig(profile: profile, curatedOnly: !harness.showAllConfigDifferences) } }
             )
             if harness.schemaError != nil {
                 Text("Config schema unavailable — showing differences without category grouping.")
