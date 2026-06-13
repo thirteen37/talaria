@@ -9,17 +9,12 @@ import Testing
 @MainActor
 @Suite
 struct ConfigEditorHarnessBackupTests {
-    private struct StubError: Error {}
-
     private func makeState() -> ConfigEditingState {
         ConfigEditingState(
             profileName: HermesProfiles.defaultProfileName,
-            usesWindowClient: true,
             defaultClient: { nil },
             serverProfile: ServerProfile(name: "Test", kind: .local),
-            transfer: nil,
-            acquireScoped: { _ in throw StubError() },
-            releaseScoped: { _ in }
+            transfer: nil
         )
     }
 

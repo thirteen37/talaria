@@ -562,6 +562,10 @@ struct ProfilesView: View {
     let activeProfile: String
     let hermesVersion: HermesVersion?
     let onProfilesChanged: () -> Void
+    /// Switches the Profiles destination to its **Sync** tab, deep-linking to the
+    /// given profile (the selected row). Nil hides the link (e.g. a host that
+    /// renders `ProfilesView` standalone).
+    var onShowSync: ((_ profile: String?) -> Void)?
 
     /// Window's top-of-window banner hub. Optional so a host that doesn't supply
     /// one degrades to no-op (hard errors then simply don't render).
@@ -583,7 +587,8 @@ struct ProfilesView: View {
         hostShell: HostShellRunning? = nil,
         activeProfile: String = HermesProfiles.defaultProfileName,
         hermesVersion: HermesVersion? = nil,
-        onProfilesChanged: @escaping () -> Void = {}
+        onProfilesChanged: @escaping () -> Void = {},
+        onShowSync: ((_ profile: String?) -> Void)? = nil
     ) {
         self.client = client
         self.runner = runner
@@ -593,6 +598,7 @@ struct ProfilesView: View {
         self.activeProfile = activeProfile
         self.hermesVersion = hermesVersion
         self.onProfilesChanged = onProfilesChanged
+        self.onShowSync = onShowSync
     }
 
     /// Distribution affordances are enabled only with a CLI runner and a Hermes
@@ -781,6 +787,18 @@ struct ProfilesView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            TableColumn("Sync") { profile in
+                // `default` is the sync source, so it's never a target.
+                if let onShowSync, !isDefaultProfile(profile) {
+                    Button("Sync") { onShowSync(profile.name) }
+                        .buttonStyle(.link)
+                        .help("Push default's skills, config and credentials to “\(profile.name)”")
+                } else {
+                    Text("—")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .width(50)
         }
         .overlay {
             if harness.profiles.isEmpty, !harness.isLoading {
@@ -797,6 +815,12 @@ struct ProfilesView: View {
             }
             .disabled(harness.isLoading)
             .help("Reload the profile list")
+            if let onShowSync {
+                Button { onShowSync(harness.selectedProfile?.name) } label: {
+                    Label("Sync from default", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .help("Open the Sync tab to push default's skills, config and credentials to the selected profile")
+            }
             Button {
                 guard let profile = harness.selectedProfile else { return }
                 harness.beginClone(source: profile.name)
@@ -875,7 +899,13 @@ struct ProfilesView: View {
     /// so both are gated on a non-default selection.
     private func renameDeleteDisabled(_ harness: ProfilesHarness) -> Bool {
         guard let profile = harness.selectedProfile else { return true }
-        return profile.isDefault || profile.name == HermesProfiles.defaultProfileName
+        return isDefaultProfile(profile)
+    }
+
+    /// The default profile is the cross-profile sync *source*, so it's never a
+    /// sync target (no per-row Sync link).
+    private func isDefaultProfile(_ profile: HermesProfileInfo) -> Bool {
+        profile.isDefault || profile.name == HermesProfiles.defaultProfileName
     }
 
     /// Title for the pushed iPhone editor page, matching whichever secondary

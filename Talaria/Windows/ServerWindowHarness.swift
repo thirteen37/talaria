@@ -41,6 +41,15 @@ final class ServerWindowHarness {
     /// Drives the trust-on-first-use prompt for unknown SSH host keys. Always
     /// present for SSH profiles; nil for the bundled local profile.
     let hostKeyCoordinator: HostKeyConfirmationCoordinator?
+    /// The **unscoped** admin runner for this window's transport — the inner
+    /// runner before `ProfileScopedHermesAdminRunner` prepends `-p`. Threaded
+    /// here (mirroring `snapshotTransfer`/`hostShell`) so cross-profile surfaces
+    /// can scope it to *any* named profile via
+    /// ``ProfileSyncEngine/scopedRunnerProvider(base:)``. The window's own
+    /// `store.adminRunner` is already scoped to `hermesProfileName`, so re-using
+    /// it would double-scope (a window on a named profile would read that profile
+    /// as "default"). Nil on the iOS local stub.
+    let baseAdminRunner: (any HermesAdminRunning)?
     /// Doctor run state. Window-owned (not view-owned) so a "Run Doctor"
     /// capture survives Browse navigation that destroys `DoctorView`. Built in
     /// `init` because its dependency (`store.adminRunner`) is ready then.
@@ -117,7 +126,8 @@ final class ServerWindowHarness {
         hermesProfileName: String = HermesProfiles.defaultProfileName,
         snapshotTransfer: RemoteSnapshotTransfer? = nil,
         hostShell: HostShellRunning? = nil,
-        hostKeyCoordinator: HostKeyConfirmationCoordinator? = nil
+        hostKeyCoordinator: HostKeyConfirmationCoordinator? = nil,
+        baseAdminRunner: (any HermesAdminRunning)? = nil
     ) {
         self.store = store
         self.profile = profile
@@ -125,6 +135,7 @@ final class ServerWindowHarness {
         self.snapshotTransfer = snapshotTransfer
         self.hostShell = hostShell
         self.hostKeyCoordinator = hostKeyCoordinator
+        self.baseAdminRunner = baseAdminRunner
         self.doctor = DoctorHarness(runner: store.adminRunner)
         self.updates = UpdatesHarness(runner: store.adminRunner)
     }

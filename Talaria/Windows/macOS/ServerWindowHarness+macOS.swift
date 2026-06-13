@@ -36,12 +36,15 @@ extension ServerWindowHarness {
         }
         // Scope outermost: `-p <name>` is prepended to each admin command (except
         // the default profile and `profile …` subcommands) after PATH resolution
-        // and binary selection have already shaped the inner command.
+        // and binary selection have already shaped the inner command. The
+        // unscoped base is threaded onto the harness so cross-profile surfaces can
+        // re-scope it to any named profile.
+        let baseAdminRunner: any HermesAdminRunning = PathAwareHermesAdminRunner(
+            inner: LocalHermesAdminRunner(hermesPath: hermesPath, environment: adminBaseEnv),
+            resolver: resolver
+        )
         let adminRunner = ProfileScopedHermesAdminRunner(
-            inner: PathAwareHermesAdminRunner(
-                inner: LocalHermesAdminRunner(hermesPath: hermesPath, environment: adminBaseEnv),
-                resolver: resolver
-            ),
+            inner: baseAdminRunner,
             hermesProfileName: hermesProfileName
         )
         // TUI factory: spawn `env hermes [-p <name>] chat --tui [-r <id>]` under
@@ -78,7 +81,8 @@ extension ServerWindowHarness {
             store: store,
             profile: profile,
             hermesProfileName: hermesProfileName,
-            hostShell: LocalHostShell()
+            hostShell: LocalHostShell(),
+            baseAdminRunner: baseAdminRunner
         )
     }
 
@@ -130,9 +134,11 @@ extension ServerWindowHarness {
         )
 
         // Scope outermost so Tools/Doctor run under the window's Hermes profile;
-        // `profile list` and the default profile stay unscoped.
+        // `profile list` and the default profile stay unscoped. The unscoped base
+        // is threaded onto the harness for cross-profile re-scoping.
+        let baseAdminRunner: any HermesAdminRunning = RemoteHermesAdminRunner(profile: profile)
         let admin: any HermesAdminRunning = ProfileScopedHermesAdminRunner(
-            inner: RemoteHermesAdminRunner(profile: profile),
+            inner: baseAdminRunner,
             hermesProfileName: hermesProfileName
         )
         // TUI factory always uses system `ssh -tt` (a local PTY process SwiftTerm
@@ -179,7 +185,8 @@ extension ServerWindowHarness {
             hermesProfileName: hermesProfileName,
             snapshotTransfer: snapshotTransfer,
             hostShell: hostShell,
-            hostKeyCoordinator: hostKeyCoordinator
+            hostKeyCoordinator: hostKeyCoordinator,
+            baseAdminRunner: baseAdminRunner
         )
     }
 
@@ -226,7 +233,13 @@ extension ServerWindowHarness {
             )
             try Task.checkCancellation()
             guard !dashboardReleased else { return }
-            dashboardClient = endpoint.session.client()
+            // Scope the client to this window's Hermes profile so every HTTP
+            // route carries `?profile=<name>`. The newer dashboard is one server
+            // that serves the *default* home regardless of how it was spawned and
+            // scopes per request via this param; without it a non-default window
+            // would read/write the default profile. (default → no param, so
+            // default windows are unchanged.)
+            dashboardClient = endpoint.session.client().scoped(toProfile: hermesProfileName)
             store.dashboardClient = dashboardClient
             dashboardError = nil
             startupPhase = nil
@@ -248,25 +261,6 @@ extension ServerWindowHarness {
     /// cache.
     func forceReleaseDashboardSupervisor(_ supervisor: DashboardSupervisor) async {
         await DashboardCoordinator.shared.forceRelease(supervisor)
-    }
-
-    /// Acquires a dashboard scoped to a *named* Hermes profile, separate from
-    /// this window's shared dashboard. Used by the Configuration editor's
-    /// comparison column to reach a profile other than the window's active one.
-    /// The caller (the editor's `ScopedDashboardPool`) holds the returned
-    /// supervisor and releases it via ``releaseScopedDashboard(_:)``.
-    func acquireScopedDashboardClient(
-        hermesProfileName: String
-    ) async throws -> (DashboardSupervisor, DashboardClient) {
-        let (endpoint, supervisor) = try await DashboardCoordinator.shared.acquire(
-            profile: profile,
-            hermesProfileName: hermesProfileName
-        )
-        return (supervisor, endpoint.session.client())
-    }
-
-    func releaseScopedDashboard(_ supervisor: DashboardSupervisor) async {
-        await DashboardCoordinator.shared.release(supervisor)
     }
 
     /// Cancels long-lived per-window resources when the SwiftUI window

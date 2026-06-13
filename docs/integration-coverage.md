@@ -84,12 +84,15 @@ window consumers, and tears the child down when the last consumer releases it.
 | Memory (provider status) | `GET /api/memory` — read-only active provider + sizes only. The `MEMORY.md` / `USER.md` **text** has no route; it is edited direct-disk (see **Direct File I/O**). The provider picker uses `PUT /api/memory/provider` (Plugins). |
 | MCP servers | `GET`/`POST /api/mcp/servers`, `POST /api/mcp/servers/{name}/test`, `PUT /api/mcp/servers/{name}/enabled`, `DELETE /api/mcp/servers/{name}`, `GET /api/mcp/catalog`, `POST /api/mcp/catalog/install` (gated on `requiresMCPAPI` ≥ `0.15.1`) |
 
-The default server window shares one dashboard per `ServerProfile`. Profile
-editing can acquire additional scoped dashboards with `hermes -p <name>
-dashboard` so reads and writes apply to the selected Hermes profile. On macOS,
-remote dashboard access uses system SSH with a loopback `-L` forward. On iOS,
-remote dashboard HTTP travels over the pure-Swift NIO-SSH `direct-tcpip` tunnel
-owned by the window.
+The server window shares one dashboard per `ServerProfile`. Cross-profile reads
+and writes (the Sync screen, the config editor's compare/named-profile edit)
+scope that single dashboard per request via a `?profile=<name>` query param
+(`DashboardClient.scoped(toProfile:)`) — the dashboard applies a context-local
+`HERMES_HOME` override so the request lands in the selected profile's home. (No
+separate `hermes -p <name> dashboard` is spawned; newer Hermes ignores `-p` for
+the dashboard's own request scoping.) On macOS, remote dashboard access uses
+system SSH with a loopback `-L` forward. On iOS, remote dashboard HTTP travels
+over the pure-Swift NIO-SSH `direct-tcpip` tunnel owned by the window.
 
 ## CLI Fallbacks
 

@@ -57,14 +57,16 @@ extension ServerWindowHarness {
         // the same auth policy as the chat transport (and don't re-prompt for a
         // key the chat transport already trusted).
         // Scope outermost so Tools/Doctor run under the window's Hermes profile;
-        // `profile list` and the default profile stay unscoped.
+        // `profile list` and the default profile stay unscoped. The unscoped base
+        // is threaded onto the harness for cross-profile re-scoping.
+        let baseAdminRunner: any HermesAdminRunning = NIOSSHHermesAdminRunner(
+            profile: profile,
+            credentialProvider: credentialProvider,
+            hostKeyStore: hostKeyStore,
+            hostKeyConfirmer: confirmer
+        )
         let admin: any HermesAdminRunning = ProfileScopedHermesAdminRunner(
-            inner: NIOSSHHermesAdminRunner(
-                profile: profile,
-                credentialProvider: credentialProvider,
-                hostKeyStore: hostKeyStore,
-                hostKeyConfirmer: confirmer
-            ),
+            inner: baseAdminRunner,
             hermesProfileName: hermesProfileName
         )
         let store = SessionsStore(
@@ -82,7 +84,8 @@ extension ServerWindowHarness {
             hermesProfileName: hermesProfileName,
             snapshotTransfer: snapshotTransfer,
             hostShell: hostShell,
-            hostKeyCoordinator: hostKeyCoordinator
+            hostKeyCoordinator: hostKeyCoordinator,
+            baseAdminRunner: baseAdminRunner
         )
         harness.chatTunnelBox = tunnelBox
         return harness
@@ -119,7 +122,8 @@ extension ServerWindowHarness {
             )
             try Task.checkCancellation()
             guard !dashboardReleased else { return }
-            dashboardClient = endpoint.session.client()
+            // Scope to this window's Hermes profile — see the macOS counterpart.
+            dashboardClient = endpoint.session.client().scoped(toProfile: hermesProfileName)
             store.dashboardClient = dashboardClient
             dashboardError = nil
             startupPhase = nil
@@ -154,25 +158,6 @@ extension ServerWindowHarness {
         // anyway, but clearing the box avoids the wasted attempt.
         chatTunnelBox?.set(nil)
         await supervisor.forceShutdown()
-    }
-
-    /// Acquires a dashboard scoped to a *named* Hermes profile, separate from
-    /// this window's shared dashboard. Used by the Configuration editor's
-    /// comparison column to reach a profile other than the window's active one.
-    /// iOS owns its supervisors directly (no cross-window coordinator), so this
-    /// builds a fresh NIO-SSH-backed supervisor; the caller holds and releases it.
-    func acquireScopedDashboardClient(
-        hermesProfileName: String
-    ) async throws -> (DashboardSupervisor, DashboardClient) {
-        // Scoped (config-editor) dashboards aren't the chat tunnel, so the
-        // connection is unused here.
-        let (supervisor, _) = makeIOSDashboardSupervisor(hermesProfileName: hermesProfileName)
-        let endpoint = try await supervisor.acquire()
-        return (supervisor, endpoint.session.client())
-    }
-
-    func releaseScopedDashboard(_ supervisor: DashboardSupervisor) async {
-        await supervisor.release()
     }
 
     func tearDown() {

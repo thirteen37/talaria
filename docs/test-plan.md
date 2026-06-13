@@ -67,24 +67,35 @@ Run this script before a v1 release candidate.
     - The structured form groups fields by category with type-appropriate controls (text, number + stepper, toggle, enum picker, list add/remove).
     - Edit a field and *Save*; reopen and confirm the value persisted and unrelated keys were left untouched.
     - Toggle **YAML**: the pane mirrors the edited config; an invalid edit shows an inline parse error and disables *Save*.
-    - Pick a non-`default` profile and confirm it loads its own config (a profile-scoped `hermes -p <name> dashboard` spawns; closing the surface releases it).
+    - Pick a non-`default` profile and confirm it loads its own config (reached through the window's shared dashboard scoped via `?profile=<name>` — no separate dashboard spawns).
     - **Compare**: reveals a second profile picker and switches to the read-only diff; *Differences only* filters matching rows.
     - With the dashboard unreachable, the surface degrades to a read-only YAML view of the on-disk config and disables *Save*.
     - Switch to the *Environment* tab: rows from `GET /api/env` render with redacted previews; add/edit/delete a custom var (mutations go through `PUT`/`DELETE /api/env`); *Reveal* fetches the full value via `POST /api/env/reveal`. The detail title tracks the active tab.
-16. **Memory view**: open Manage → **Soul, Personalities & Memory** and select the *Memory* tab. Confirm:
+16. **Cross-profile sync** (Profiles screen, **desktop + iPad**): clone the default profile to create a named profile (e.g. `work`). Open Manage → **Profiles** and select the **Sync** tab (beside the **Profiles** management tab). Pick a profile from the top picker, then use the **Skills / Config / Environment** segmented sections (each badge shows that section's diff count). Confirm:
+    - The tab enumerates named profiles itself (a freshly cloned profile appears after toolbar *Refresh* without leaving the tab).
+    - **Skills**: install a hub skill into *default* only, refresh, and confirm a "missing" row appears for `work`. Push it (per-row **Install** or **Sync all**); verify with `hermes -p work skills list` that it landed. A skill with no resolvable Skills Hub identifier shows a blocked caption ("Not in the Skills Hub catalog — install manually"). A Hub-outdated skill shows an **Update** button (no diff — "update available" is measured against the Hub, not default).
+    - **Customized-skill drift**: edit an **unmanaged** (builtin/local) skill's `SKILL.md` in `work` so it differs from default's copy. Open the Skills section and confirm a brief "Checking customized skills…" then a **Customized (differs from default)** group listing that skill (marked *modified*). Select it: a read-only bottom panel shows the side-by-side line diff (default left, `work` right). Only unmanaged skills present in both profiles are read/diffed (Hub-managed skills are excluded); a skill whose `SKILL.md` can't be read on a side is silently skipped.
+    - **Config** (two-column comparison, reused from the config editor): switch the model/provider in *default*'s config, open the Config section, and confirm the **default** (left) and **work** (right) columns differ, with the field label shown **once** per row above both columns (not duplicated). Hover a differing row and click the **→** copy arrow; confirm it pushes default's value into `work` **immediately** (no separate Save) and the named `config.yaml` got it while unrelated keys survived. Confirm there is **no ← (reverse) arrow** (one-way). *Differences only* is on by default.
+    - **Environment** (two-column comparison): rotate a key in *default*'s `.env`, open the Environment section, and confirm the row shows `KEY` with **default** and **work** redacted values in two columns. The **eye** reveals each side's plaintext locally (no `POST /api/env/reveal` — it's already in memory) and re-masks on refresh. Click **→**; confirm it copies default's secret into `work` immediately via `PUT /api/env?profile=work` on the shared dashboard, and that **`work`'s `.env` actually changed** (`grep KEY $(hermes -p work config env-path)`) — the write must land in the profile's home, not the base. A managed-key rejection surfaces on the row.
+    - **Extras** (keys/skills present only in the named profile) render display-only ("only in 'work' (not removed)") — v1 never deletes.
+    - **Sync everything from default** presents a confirmation sheet enumerating the batch ("install 2 skills, push 3 config values, copy 2 credentials to 'work'") before writing, because it copies secrets; the per-row copy arrows act without a sheet.
+    - **Base-runner regression**: switch the *window* to a named Hermes profile, reopen Profiles → Sync, and confirm the comparison's **source column is still `default`** (not the window's named profile).
+    - **iPhone**: the same tab falls back to a stacked read-only-ish list (no two-column comparison) with per-profile sync actions.
+    - On a Hermes below the dashboard/env pin (0.14.0), confirm the inline capability warning shows and pushes are gated.
+17. **Memory view**: open Manage → **Soul, Personalities & Memory** and select the *Memory* tab. Confirm:
     - `MEMORY.md` and `USER.md` rows load with their content and a live char count; the provider line reads **Provider: Built-in** (or the provider name if an external one is active; **Unknown** with the dashboard down — editing still works).
     - Edit `MEMORY.md`, *Save* (⌘↩); reload (toolbar *Refresh*) and confirm it persisted on disk (`~/.hermes/memories/MEMORY.md`). Repeat for `USER.md`.
     - Type past the char cap and confirm the counter turns red with the over-budget note, but *Save* still writes.
     - **Unsaved-edits guard**: edit, then switch row (or tab) → confirm the Save/Discard/Cancel dialog.
     - **Overwrite detection**: with unsaved edits, change the file out-of-band on disk, then *Save* → confirm the "File changed on disk" overwrite prompt; *Overwrite* writes your version, *Cancel* keeps the file.
     - **External provider active**: set a memory provider in Plugins and confirm the "external provider active" warning appears on the editor.
-17. **Dashboard lifecycle**: open two windows for the same profile and confirm they share one `hermes dashboard` process. Close both and verify the child exits.
+18. **Dashboard lifecycle**: open two windows for the same profile and confirm they share one `hermes dashboard` process. Close both and verify the child exits.
     - **Reconnect**: with a dashboard connected, trigger **Reconnect** (window toolbar; or the banner button after a failed connect). Confirm the dashboard tears down and re-establishes (surfaces briefly show "connecting…" then recover). For a remote profile, simulate a wedge by killing the remote `hermes dashboard` (or dropping the link) so surfaces start erroring while still "connected", then Reconnect and confirm recovery without reopening the window. On iOS, the same control is in the nav bar (and the error banner).
     - **iOS/iPad background→foreground recovery**: with a live chat open mid-conversation, background the app and let the device sleep (or wait long enough for the SSH connection to drop), then reopen. Confirm a brief "Reconnecting…" banner, that the chat re-resumes with its history intact and accepts a new prompt, and that the transcript stays visible throughout. Then confirm a *brief* app-switch (flip away and back within ~2s) does **not** trigger a reconnect/teardown flash — a live connection is left untouched. If the chat was a brand-new session the gateway hadn't persisted, confirm it shows "Connection lost — start a new chat to continue." without blanking the transcript.
-18. Set a fixed dashboard port in the profile editor, reopen the profile, and confirm `hermes dashboard` binds that port. Clear the field and confirm Talaria returns to automatic port allocation.
-19. Open an SSH profile and repeat steps 8–16 against the remote profile. Confirm dashboard startup failures surface useful messages for missing `[web]`, auth failure, and connection timeout. For step 16 specifically, confirm the **remote** Memory read/write works over both the system-`ssh` (macOS sftp) and NIO/iOS paths, that the file actually changed on the remote host, and that a named Hermes profile targets `profiles/<name>/memories/…`.
+19. Set a fixed dashboard port in the profile editor, reopen the profile, and confirm `hermes dashboard` binds that port. Clear the field and confirm Talaria returns to automatic port allocation.
+20. Open an SSH profile and repeat steps 8–17 against the remote profile. Confirm dashboard startup failures surface useful messages for missing `[web]`, auth failure, and connection timeout. For the cross-profile sync step specifically, confirm the named profiles' `config.yaml`/`.env` reads and the scoped-dashboard pushes work over both the system-`ssh` (macOS sftp) and NIO/iOS paths. For the Memory step specifically, confirm the **remote** Memory read/write works over both the system-`ssh` (macOS sftp) and NIO/iOS paths, that the file actually changed on the remote host, and that a named Hermes profile targets `profiles/<name>/memories/…`.
     - **Slow first launch after a Hermes update**: on a remote that has just been updated (so `hermes dashboard` recompiles the web UI), confirm the window shows a "Building web UI…" banner while it builds and then comes online — rather than failing at the base timeout. If it genuinely never serves, confirm the sidebar/`notReachable` message names the cause (last probe error / ssh channel error), and that the `dashboard` os_log category (System log console) carries the spawn command and probe detail.
-20. **Terminal (TUI) sessions** (macOS):
+21. **Terminal (TUI) sessions** (macOS):
     - **Local, new**: click the terminal button beside *New session*. Confirm the real Hermes TUI renders in the detail pane, accepts keystrokes, and that the tab shows a `terminal` glyph.
     - **Tab survival**: switch to another tab (or a Browse page) and back. Confirm the TUI process and scrollback survive (it is not relaunched).
     - **Close**: close the TUI tab (⌘W or the row close button) and confirm the `hermes` process exits (e.g. `pgrep -f 'chat --tui'` drops it). Repeat by closing the *window* with a TUI tab open — the process must also exit (no leak).
@@ -93,7 +104,7 @@ Run this script before a v1 release candidate.
     - **Relaunch overlay**: exit the TUI from inside (e.g. `/exit` or Ctrl-D). Confirm the "Session ended" overlay appears and *Relaunch* starts a fresh TUI in the same tab.
     - **SSH**: repeat the new/resume flows against an SSH profile. Confirm interactive keys work over `ssh -tt` and the remote TUI draws correctly (including, on a first connect, any `known_hosts` prompt shown inside the terminal).
 
-21. **Notifications** (Settings → **Notifications**, macOS or iOS):
+22. **Notifications** (Settings → **Notifications**, macOS or iOS):
     - The master toggle defaults off. Flip it on and confirm the OS authorization prompt appears the first time; the two sub-toggles (*Agent finished*, *Tool approval*) default on.
     - With the toggles on, start a turn in a chat that is **not** the foreground+selected session (another tab, window, or backgrounded app) and confirm an "Agent finished responding." banner fires; trigger a tool-approval request and confirm its banner fires.
     - With that chat foreground **and** selected, confirm no banner fires (the watched chat is suppressed).
@@ -104,18 +115,18 @@ Run this script before a v1 release candidate.
 
 Run these against the signed, notarised, stapled build produced by `scripts/release.sh` — **not** a `CODE_SIGNING_ALLOWED=NO` dev build.
 
-22. **Signing assertions** (in a shell):
+23. **Signing assertions** (in a shell):
     - `codesign --verify --deep --strict --verbose=2 build/export/Talaria.app` exits 0.
     - `xcrun stapler validate build/export/Talaria.app` reports `The validate action worked!`.
     - `xcrun stapler validate build/Talaria-<VERSION>.dmg` reports the same.
     - `spctl -a -vvv -t install build/export/Talaria.app` reports `accepted source=Notarized Developer ID`.
-23. **Gatekeeper first-launch** (on a fresh Mac or a fresh user account):
+24. **Gatekeeper first-launch** (on a fresh Mac or a fresh user account):
     - Download the DMG from the GitHub Release page **via the browser** (not `curl` — Gatekeeper relies on the download quarantine xattr).
     - Drag `Talaria.app` to `/Applications`.
     - Launch from Finder (double-click). Confirm no quarantine warning appears.
-24. **Sparkle in-app update** (only if the previous signed build is available):
+25. **Sparkle in-app update** (only if the previous signed build is available):
     - Install the previous signed build, launch it once so Sparkle stores its profile.
     - Replace `docs/appcast.xml` to point at the new version.
     - Re-launch the older build. Confirm Sparkle finds the new release, downloads it, validates the ed25519 signature, and relaunches into the new build.
     - Trigger manually via **Talaria → Check for Updates…** and confirm the menu item is reachable.
-25. **Version display**: the macOS About panel shows the `MARKETING_VERSION` and build number from `Info.plist`.
+26. **Version display**: the macOS About panel shows the `MARKETING_VERSION` and build number from `Info.plist`.

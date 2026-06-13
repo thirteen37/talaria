@@ -16,6 +16,25 @@ struct EditableComparisonView: View {
     /// live edit, drives the filter). Never touches `working`/dirty/save — purely
     /// which rows render (see `differingCategories`).
     let showDifferencesOnly: Bool
+    /// When true, a copy-across immediately `save()`s the target (push-on-copy),
+    /// rather than just staging the value for the column's Save button. The
+    /// cross-profile sync surface sets this; the config editor leaves it false.
+    var immediateCopy = false
+    /// When false, the reverse (dest → source) copy arrow is hidden — the
+    /// cross-profile sync surface is one-way (default is the source of truth), so
+    /// it never writes back into the source column.
+    var allowReverseCopy = true
+    /// Dotpaths whose copy gutter is suppressed (rendered read-only), keyed by the
+    /// row's `key`. The sync surface passes `ConfigSyncScope.isExcludedFromPush`
+    /// so a per-row copy can't push a value the bulk payload deliberately excludes
+    /// (e.g. the stale `auxiliary.*.base_url` per-slot override). nil ⇒ every
+    /// differing row is copyable (the plain config editor).
+    var copyExcluded: ((String) -> Bool)?
+    /// Called after an `immediateCopy` row save completes. The sync surface uses
+    /// it to recompute its drift (the copy writes through the editor's own
+    /// `save()`, which this view's owner can't otherwise observe). Ignored when
+    /// `immediateCopy` is false (the plain editor).
+    var onImmediateCopy: (() -> Void)?
     /// Purely presentational key/description search — composes with
     /// `showDifferencesOnly`; only changes which rows render, never
     /// `working`/dirty/save. Ephemeral view state (resets on a compare switch).
@@ -108,7 +127,15 @@ struct EditableComparisonView: View {
                             ForEach(categories) { category in
                                 Section(category.name.capitalized) {
                                     ForEach(category.rows) { row in
-                                        ComparisonRowView(row: row, source: source, dest: dest)
+                                        ComparisonRowView(
+                                            row: row,
+                                            source: source,
+                                            dest: dest,
+                                            immediateCopy: immediateCopy,
+                                            allowReverseCopy: allowReverseCopy,
+                                            copyDisabled: copyExcluded?(row.key) ?? false,
+                                            onImmediateCopy: onImmediateCopy
+                                        )
                                     }
                                 }
                                 .id(category.name)
@@ -165,11 +192,26 @@ private struct ComparisonRowView: View {
     let row: ComparisonRow
     let source: ConfigEditingState
     let dest: ConfigEditingState
+    var immediateCopy = false
+    var allowReverseCopy = true
+    /// When true, the copy gutter is replaced by a read-only marker — the row
+    /// still shows the difference but can't be pushed (it's excluded from the
+    /// sync payload). See ``EditableComparisonView/copyExcluded``.
+    var copyDisabled = false
+    /// Invoked after an `immediateCopy` save lands (see
+    /// ``EditableComparisonView/onImmediateCopy``).
+    var onImmediateCopy: (() -> Void)?
 
     @State private var hovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
+            // One shared label per row (the field title), instead of repeating
+            // it inside each column's control. The dotpath sits beneath it.
+            if let label = sharedLabel {
+                Text(label)
+                    .font(.callout)
+            }
             Text(row.key)
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(.tertiary)
@@ -183,10 +225,36 @@ private struct ComparisonRowView: View {
         .onHover { hovering = $0 }
     }
 
+    /// The field title shown once above both columns. Both sides model the same
+    /// key, so either side's field yields the same label; the present side wins
+    /// for one-sided rows. The redundant "Category → " prefix is stripped — the
+    /// rows are already grouped under that category's section heading.
+    private var sharedLabel: String? {
+        guard let field = row.sourceField ?? row.destField else { return nil }
+        return Self.stripCategoryPrefix(ConfigFieldControl.label(for: field), category: field.category)
+    }
+
+    /// Drops a leading "Category → " (or "Category -> ") from `label` when the
+    /// prefix matches this row's `category`, since the section heading already
+    /// shows it. Deeper paths (e.g. "Auxiliary → Fast → Model") keep everything
+    /// after the first, redundant segment.
+    private static func stripCategoryPrefix(_ label: String, category: String) -> String {
+        guard let separator = [" → ", " -> "]
+            .compactMap({ label.range(of: $0) })
+            .min(by: { $0.lowerBound < $1.lowerBound })
+        else { return label }
+        func normalize(_ s: Substring) -> String {
+            s.lowercased().replacingOccurrences(of: " ", with: "").replacingOccurrences(of: "_", with: "")
+        }
+        let prefix = label[label.startIndex..<separator.lowerBound]
+        guard normalize(prefix) == normalize(Substring(category)) else { return label }
+        return String(label[separator.upperBound...])
+    }
+
     @ViewBuilder
     private func column(field: ConfigFormField?, state: ConfigEditingState) -> some View {
         if let field {
-            ConfigFieldControl(state: state, field: field)
+            ConfigFieldControl(state: state, field: field, showsLabel: false)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             // No schema/type on this side to synthesize a control — read-only
@@ -206,22 +274,35 @@ private struct ComparisonRowView: View {
     @ViewBuilder
     private var copyGutter: some View {
         VStack(spacing: 2) {
-            if hovering, let sourceField = row.sourceField, let destField = row.destField {
+            if copyDisabled, row.sourceField != nil, row.destField != nil {
+                // Excluded from sync (e.g. a stale per-slot `auxiliary.*.base_url`
+                // override): show the difference but never offer to copy it.
+                // Static — reads no live value, so it stays off the keystroke path.
+                Image(systemName: "lock")
+                    .foregroundStyle(.tertiary)
+                    .help("Read-only — excluded from sync (a stale per-slot override).")
+            } else if hovering, let sourceField = row.sourceField, let destField = row.destField {
                 let sourceValue = source.value(for: sourceField)
                 let destValue = dest.value(for: destField)
                 if sourceValue != destValue {
                     Button {
                         dest.copyValue(sourceValue, into: destField)
+                        if immediateCopy { Task { await dest.save(); onImmediateCopy?() } }
                     } label: {
                         Image(systemName: "arrow.right")
                     }
-                    .help("Copy \(source.profileName) → \(dest.profileName)")
-                    Button {
-                        source.copyValue(destValue, into: sourceField)
-                    } label: {
-                        Image(systemName: "arrow.left")
+                    .help(immediateCopy
+                        ? "Copy \(source.profileName) → \(dest.profileName) (saves immediately)"
+                        : "Copy \(source.profileName) → \(dest.profileName)")
+                    if allowReverseCopy {
+                        Button {
+                            source.copyValue(destValue, into: sourceField)
+                            if immediateCopy { Task { await source.save(); onImmediateCopy?() } }
+                        } label: {
+                            Image(systemName: "arrow.left")
+                        }
+                        .help("Copy \(dest.profileName) → \(source.profileName)")
                     }
-                    .help("Copy \(dest.profileName) → \(source.profileName)")
                 }
             }
         }
