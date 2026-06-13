@@ -1,6 +1,22 @@
 import HermesKit
 import SwiftUI
 
+/// Which lifecycle actions a row offers, derived from `hermes skills list`.
+/// `hub` → Update / Audit / Remove; `builtin` → Reset (+ Repair when official);
+/// `local` → Publish. `nil` (unknown / no admin runner) offers none.
+enum SkillKind {
+    case hub
+    case local
+    case builtin
+}
+
+/// A captured `skills audit` report awaiting presentation in a sheet.
+struct SkillAuditReport: Identifiable {
+    let name: String
+    let text: String
+    var id: String { name }
+}
+
 @MainActor
 @Observable
 final class SkillsHarness {
@@ -46,18 +62,45 @@ final class SkillsHarness {
     /// Hub skills with an upstream update available (from `hermes skills check`),
     /// populated off `refresh()` so each row can flag "Update available".
     var updatableNames: Set<String> = []
-    /// Names with an in-flight update/remove action, to disable their buttons.
+    /// Names whose Source is exactly `builtin` (shipped with Hermes), eligible
+    /// for Reset (and Repair when also official). Empty when no admin runner.
+    var builtinNames: Set<String> = []
+    /// Names whose Trust is `official` — the subset of builtins eligible for the
+    /// `repair-official` action. Empty when no admin runner.
+    var officialNames: Set<String> = []
+    /// Names with an in-flight per-skill action (update/audit/reset/repair/
+    /// remove/publish), to disable their buttons.
     var busy: Set<String> = []
+    /// Single in-flight flag for the global bundled-seeding actions
+    /// (opt-out / opt-in / re-seed), which aren't keyed by a skill name.
+    var seedingBusy: Bool = false
+    /// Captured `skills audit` report awaiting presentation; cleared on dismiss.
+    var auditReport: SkillAuditReport?
 
     private let client: DashboardClient
     let runner: HermesAdminRunning?
     private let catalog: SkillsHubCatalog
+    /// The profile's configured Hermes home (local profiles only), used to
+    /// resolve the on-disk skills root for Publish and Force remove.
+    let hermesHome: String?
 
-    init(client: DashboardClient, runner: HermesAdminRunning?, catalog: SkillsHubCatalog = SkillsHubCatalog()) {
+    init(
+        client: DashboardClient,
+        runner: HermesAdminRunning?,
+        hermesHome: String? = nil,
+        catalog: SkillsHubCatalog = SkillsHubCatalog()
+    ) {
         self.client = client
         self.runner = runner
+        self.hermesHome = hermesHome
         self.catalog = catalog
     }
+
+    /// The local skills root (`<hermesHome>/skills`, default `~/.hermes/skills`).
+    var skillsRoot: URL { HermesSkillsFileStore.localSkillsRoot(hermesHome: hermesHome) }
+
+    /// The currently-selected installed skill, or nil. Drives the detail panel.
+    var selected: DashboardSkill? { rows.first { $0.name == selectionID } }
 
     /// True once the manual install field has a non-empty identifier.
     var canInstallFromField: Bool {
@@ -67,6 +110,20 @@ final class SkillsHarness {
     func isHubManaged(_ name: String) -> Bool { hubInstalledNames.contains(name) }
 
     func isLocal(_ name: String) -> Bool { localNames.contains(name) }
+
+    /// True when this builtin skill is official-trust (eligible for Repair).
+    func isOfficial(_ name: String) -> Bool { officialNames.contains(name) }
+
+    /// Classifies a row so it can pick its lifecycle actions. Returns `nil` when
+    /// the skill isn't in the CLI list yet (no admin runner, or a transient
+    /// dashboard/CLI mismatch), in which case the row offers no kind-specific
+    /// actions.
+    func kind(for name: String) -> SkillKind? {
+        if hubInstalledNames.contains(name) { return .hub }
+        if localNames.contains(name) { return .local }
+        if builtinNames.contains(name) { return .builtin }
+        return nil
+    }
 
     func refresh() async {
         isLoading = true
@@ -93,15 +150,21 @@ final class SkillsHarness {
         guard let runner else {
             hubInstalledNames = []
             localNames = []
+            builtinNames = []
+            officialNames = []
             return
         }
         do {
             let installed = try await HermesSkillsHub.listInstalled(runner: runner)
             hubInstalledNames = Set(installed.filter(\.isHubManaged).map(\.name))
             localNames = Set(installed.filter(\.isLocal).map(\.name))
+            builtinNames = Set(installed.filter(\.isBuiltin).map(\.name))
+            officialNames = Set(installed.filter(\.isOfficial).map(\.name))
         } catch {
             hubInstalledNames = []
             localNames = []
+            builtinNames = []
+            officialNames = []
             if lastError == nil {
                 lastError = error.localizedDescription
                 banners?.surfaceError(bannerKey, error.localizedDescription)
@@ -219,12 +282,131 @@ final class SkillsHarness {
             banners?.surfaceError(bannerKey, error.localizedDescription)
         }
     }
+
+    /// Force-removes a skill by deleting its directory directly — the fallback
+    /// for builtin/local skills (which `hermes skills uninstall` refuses) and for
+    /// a stuck hub uninstall. Local profiles only (gated by the caller); deletion
+    /// is fast local filesystem I/O so it runs on the MainActor like the other
+    /// mutators.
+    func forceRemove(_ name: String, category: String?) async {
+        guard runner?.deliversStdin == true else { return }
+        busy.insert(name)
+        defer { busy.remove(name) }
+        do {
+            try HermesSkillsFileStore.forceDelete(skillsRoot: skillsRoot, category: category, name: name)
+            if selectionID == name { selectionID = nil }
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
+    }
+
+    // MARK: - Lifecycle actions (CLI fallback)
+
+    /// Re-scans a hub skill and captures the report into `auditReport` for the
+    /// presentation sheet. Doesn't mutate state, so it skips the post-refresh.
+    func audit(_ name: String) async {
+        guard let runner else { return }
+        busy.insert(name)
+        defer { busy.remove(name) }
+        do {
+            let report = try await HermesSkillsHub.audit(runner: runner, name: name)
+            auditReport = SkillAuditReport(
+                name: name,
+                text: report.isEmpty ? "Audit completed — no issues reported." : report
+            )
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
+    }
+
+    /// Clears a builtin skill's `user-modified` tracking (safe `skills reset`).
+    func reset(_ name: String) async {
+        guard let runner else { return }
+        busy.insert(name)
+        defer { busy.remove(name) }
+        do {
+            _ = try await HermesSkillsHub.reset(runner: runner, name: name)
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
+    }
+
+    /// Backfills an official skill's hub metadata (safe `skills repair-official`).
+    func repair(_ name: String) async {
+        guard let runner else { return }
+        busy.insert(name)
+        defer { busy.remove(name) }
+        do {
+            _ = try await HermesSkillsHub.repairOfficial(runner: runner, name: name)
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
+    }
+
+    /// Publishes a local skill directory to a registry. `path` is the on-disk
+    /// skill directory (from the publish sheet); `name` keys the busy flag and
+    /// the confirmation. Surfaces a success banner on completion.
+    func publish(name: String, path: String, registry: SkillsPublishRegistry, repo: String?) async {
+        guard let runner else { return }
+        busy.insert(name)
+        defer { busy.remove(name) }
+        do {
+            _ = try await HermesSkillsHub.publish(runner: runner, path: path, registry: registry, repo: repo)
+            banners?.surfaceSuccess(bannerKey, "Published \(name) to \(registry.rawValue).")
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
+    }
+
+    // MARK: - Bundled-skill seeding (global, not keyed by name)
+
+    /// Stops bundled skills from seeding into this profile (safe `skills
+    /// opt-out`). Guards the shared `seedingBusy` flag.
+    func optOut() async {
+        await runSeeding { try await HermesSkillsHub.optOut(runner: $0) }
+    }
+
+    /// Re-enables bundled-skill seeding (`skills opt-in`).
+    func optIn() async {
+        await runSeeding { try await HermesSkillsHub.optIn(runner: $0) }
+    }
+
+    /// Re-enables and immediately re-seeds bundled skills (`skills opt-in
+    /// --sync`).
+    func reseed() async {
+        await runSeeding { try await HermesSkillsHub.optIn(runner: $0, sync: true) }
+    }
+
+    /// Shared driver for the three bundled-seeding actions: single in-flight
+    /// guard, run the closure, refresh on success, route errors to the banner.
+    private func runSeeding(_ body: @escaping (HermesAdminRunning) async throws -> String) async {
+        guard let runner, !seedingBusy else { return }
+        seedingBusy = true
+        defer { seedingBusy = false }
+        do {
+            _ = try await body(runner)
+            await refresh()
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
+    }
 }
 
 struct SkillsView: View {
     let client: DashboardClient?
     let runner: HermesAdminRunning?
     let hermesVersion: HermesVersion?
+    let hermesHome: String?
 
     /// Window's top-of-window banner hub. Optional so a host that doesn't supply
     /// one degrades to no-op (hard errors then simply don't render).
@@ -239,11 +421,22 @@ struct SkillsView: View {
     // pane; the user expands them on demand to search or paste an identifier.
     @State private var searchExpanded = false
     @State private var installExpanded = false
+    /// The local skill currently being published (drives the publish sheet), or
+    /// `nil` when no sheet is up.
+    @State private var publishTarget: PublishTarget?
+    /// Confirms the destructive-ish opt-out from the Bundled skills menu.
+    @State private var confirmingOptOut = false
 
-    init(client: DashboardClient?, runner: HermesAdminRunning? = nil, hermesVersion: HermesVersion? = nil) {
+    init(
+        client: DashboardClient?,
+        runner: HermesAdminRunning? = nil,
+        hermesVersion: HermesVersion? = nil,
+        hermesHome: String? = nil
+    ) {
         self.client = client
         self.runner = runner
         self.hermesVersion = hermesVersion
+        self.hermesHome = hermesHome
     }
 
     /// Whether the Skills Hub install/update affordances can run: they need the
@@ -257,6 +450,26 @@ struct SkillsView: View {
     /// than letting a remote uninstall read closed stdin and fail with a
     /// confusing "Cancelled." error.
     private var removeAvailable: Bool { runner?.deliversStdin == true }
+
+    /// Whether the lifecycle affordances (Audit / Reset / Repair / Publish and
+    /// the Bundled skills menu) can run: they need the CLI admin runner and a
+    /// Hermes new enough to expose the subcommands. Below the gate the
+    /// in-surface `capabilityBanner` explains why; runtime `commandUnavailable`
+    /// is the real backstop.
+    private var lifecycleAvailable: Bool {
+        runner != nil && CapabilityTable().has(.skillsLifecycle, in: hermesVersion)
+    }
+
+    /// Whether **Publish** can run. Publish operates on a *local* skill
+    /// directory, so — like Remove — it's gated on the runner actually being the
+    /// local one (only it can reach the on-disk skill path). Remote SSH/NIO
+    /// profiles can't publish a local directory.
+    private var publishAvailable: Bool { runner?.deliversStdin == true }
+
+    /// Whether **Force remove** can run. It deletes a local skill directory, so
+    /// — like Publish/Remove — it requires the local runner. Remote SSH/NIO
+    /// profiles have no delete transport.
+    private var forceRemoveAvailable: Bool { runner?.deliversStdin == true }
 
     var body: some View {
         Group {
@@ -280,7 +493,7 @@ struct SkillsView: View {
         .task(id: client != nil) {
             guard let client else { harness = nil; return }
             if harness != nil { consumeFocus(harness: harness!); return }
-            let h = SkillsHarness(client: client, runner: runner)
+            let h = SkillsHarness(client: client, runner: runner, hermesHome: hermesHome)
             h.banners = banners
             h.bannerKey = "skills"
             harness = h
@@ -321,6 +534,9 @@ struct SkillsView: View {
                 .disabled(harness.isLoading)
                 .help("Refresh the skills list")
             }
+            ToolbarItem {
+                bundledSkillsMenu(harness: harness)
+            }
         }
         // Hard errors route to the top-of-window strip; only the capability warning stays in-surface.
         .manageBanner(
@@ -333,9 +549,65 @@ struct SkillsView: View {
                     .skillsHub,
                     feature: "Installing, updating and removing Skills Hub skills",
                     version: hermesVersion
+                )
+                ?? capabilityBanner(
+                    .skillsLifecycle,
+                    feature: "Auditing, resetting, repairing, publishing and bundled-skill opt-in/out",
+                    version: hermesVersion
                 ),
             severity: .warning
         )
+        .alert("Opt out of bundled skills?", isPresented: $confirmingOptOut) {
+            Button("Cancel", role: .cancel) {}
+            Button("Opt out") { Task { await harness.optOut() } }
+        } message: {
+            Text("Stops built-in skills from seeding into this profile. Already-installed copies are left in place.")
+        }
+        .sheet(item: $publishTarget) { target in
+            PublishSheet(skillName: target.skillName, defaultPath: target.path) { path, registry, repo in
+                Task { await harness.publish(name: target.skillName, path: path, registry: registry, repo: repo) }
+            }
+        }
+        .sheet(item: Binding(
+            get: { harness.auditReport },
+            set: { harness.auditReport = $0 }
+        )) { report in
+            AuditReportSheet(report: report)
+        }
+    }
+
+    /// Bundled-skill seeding actions, grouped in one toolbar menu. Gated behind
+    /// ``lifecycleAvailable``; below the gate the in-surface `capabilityBanner`
+    /// explains why.
+    @ViewBuilder
+    private func bundledSkillsMenu(harness: SkillsHarness) -> some View {
+        Menu {
+            Button {
+                confirmingOptOut = true
+            } label: {
+                Label("Opt out of bundled skills", systemImage: "xmark.circle")
+            }
+            .help("Stops built-in skills from seeding into this profile")
+
+            Button {
+                Task { await harness.optIn() }
+            } label: {
+                Label("Opt back in", systemImage: "checkmark.circle")
+            }
+            .help("Re-enables seeding of built-in skills into this profile")
+
+            Button {
+                Task { await harness.reseed() }
+            } label: {
+                Label("Re-seed bundled skills now", systemImage: "arrow.clockwise.circle")
+            }
+            .help("Re-enables seeding and copies the built-in skills in immediately")
+        } label: {
+            Label("Bundled skills", systemImage: "shippingbox")
+        }
+        .menuIndicator(.visible)
+        .disabled(!lifecycleAvailable || harness.seedingBusy)
+        .help("Opt in or out of seeding Hermes' built-in skills into this profile")
     }
 
     // MARK: - Primary pane (search + install form + table)
@@ -472,16 +744,22 @@ struct SkillsView: View {
                 SkillRow(
                     skill: skill,
                     isExpanded: harness.selectionID == skill.name,
-                    isHubManaged: harness.isHubManaged(skill.name),
-                    isLocal: harness.isLocal(skill.name),
+                    kind: harness.kind(for: skill.name),
+                    isOfficial: harness.isOfficial(skill.name),
                     updateAvailable: harness.updatableNames.contains(skill.name),
                     mutationsAvailable: mutationsAvailable,
                     removeAvailable: removeAvailable,
+                    lifecycleAvailable: lifecycleAvailable,
+                    publishAvailable: publishAvailable,
                     busy: harness.busy.contains(skill.name),
                     toggling: harness.toggling.contains(skill.name),
                     onToggle: { enabled in Task { await harness.setEnabled(skill.name, enabled: enabled) } },
                     onUpdate: { Task { await harness.update(skill.name) } },
-                    onRemove: { Task { await harness.remove(skill.name) } }
+                    onRemove: { Task { await harness.remove(skill.name) } },
+                    onAudit: { Task { await harness.audit(skill.name) } },
+                    onReset: { Task { await harness.reset(skill.name) } },
+                    onRepair: { Task { await harness.repair(skill.name) } },
+                    onPublish: { publishTarget = PublishTarget(skillName: skill.name, path: defaultPublishPath(for: skill)) }
                 )
                 .tag(skill.name)
             }
@@ -493,6 +771,27 @@ struct SkillsView: View {
         }
         .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    /// The on-disk directory a skill occupies under the local skills root
+    /// (`<hermesHome>/skills/[<category>/]<name>`, `hermesHome` from the profile,
+    /// default `~/.hermes`). `skills list` doesn't expose the path, so this is the
+    /// default the Publish sheet pre-fills and the path the Force-remove
+    /// confirmation names.
+    private func skillDirectoryPath(for skill: DashboardSkill) -> String {
+        var url = HermesSkillsFileStore.localSkillsRoot(hermesHome: hermesHome)
+        if let category = skill.category, !category.isEmpty {
+            url.appendPathComponent(category, isDirectory: true)
+        }
+        url.appendPathComponent(skill.name, isDirectory: true)
+        return url.path
+    }
+}
+
+/// Identifies the local skill being published, seeding the publish sheet.
+private struct PublishTarget: Identifiable {
+    let skillName: String
+    let path: String
+    var id: String { skillName }
 }
 
 /// One Skills Hub search result row: identity + trust + description, with an
@@ -557,24 +856,31 @@ private struct SkillSearchRow: View {
 
 /// One inline-expanding row in the installed-skills list (mirroring the
 /// Environment screen's `EnvVarRow`). Collapsed, it shows the skill name (with a
-/// Hub badge and an update hint), a one-line description preview, its category,
-/// and the enable toggle. Selected (`isExpanded`) it grows in place to reveal
-/// the full description and the Skills Hub Update / Remove actions — the content
-/// that used to live in the detail pane. `confirmingRemove` is per-row state, so
-/// the Remove confirmation lives here rather than on the harness.
+/// Hub/Local badge and an update hint), a one-line description preview, its
+/// category, and the enable toggle. Selected (`isExpanded`) it grows in place to
+/// reveal the full description and a **kind-appropriate** action cluster — hub:
+/// Update / Audit / Remove; builtin: Repair (official only) / Reset; local:
+/// Publish. `confirmingRemove` is per-row state, so the Remove confirmation
+/// lives here rather than on the harness.
 private struct SkillRow: View {
     let skill: DashboardSkill
     let isExpanded: Bool
-    let isHubManaged: Bool
-    let isLocal: Bool
+    let kind: SkillKind?
+    let isOfficial: Bool
     let updateAvailable: Bool
     let mutationsAvailable: Bool
     let removeAvailable: Bool
+    let lifecycleAvailable: Bool
+    let publishAvailable: Bool
     let busy: Bool
     let toggling: Bool
     let onToggle: (Bool) -> Void
     let onUpdate: () -> Void
     let onRemove: () -> Void
+    let onAudit: () -> Void
+    let onReset: () -> Void
+    let onRepair: () -> Void
+    let onPublish: () -> Void
 
     @State private var confirmingRemove = false
 
@@ -585,17 +891,20 @@ private struct SkillRow: View {
         // Header (name + toggle) and a detail row beneath it. The description
         // always lives in the detail row — same position, gap and font whether
         // the row is selected or not — so expanding only un-truncates the text
-        // and reveals the hub actions, never shifts the description.
+        // and reveals the actions, never shifts the description.
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 HStack(spacing: 6) {
                     Text(skill.name)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    if isHubManaged {
+                    switch kind {
+                    case .hub:
                         SkillPill(text: "Hub", color: .blue)
-                    } else if isLocal {
+                    case .local:
                         SkillPill(text: "Local", color: .secondary)
+                    case .builtin, .none:
+                        EmptyView()
                     }
                     if updateAvailable {
                         Image(systemName: "arrow.up.circle")
@@ -637,13 +946,13 @@ private struct SkillRow: View {
         }
     }
 
-    /// The description (left) and, when expanded, the hub actions (right) on one
-    /// shared row — like the Environment screen. The description is single-line
-    /// when collapsed and wraps when expanded, but its position/size never
-    /// change, so selecting a row isn't visually jarring.
+    /// The description (left) and, when expanded, the kind-appropriate actions
+    /// (right) on one shared row — like the Environment screen. The description
+    /// is single-line when collapsed and wraps when expanded, but its
+    /// position/size never change, so selecting a row isn't visually jarring.
     @ViewBuilder
     private var detailRow: some View {
-        if hasDescription || (isExpanded && isHubManaged) {
+        if hasDescription || (isExpanded && kind != nil) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if hasDescription {
                     Text(skill.description ?? "")
@@ -658,52 +967,123 @@ private struct SkillRow: View {
                     Spacer(minLength: 0)
                 }
 
-                // Update / Remove are offered only for hub-installed skills
-                // (builtin and local skills aren't managed by the hub and can't
-                // be removed this way), once the row is expanded.
-                if isExpanded, isHubManaged {
-                    actions
+                // The action cluster differs by skill kind, and only shows once
+                // the row is expanded.
+                if isExpanded, let kind {
+                    actions(for: kind)
                 }
             }
         }
     }
 
-    /// Trailing-aligned Update / Remove buttons with the explanatory caption
-    /// directly beneath them.
-    private var actions: some View {
+    /// Trailing-aligned, kind-specific action buttons with any explanatory
+    /// caption directly beneath them.
+    @ViewBuilder
+    private func actions(for kind: SkillKind) -> some View {
         VStack(alignment: .trailing, spacing: 4) {
             HStack(spacing: 8) {
-                Button {
-                    onUpdate()
-                } label: {
-                    Label("Update", systemImage: "arrow.triangle.2.circlepath")
+                switch kind {
+                case .hub:
+                    hubButtons
+                case .builtin:
+                    builtinButtons
+                case .local:
+                    localButtons
                 }
-                .disabled(busy || !mutationsAvailable)
-                .help("Pull the latest version from the source")
-
-                Button(role: .destructive) {
-                    confirmingRemove = true
-                } label: {
-                    Label("Remove", systemImage: "trash")
-                }
-                .disabled(busy || !removeAvailable)
-                .help("Uninstall this skill from the Hermes host")
-
                 if busy { ProgressView().controlSize(.small) }
             }
+            caption(for: kind)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// hub: Update / Audit / Remove.
+    @ViewBuilder
+    private var hubButtons: some View {
+        Button {
+            onUpdate()
+        } label: {
+            Label("Update", systemImage: "arrow.triangle.2.circlepath")
+        }
+        .disabled(busy || !mutationsAvailable)
+        .help("Pull the latest version from the source")
+
+        Button {
+            onAudit()
+        } label: {
+            Label("Audit", systemImage: "checkmark.shield")
+        }
+        .disabled(busy || !lifecycleAvailable)
+        .help("Re-scan this skill and show the security report")
+
+        Button(role: .destructive) {
+            confirmingRemove = true
+        } label: {
+            Label("Remove", systemImage: "trash")
+        }
+        .disabled(busy || !removeAvailable)
+        .help("Uninstall this skill from the Hermes host")
+    }
+
+    /// builtin: Repair (official only) / Reset.
+    @ViewBuilder
+    private var builtinButtons: some View {
+        if isOfficial {
+            Button {
+                onRepair()
+            } label: {
+                Label("Repair", systemImage: "bandage")
+            }
+            .disabled(busy || !lifecycleAvailable)
+            .help("Backfill this official skill's hub metadata")
+        }
+
+        Button {
+            onReset()
+        } label: {
+            Label("Reset", systemImage: "arrow.uturn.backward")
+        }
+        .disabled(busy || !lifecycleAvailable)
+        .help("Clear this skill's user-modified tracking")
+    }
+
+    /// local: Publish.
+    @ViewBuilder
+    private var localButtons: some View {
+        Button {
+            onPublish()
+        } label: {
+            Label("Publish", systemImage: "square.and.arrow.up")
+        }
+        .disabled(busy || !publishAvailable || !lifecycleAvailable)
+        .help("Publish this local skill to a registry")
+    }
+
+    /// Per-kind explanatory caption for unavailable affordances.
+    @ViewBuilder
+    private func caption(for kind: SkillKind) -> some View {
+        switch kind {
+        case .hub:
             if !mutationsAvailable {
-                Text("Admin runner unavailable.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                captionText("Admin runner unavailable.")
             } else if !removeAvailable {
                 // Update works over SSH/NIO; uninstall needs a local stdin
                 // prompt (no `--yes` in v0.14.0), so Remove is disabled here.
-                Text("Remove is unavailable on remote profiles.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                captionText("Remove is unavailable on remote profiles.")
             }
+        case .local:
+            if !publishAvailable {
+                captionText("Publish is available on local profiles only.")
+            }
+        case .builtin:
+            EmptyView()
         }
-        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func captionText(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
     }
 }
 
@@ -721,5 +1101,121 @@ private struct SkillPill: View {
             .background(color.opacity(0.15), in: Capsule())
             .foregroundStyle(color == .secondary ? Color.secondary : color)
             .lineLimit(1)
+    }
+}
+
+/// Sheet for publishing a **local** skill to a registry. Holds the editable
+/// registry / repo / path locally and reports the chosen values back through
+/// `onPublish`. `path` is seeded from a derived default (publish's positional
+/// arg is a directory `skills list` doesn't expose), so it stays editable.
+private struct PublishSheet: View {
+    let skillName: String
+    let onPublish: (String, SkillsPublishRegistry, String?) -> Void
+
+    @State private var path: String
+    @State private var registry: SkillsPublishRegistry = .github
+    @State private var repo: String = ""
+    @Environment(\.dismiss) private var dismiss
+
+    init(
+        skillName: String,
+        defaultPath: String,
+        onPublish: @escaping (String, SkillsPublishRegistry, String?) -> Void
+    ) {
+        self.skillName = skillName
+        self.onPublish = onPublish
+        self._path = State(initialValue: defaultPath)
+    }
+
+    /// github always needs a repo; clawhub's is optional. The path is always
+    /// required (it's publish's positional directory argument).
+    private var canPublish: Bool {
+        guard !path.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        if registry == .github {
+            return !repo.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+        return true
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Publish “\(skillName)”")
+                .font(.headline)
+
+            Form {
+                Picker("Registry", selection: $registry) {
+                    Text("GitHub").tag(SkillsPublishRegistry.github)
+                    Text("ClawHub").tag(SkillsPublishRegistry.clawhub)
+                }
+                .pickerStyle(.segmented)
+
+                TextField(
+                    registry == .github ? "owner/repo" : "owner/repo (optional)",
+                    text: $repo
+                )
+
+                TextField("Skill directory path", text: $path)
+            }
+            .formStyle(.grouped)
+
+            if registry == .clawhub {
+                Text("ClawHub can infer the repository; leave it blank to use the default.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                    .help("Dismiss without publishing")
+                Button("Publish") {
+                    let trimmedRepo = repo.trimmingCharacters(in: .whitespaces)
+                    onPublish(
+                        path.trimmingCharacters(in: .whitespaces),
+                        registry,
+                        trimmedRepo.isEmpty ? nil : trimmedRepo
+                    )
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!canPublish)
+                .help("Publish this skill to the selected registry")
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 420)
+    }
+}
+
+/// Sheet presenting a captured `skills audit` report — scrollable, monospaced,
+/// with a Done button. Dismissing clears `auditReport` via the `.sheet(item:)`
+/// binding.
+private struct AuditReportSheet: View {
+    let report: SkillAuditReport
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Audit: \(report.name)")
+                .font(.headline)
+
+            ScrollView {
+                Text(report.text)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(minHeight: 200, maxHeight: 360)
+
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+                    .help("Dismiss the audit report")
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 480)
     }
 }

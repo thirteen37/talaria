@@ -24,7 +24,8 @@ struct ExtensionsTabsView: View {
                 SkillsView(
                     client: harness.dashboardClient,
                     runner: harness.store.adminRunner,
-                    hermesVersion: harness.effectiveHermesVersion
+                    hermesVersion: harness.effectiveHermesVersion,
+                    hermesHome: harness.profile.hermesHome
                 )
             },
             DestinationTab(id: "tools", title: "Tools", systemImage: "wrench.and.screwdriver") {
