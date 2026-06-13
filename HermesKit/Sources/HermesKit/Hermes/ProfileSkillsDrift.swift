@@ -7,10 +7,13 @@ import Foundation
 /// `hermes skills list` doesn't print the install identifier; it prints a
 /// display `name` (which for a skills-sh install *is* the identifier) plus a
 /// `source` origin. Recovering the identifier is therefore a best-effort cascade
-/// over the public catalog:
-///   1. the installed name is itself a catalog identifier (the
+/// over the public catalog (order matches ``identifier(for:)``):
+///   1. an exact case-insensitive `(name, source)` catalog match — tried FIRST so
+///      a bare-name install (e.g. official `1password`) resolves to its own
+///      source's identifier rather than a different source whose identifier
+///      happens to equal that bare name (see the inline note in `identifier(for:)`);
+///   2. the installed name is itself a catalog identifier (the
 ///      `skills-sh/github/foo-bar` shape);
-///   2. an exact case-insensitive `(name, source)` catalog match;
 ///   3. the name is unique across the whole catalog (source disagreement is
 ///      tolerated — origins drift);
 ///   4. otherwise `nil` — the skill can't be safely installed and the UI shows a

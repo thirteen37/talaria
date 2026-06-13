@@ -198,9 +198,15 @@ final class ProfileSyncHarness {
         hasLoaded = true
     }
 
+    /// In-flight per-profile loads, so concurrent ``selectProfile(_:)`` callers
+    /// (the picker's `onChange` and the Skills section's content-drift task fire
+    /// together on a switch) share one fetch instead of racing two.
+    private var profileLoads: [String: Task<Void, Never>] = [:]
+
     /// Loads a single named profile on demand (the default snapshot + schema +
     /// catalog from the last ``refresh(namedProfiles:)`` are reused), so switching
-    /// the picker doesn't re-fetch every profile. A no-op once it's cached.
+    /// the picker doesn't re-fetch every profile. A no-op once it's cached;
+    /// concurrent calls for the same profile coalesce onto one fetch.
     func selectProfile(_ name: String) async {
         if snapshots[name] != nil {
             if !namedProfiles.contains(name) {
@@ -209,7 +215,14 @@ final class ProfileSyncHarness {
             }
             return
         }
-        await refreshProfile(name, addingToNamed: true)
+        if let existing = profileLoads[name] {
+            await existing.value
+            return
+        }
+        let task = Task { await refreshProfile(name, addingToNamed: true) }
+        profileLoads[name] = task
+        await task.value
+        profileLoads[name] = nil
     }
 
     /// Re-fetches just one profile (plus default stays cached) after a push, so a
@@ -257,6 +270,12 @@ final class ProfileSyncHarness {
     /// a skill that can't be read on a side is skipped.
     func loadSkillContentDrift(for profile: String) async {
         guard let serverProfile else { return }
+        guard !skillContentLoaded.contains(profile), !skillContentLoading.contains(profile) else { return }
+        // On a picker switch this runs concurrently with the picker's
+        // `selectProfile`, which lazily fetches the snapshot. Ensure it's present
+        // first (coalesced, so no double fetch) — otherwise the guard below loses
+        // the race and content drift never re-fires until the user toggles away.
+        await selectProfile(profile)
         guard !skillContentLoaded.contains(profile), !skillContentLoading.contains(profile) else { return }
         guard let defaultSkills = snapshots["default"]?.skills,
               let profileSkills = snapshots[profile]?.skills else { return }
@@ -347,17 +366,7 @@ final class ProfileSyncHarness {
         envDrift = env
     }
 
-    // MARK: - Summary
-
-    /// Total out-of-sync items across all named profiles.
-    var totalDifferences: Int {
-        namedProfiles.reduce(0) { $0 + differenceCount(for: $1) }
-    }
-
-    /// Named profiles that have at least one difference.
-    var profilesWithDrift: Int {
-        namedProfiles.filter { differenceCount(for: $0) > 0 }.count
-    }
+    // MARK: - Difference counts
 
     func differenceCount(for profile: String) -> Int {
         (skillsDrift[profile]?.items.count ?? 0)
@@ -376,8 +385,6 @@ final class ProfileSyncHarness {
     func syncableConfigCount(for profile: String) -> Int {
         configDrift[profile]?.pushPayload(curatedOnly: !showAllConfigDifferences).count ?? 0
     }
-
-    var allInSync: Bool { totalDifferences == 0 }
 
     // MARK: - Push: skills
 
