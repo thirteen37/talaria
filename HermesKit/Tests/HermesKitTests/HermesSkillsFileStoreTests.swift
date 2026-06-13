@@ -50,6 +50,51 @@ struct HermesSkillsFileStoreTests {
         )
     }
 
+    // MARK: - remoteForceDeleteCommand
+
+    @Test
+    func remoteCommandForDefaultHome() throws {
+        let cmd = try HermesSkillsFileStore.remoteForceDeleteCommand(hermesHome: nil, category: nil, name: "cmux")
+        #expect(cmd == "rm -rf -- $HOME/'.hermes/skills/cmux'")
+    }
+
+    @Test
+    func remoteCommandWithCategoryAndAbsoluteHome() throws {
+        let cmd = try HermesSkillsFileStore.remoteForceDeleteCommand(
+            hermesHome: "/opt/hermes", category: "creative", name: "pixel-art"
+        )
+        #expect(cmd == "rm -rf -- '/opt/hermes/skills/creative/pixel-art'")
+    }
+
+    @Test
+    func remoteCommandWithTildeHome() throws {
+        let cmd = try HermesSkillsFileStore.remoteForceDeleteCommand(
+            hermesHome: "~/custom", category: nil, name: "cmux"
+        )
+        #expect(cmd == "rm -rf -- $HOME/'custom/skills/cmux'")
+    }
+
+    @Test
+    func remoteCommandRejectsTraversalName() {
+        #expect(throws: HermesSkillsFileStore.RemoteForceDeleteError.unsafeName) {
+            try HermesSkillsFileStore.remoteForceDeleteCommand(hermesHome: nil, category: nil, name: "../etc")
+        }
+    }
+
+    @Test
+    func remoteCommandRejectsUnsafeCategory() {
+        #expect(throws: HermesSkillsFileStore.RemoteForceDeleteError.unsafeCategory) {
+            try HermesSkillsFileStore.remoteForceDeleteCommand(hermesHome: nil, category: "a/b", name: "cmux")
+        }
+    }
+
+    @Test
+    func remoteCommandRejectsTraversalInHome() {
+        #expect(throws: HermesSkillsFileStore.RemoteForceDeleteError.unsafePath) {
+            try HermesSkillsFileStore.remoteForceDeleteCommand(hermesHome: "~/../evil", category: nil, name: "cmux")
+        }
+    }
+
     // MARK: - forceDelete happy paths
 
     @Test

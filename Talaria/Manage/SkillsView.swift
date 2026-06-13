@@ -17,6 +17,21 @@ struct SkillAuditReport: Identifiable {
     var id: String { name }
 }
 
+/// Failures specific to the remote (host-shell) Force-remove path.
+enum SkillForceRemoveError: LocalizedError {
+    case remoteShellUnavailable
+    case remoteCommandFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .remoteShellUnavailable:
+            return "Force remove is unavailable: no shell on the remote host."
+        case .remoteCommandFailed(let detail):
+            return detail
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class SkillsHarness {
@@ -87,6 +102,10 @@ final class SkillsHarness {
     /// Remote file transport for the preview read on SSH profiles; nil/unused
     /// for local profiles.
     let transfer: RemoteSnapshotTransfer?
+    /// Host shell on the profile's host (local `/bin/sh` or remote SSH), used to
+    /// `rm -rf` a skill directory on a **remote** profile (the local path uses
+    /// `FileManager`). nil disables remote Force remove.
+    let hostShell: HostShellRunning?
 
     /// SKILL.md preview for the selected skill (raw markdown, highlighted in the
     /// detail panel). `previewName` keys the load so a slow read for a since-
@@ -101,12 +120,14 @@ final class SkillsHarness {
         runner: HermesAdminRunning?,
         profile: ServerProfile? = nil,
         transfer: RemoteSnapshotTransfer? = nil,
+        hostShell: HostShellRunning? = nil,
         catalog: SkillsHubCatalog = SkillsHubCatalog()
     ) {
         self.client = client
         self.runner = runner
         self.profile = profile
         self.transfer = transfer
+        self.hostShell = hostShell
         self.catalog = catalog
     }
 
@@ -332,15 +353,30 @@ final class SkillsHarness {
 
     /// Force-removes a skill by deleting its directory directly — the fallback
     /// for builtin/local skills (which `hermes skills uninstall` refuses) and for
-    /// a stuck hub uninstall. Local profiles only (gated by the caller); deletion
-    /// is fast local filesystem I/O so it runs on the MainActor like the other
-    /// mutators.
+    /// a stuck hub uninstall. **Local** profiles delete via `FileManager`
+    /// (symlink-aware guard); **remote** profiles `rm -rf` over the host shell
+    /// (string-validated path, since the leaf can't be `stat`ed over SSH).
     func forceRemove(_ name: String, category: String?) async {
-        guard runner?.deliversStdin == true else { return }
+        guard let profile else { return }
         busy.insert(name)
         defer { busy.remove(name) }
         do {
-            try HermesSkillsFileStore.forceDelete(skillsRoot: skillsRoot, category: category, name: name)
+            switch profile.kind {
+            case .local:
+                try HermesSkillsFileStore.forceDelete(skillsRoot: skillsRoot, category: category, name: name)
+            case .ssh:
+                guard let hostShell else { throw SkillForceRemoveError.remoteShellUnavailable }
+                let command = try HermesSkillsFileStore.remoteForceDeleteCommand(
+                    hermesHome: profile.hermesHome, category: category, name: name
+                )
+                let result = try await hostShell.runShell(command, workingDirectory: nil)
+                guard result.exitCode == 0 else {
+                    let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                    throw SkillForceRemoveError.remoteCommandFailed(
+                        detail.isEmpty ? "Force remove failed (exit \(result.exitCode))." : detail
+                    )
+                }
+            }
             if selectionID == name { selectionID = nil }
             await refresh()
         } catch {
@@ -455,6 +491,7 @@ struct SkillsView: View {
     let hermesVersion: HermesVersion?
     let profile: ServerProfile?
     let transfer: RemoteSnapshotTransfer?
+    let hostShell: HostShellRunning?
 
     /// Window's top-of-window banner hub. Optional so a host that doesn't supply
     /// one degrades to no-op (hard errors then simply don't render).
@@ -480,13 +517,15 @@ struct SkillsView: View {
         runner: HermesAdminRunning? = nil,
         hermesVersion: HermesVersion? = nil,
         profile: ServerProfile? = nil,
-        transfer: RemoteSnapshotTransfer? = nil
+        transfer: RemoteSnapshotTransfer? = nil,
+        hostShell: HostShellRunning? = nil
     ) {
         self.client = client
         self.runner = runner
         self.hermesVersion = hermesVersion
         self.profile = profile
         self.transfer = transfer
+        self.hostShell = hostShell
     }
 
     /// Whether the Skills Hub install/update affordances can run: they need the
@@ -510,16 +549,22 @@ struct SkillsView: View {
         runner != nil && CapabilityTable().has(.skillsLifecycle, in: hermesVersion)
     }
 
-    /// Whether **Publish** can run. Publish operates on a *local* skill
-    /// directory, so — like Remove — it's gated on the runner actually being the
-    /// local one (only it can reach the on-disk skill path). Remote SSH/NIO
-    /// profiles can't publish a local directory.
-    private var publishAvailable: Bool { runner?.deliversStdin == true }
+    /// Whether **Publish** can run. `hermes skills publish` is a plain CLI
+    /// command (no stdin, no local filesystem) that runs on whichever host the
+    /// runner targets, so it works on local **and** remote — same gate as
+    /// Update/Audit (a runner plus the lifecycle capability).
+    private var publishAvailable: Bool { mutationsAvailable }
 
-    /// Whether **Force remove** can run. It deletes a local skill directory, so
-    /// — like Publish/Remove — it requires the local runner. Remote SSH/NIO
-    /// profiles have no delete transport.
-    private var forceRemoveAvailable: Bool { runner?.deliversStdin == true }
+    /// Whether **Force remove** can run. Local profiles delete via `FileManager`;
+    /// remote profiles `rm -rf` over the host shell, so a remote profile needs a
+    /// host shell.
+    private var forceRemoveAvailable: Bool {
+        guard let profile else { return false }
+        switch profile.kind {
+        case .local: return true
+        case .ssh: return hostShell != nil
+        }
+    }
 
     var body: some View {
         Group {
@@ -543,7 +588,9 @@ struct SkillsView: View {
         .task(id: client != nil) {
             guard let client else { harness = nil; return }
             if harness != nil { consumeFocus(harness: harness!); return }
-            let h = SkillsHarness(client: client, runner: runner, profile: profile, transfer: transfer)
+            let h = SkillsHarness(
+                client: client, runner: runner, profile: profile, transfer: transfer, hostShell: hostShell
+            )
             h.banners = banners
             h.bannerKey = "skills"
             harness = h
@@ -859,12 +906,22 @@ struct SkillsView: View {
     /// default the Publish sheet pre-fills and the path the Force-remove
     /// confirmation names.
     private func skillDirectoryPath(for skill: DashboardSkill) -> String {
-        var url = HermesSkillsFileStore.localSkillsRoot(hermesHome: profile?.hermesHome)
-        if let category = skill.category, !category.isEmpty {
-            url.appendPathComponent(category, isDirectory: true)
+        switch profile?.kind {
+        case .ssh:
+            // A path on the remote host — keep `~` literal so the remote side
+            // resolves it (don't local-expand the tilde).
+            let home = profile?.hermesHome?.trimmingCharacters(in: .whitespaces)
+            var path = (home?.isEmpty == false ? home! : "~/.hermes") + "/skills"
+            if let category = skill.category, !category.isEmpty { path += "/\(category)" }
+            return path + "/\(skill.name)"
+        case .local, .none:
+            var url = HermesSkillsFileStore.localSkillsRoot(hermesHome: profile?.hermesHome)
+            if let category = skill.category, !category.isEmpty {
+                url.appendPathComponent(category, isDirectory: true)
+            }
+            url.appendPathComponent(skill.name, isDirectory: true)
+            return url.path
         }
-        url.appendPathComponent(skill.name, isDirectory: true)
-        return url.path
     }
 }
 
@@ -1237,12 +1294,13 @@ private struct SkillDetail: View {
         if case .hub? = kind, !mutationsAvailable {
             captionText("Admin runner unavailable.")
         } else if case .hub? = kind, !removeAvailable {
-            captionText("Remove is unavailable on remote profiles.")
-        } else if case .local? = kind, !publishAvailable {
-            captionText("Publish is available on local profiles only.")
+            // `hermes skills uninstall` has no `--yes` and prompts on stdin,
+            // which only the local runner delivers — so clean Remove is
+            // local-only. (Force remove below still works on remote.)
+            captionText("Remove is unavailable on remote profiles; use Force remove.")
         }
         if !forceRemoveAvailable {
-            captionText("Force remove is available on local profiles only.")
+            captionText("Force remove is unavailable on this profile.")
         }
     }
 

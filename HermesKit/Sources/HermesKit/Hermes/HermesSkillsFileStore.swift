@@ -103,4 +103,62 @@ public enum HermesSkillsFileStore {
         guard fileManager.fileExists(atPath: path.path) else { throw ForceDeleteError.notFound }
         try fileManager.removeItem(at: path)
     }
+
+    // MARK: - Remote force-delete
+
+    public enum RemoteForceDeleteError: Error, Equatable, LocalizedError {
+        /// The skill `name` isn't a single safe path segment.
+        case unsafeName
+        /// The `category` isn't a single safe path segment.
+        case unsafeCategory
+        /// The resolved path contains a `..` component (e.g. a crafted
+        /// `hermesHome`) and could escape the skills tree.
+        case unsafePath
+
+        public var errorDescription: String? {
+            switch self {
+            case .unsafeName:     return "Refusing to delete: unsafe skill name."
+            case .unsafeCategory: return "Refusing to delete: unsafe skill category."
+            case .unsafePath:     return "Refusing to delete: the resolved path escapes the skills directory."
+            }
+        }
+    }
+
+    /// Builds a `/bin/sh`-safe `rm -rf` command for a skill directory on a
+    /// **remote** host's Hermes skills tree, for the host-shell delete path
+    /// (there's no `FileManager` over SSH, and the admin runner only runs
+    /// `hermes` subcommands). The local path uses ``forceDelete``'s stronger,
+    /// symlink-aware guard; the remote shell can't `stat` the leaf, so this is a
+    /// string guard: `name`/`category` must each be a single safe segment, and
+    /// the resolved path must contain no `..`. The home base is `$HOME`-relative
+    /// (so `~`/unset resolve on the remote side) or absolute, and is
+    /// shell-quoted. Throws on unsafe input rather than emitting a dangerous
+    /// command.
+    public static func remoteForceDeleteCommand(
+        hermesHome: String?,
+        category: String?,
+        name: String
+    ) throws -> String {
+        guard isSafePathSegment(name) else { throw RemoteForceDeleteError.unsafeName }
+        if let category, !category.isEmpty, !isSafePathSegment(category) {
+            throw RemoteForceDeleteError.unsafeCategory
+        }
+        var tail = "skills"
+        if let category, !category.isEmpty { tail += "/\(category)" }
+        tail += "/\(name)"
+        let path = HermesHomePaths.relativePath(hermesHome: hermesHome, tail: tail)
+        guard !path.split(separator: "/").contains("..") else { throw RemoteForceDeleteError.unsafePath }
+        let quoted = ShellQuoting.shellQuote(path)
+        // `relativePath` returns an absolute path for an absolute `hermesHome`,
+        // else a path relative to the login home (which `$HOME` resolves to).
+        return path.hasPrefix("/") ? "rm -rf -- \(quoted)" : "rm -rf -- $HOME/\(quoted)"
+    }
+
+    /// A single path segment safe to interpolate into a shell path: non-empty,
+    /// not `.`/`..`, and only letters/digits/`.`/`-`/`_` (no separators or shell
+    /// metacharacters).
+    static func isSafePathSegment(_ segment: String) -> Bool {
+        guard !segment.isEmpty, segment != ".", segment != ".." else { return false }
+        return segment.allSatisfy { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" || $0 == "_" }
+    }
 }
