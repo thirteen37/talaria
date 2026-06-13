@@ -873,13 +873,6 @@ struct ProfileSyncView: View {
                         if harness.pushingProfiles.contains(selected) {
                             ProgressView().controlSize(.small)
                         }
-                        // Skills carries its own "Sync all" in its list; Config and
-                        // Environment get one here, pushing every difference at once.
-                        if section != .skills, sectionCount(section, profile: selected, harness: harness) > 0 {
-                            Button("Sync all") { syncAllForSection(selected, harness: harness) }
-                                .help("Push every \(section.rawValue.lowercased()) difference from default to “\(selected)”")
-                                .accessibilityLabel("Sync all \(section.rawValue.lowercased()) from default to \(selected)")
-                        }
                         Button("Sync everything from default") { confirmingProfile = selected }
                             .help("Install/update skills and copy config + credentials from default to “\(selected)”")
                             .accessibilityLabel("Sync everything from default to \(selected)")
@@ -902,7 +895,21 @@ struct ProfileSyncView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .padding(.horizontal)
-                .padding(.bottom, 8)
+                .padding(.bottom, 6)
+
+                // Section-scoped "Sync all", below the tab bar (it acts on the
+                // selected section, so it belongs with it rather than the picker).
+                if sectionCount(section, profile: selected, harness: harness) > 0 {
+                    HStack {
+                        Spacer()
+                        Button("Sync all") { syncAllForSection(selected, harness: harness) }
+                            .controlSize(.small)
+                            .help("Push every \(section.rawValue.lowercased()) difference from default to “\(selected)”")
+                            .accessibilityLabel("Sync all \(section.rawValue.lowercased()) from default to \(selected)")
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 6)
+                }
 
                 Divider()
                 sectionContent(selected, harness: harness)
@@ -960,7 +967,7 @@ struct ProfileSyncView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
                         modifiedSkillsGroup(harness, profile: selected)
-                        SkillsSubsection(harness: harness, profile: selected)
+                        SkillsSubsection(harness: harness, profile: selected, showsSyncAllButton: false)
                     }
                     .padding()
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1270,6 +1277,9 @@ private struct ProfileDriftRow: View {
 private struct SkillsSubsection: View {
     let harness: ProfileSyncHarness
     let profile: String
+    /// Desktop hides the header's "Sync all" because the section bar above it
+    /// already provides one; iPhone (no section bar) keeps it.
+    var showsSyncAllButton = true
 
     var body: some View {
         let drift = harness.skillsDrift[profile]
@@ -1278,13 +1288,15 @@ private struct SkillsSubsection: View {
                 title: "Skills",
                 inSync: drift?.isInSync ?? true,
                 error: harness.resourceErrors[profile]?[.skills] ?? harness.defaultResourceErrors[.skills],
-                showSyncAll: (drift?.items.contains { $0.isActionable }) ?? false,
+                showSyncAll: showsSyncAllButton && ((drift?.items.contains { $0.isActionable }) ?? false),
                 syncAll: { Task { await harness.syncAllSkills(profile: profile) } }
             )
-            if let drift, !drift.isInSync {
+            if let drift {
                 ForEach(drift.items) { item in
                     skillRow(item)
                 }
+                // Shown even when there's no missing/outdated drift — extras are
+                // independent of the sync items.
                 if !drift.extras.isEmpty {
                     Text("\(drift.extras.count) skill\(drift.extras.count == 1 ? "" : "s") only in “\(profile)” (not removed).")
                         .font(.caption2).foregroundStyle(.secondary)
@@ -1425,10 +1437,11 @@ private struct EnvSubsection: View {
                 showSyncAll: (drift?.items.isEmpty == false),
                 syncAll: { Task { await harness.syncAllEnv(profile: profile) } }
             )
-            if let drift, !drift.isInSync {
+            if let drift {
                 ForEach(drift.items) { item in
                     envRow(item)
                 }
+                // Shown even when in sync — extras are independent of the items.
                 if !drift.extras.isEmpty {
                     Text("\(drift.extras.count) key\(drift.extras.count == 1 ? "" : "s") only in “\(profile)” (not removed).")
                         .font(.caption2).foregroundStyle(.secondary)
