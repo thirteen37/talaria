@@ -34,22 +34,6 @@ struct HermesSkillsFileStoreTests {
         #expect(root.path.hasSuffix("/custom/skills"))
     }
 
-    // MARK: - skillMarkdownTail
-
-    @Test
-    func skillMarkdownTailWithoutCategory() {
-        #expect(HermesSkillsFileStore.skillMarkdownTail(category: nil, name: "cmux") == "skills/cmux/SKILL.md")
-        #expect(HermesSkillsFileStore.skillMarkdownTail(category: "", name: "cmux") == "skills/cmux/SKILL.md")
-    }
-
-    @Test
-    func skillMarkdownTailWithCategory() {
-        #expect(
-            HermesSkillsFileStore.skillMarkdownTail(category: "creative", name: "pixel-art")
-                == "skills/creative/pixel-art/SKILL.md"
-        )
-    }
-
     // MARK: - forceDeleteDirectory (delete a resolved dir)
 
     @Test
@@ -76,6 +60,59 @@ struct HermesSkillsFileStoreTests {
             try HermesSkillsFileStore.forceDeleteDirectory(outside, underSkillsRoot: root)
         }
         #expect(FileManager.default.fileExists(atPath: outside.path) == true)
+    }
+
+    @Test
+    func forceDeleteDirectoryThrowsNotFoundForMissingDir() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(throws: HermesSkillsFileStore.ForceDeleteError.notFound) {
+            try HermesSkillsFileStore.forceDeleteDirectory(
+                root.appendingPathComponent("ghost", isDirectory: true), underSkillsRoot: root
+            )
+        }
+    }
+
+    @Test
+    func forceDeleteDirectoryRefusesSymlinkedLeaf() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // A real directory outside the root, and a symlink to it inside the root.
+        let target = root.deletingLastPathComponent()
+            .appendingPathComponent("target-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: target) }
+        let link = root.appendingPathComponent("linkskill", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+        #expect(throws: HermesSkillsFileStore.ForceDeleteError.isSymlink) {
+            try HermesSkillsFileStore.forceDeleteDirectory(link, underSkillsRoot: root)
+        }
+        #expect(FileManager.default.fileExists(atPath: target.path) == true)
+    }
+
+    @Test
+    func forceDeleteDirectoryRefusesViaSymlinkedParent() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // A real directory OUTSIDE the root, holding a "victim" skill dir, with an
+        // intermediate symlinked category inside the root pointing at it.
+        let outside = root.deletingLastPathComponent()
+            .appendingPathComponent("outside-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let victim = outside.appendingPathComponent("pixel-art", isDirectory: true)
+        try FileManager.default.createDirectory(at: victim, withIntermediateDirectories: true)
+        let categoryLink = root.appendingPathComponent("creative", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: categoryLink, withDestinationURL: outside)
+
+        // <root>/creative/pixel-art resolves (via the symlink) to outside/pixel-art.
+        #expect(throws: HermesSkillsFileStore.ForceDeleteError.outsideRoot) {
+            try HermesSkillsFileStore.forceDeleteDirectory(
+                categoryLink.appendingPathComponent("pixel-art", isDirectory: true), underSkillsRoot: root
+            )
+        }
+        #expect(FileManager.default.fileExists(atPath: victim.path) == true)
     }
 
     // MARK: - remoteForceDeleteDirectoryCommand
@@ -207,141 +244,4 @@ struct HermesSkillsFileStoreTests {
         #expect(path == "~/.hermes/skills/cmux")
     }
 
-    // MARK: - remoteForceDeleteCommand
-
-    @Test
-    func remoteCommandForDefaultHome() throws {
-        let cmd = try HermesSkillsFileStore.remoteForceDeleteCommand(hermesHome: nil, category: nil, name: "cmux")
-        #expect(cmd == "rm -rf -- \"$HOME\"/'.hermes/skills/cmux'")
-    }
-
-    @Test
-    func remoteCommandWithCategoryAndAbsoluteHome() throws {
-        let cmd = try HermesSkillsFileStore.remoteForceDeleteCommand(
-            hermesHome: "/opt/hermes", category: "creative", name: "pixel-art"
-        )
-        #expect(cmd == "rm -rf -- '/opt/hermes/skills/creative/pixel-art'")
-    }
-
-    @Test
-    func remoteCommandWithTildeHome() throws {
-        let cmd = try HermesSkillsFileStore.remoteForceDeleteCommand(
-            hermesHome: "~/custom", category: nil, name: "cmux"
-        )
-        #expect(cmd == "rm -rf -- \"$HOME\"/'custom/skills/cmux'")
-    }
-
-    @Test
-    func remoteCommandRejectsTraversalName() {
-        #expect(throws: HermesSkillsFileStore.RemoteForceDeleteError.unsafeName) {
-            try HermesSkillsFileStore.remoteForceDeleteCommand(hermesHome: nil, category: nil, name: "../etc")
-        }
-    }
-
-    @Test
-    func remoteCommandRejectsUnsafeCategory() {
-        #expect(throws: HermesSkillsFileStore.RemoteForceDeleteError.unsafeCategory) {
-            try HermesSkillsFileStore.remoteForceDeleteCommand(hermesHome: nil, category: "a/b", name: "cmux")
-        }
-    }
-
-    @Test
-    func remoteCommandRejectsTraversalInHome() {
-        #expect(throws: HermesSkillsFileStore.RemoteForceDeleteError.unsafePath) {
-            try HermesSkillsFileStore.remoteForceDeleteCommand(hermesHome: "~/../evil", category: nil, name: "cmux")
-        }
-    }
-
-    // MARK: - forceDelete happy paths
-
-    @Test
-    func deletesSkillDirectory() throws {
-        let root = try makeTempRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let skill = root.appendingPathComponent("cmux", isDirectory: true)
-        try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
-
-        try HermesSkillsFileStore.forceDelete(skillsRoot: root, category: nil, name: "cmux")
-        #expect(FileManager.default.fileExists(atPath: skill.path) == false)
-    }
-
-    @Test
-    func deletesCategorizedSkillDirectory() throws {
-        let root = try makeTempRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let skill = root.appendingPathComponent("creative/pixel-art", isDirectory: true)
-        try FileManager.default.createDirectory(at: skill, withIntermediateDirectories: true)
-
-        try HermesSkillsFileStore.forceDelete(skillsRoot: root, category: "creative", name: "pixel-art")
-        #expect(FileManager.default.fileExists(atPath: skill.path) == false)
-    }
-
-    // MARK: - forceDelete refusals
-
-    @Test
-    func throwsNotFoundForMissingSkill() throws {
-        let root = try makeTempRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        #expect(throws: HermesSkillsFileStore.ForceDeleteError.notFound) {
-            try HermesSkillsFileStore.forceDelete(skillsRoot: root, category: nil, name: "ghost")
-        }
-    }
-
-    @Test
-    func traversalNameIsRefusedAndSiblingSurvives() throws {
-        let root = try makeTempRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        // A sibling *outside* the root that a traversal name would target.
-        let sibling = root.deletingLastPathComponent()
-            .appendingPathComponent("victim-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: sibling) }
-
-        #expect(throws: (any Error).self) {
-            try HermesSkillsFileStore.forceDelete(
-                skillsRoot: root, category: nil, name: "../\(sibling.lastPathComponent)"
-            )
-        }
-        #expect(FileManager.default.fileExists(atPath: sibling.path) == true)
-    }
-
-    @Test
-    func symlinkedCategoryIsRefusedAndOutsideSurvives() throws {
-        let root = try makeTempRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        // A real directory OUTSIDE the root, holding a "victim" skill dir.
-        let outside = root.deletingLastPathComponent()
-            .appendingPathComponent("outside-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: outside) }
-        let victim = outside.appendingPathComponent("pixel-art", isDirectory: true)
-        try FileManager.default.createDirectory(at: victim, withIntermediateDirectories: true)
-        // An *intermediate* symlinked category inside the root pointing outside.
-        let categoryLink = root.appendingPathComponent("creative", isDirectory: true)
-        try FileManager.default.createSymbolicLink(at: categoryLink, withDestinationURL: outside)
-
-        // category "creative" resolves to `outside`, so the delete would escape.
-        #expect(throws: (any Error).self) {
-            try HermesSkillsFileStore.forceDelete(skillsRoot: root, category: "creative", name: "pixel-art")
-        }
-        #expect(FileManager.default.fileExists(atPath: victim.path) == true)
-    }
-
-    @Test
-    func symlinkedSkillIsRefusedAndTargetSurvives() throws {
-        let root = try makeTempRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        // Real directory outside the root, and a symlink to it inside the root.
-        let target = root.deletingLastPathComponent()
-            .appendingPathComponent("target-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: target) }
-        let link = root.appendingPathComponent("linkskill", isDirectory: true)
-        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
-
-        #expect(throws: HermesSkillsFileStore.ForceDeleteError.isSymlink) {
-            try HermesSkillsFileStore.forceDelete(skillsRoot: root, category: nil, name: "linkskill")
-        }
-        #expect(FileManager.default.fileExists(atPath: target.path) == true)
-    }
 }

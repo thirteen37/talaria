@@ -1012,7 +1012,11 @@ struct SkillsView: View {
                 lifecycleAvailable: lifecycleAvailable,
                 publishAvailable: publishAvailable,
                 forceRemoveAvailable: forceRemoveAvailable,
-                forceRemovePath: harness.resolvedDir ?? harness.skillDirectoryPath(for: skill),
+                // Only use the cached resolved dir when it's for *this* skill —
+                // loadPreview overwrites it asynchronously, so during a selection
+                // change it can still hold the previous skill's path.
+                forceRemovePath: (harness.resolvedDirName == skill.name ? harness.resolvedDir : nil)
+                    ?? harness.skillDirectoryPath(for: skill),
                 busy: harness.busy.contains(skill.name),
                 previewText: harness.previewText,
                 previewError: harness.previewError,
