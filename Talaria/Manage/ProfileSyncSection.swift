@@ -73,9 +73,6 @@ final class ProfileSyncHarness {
     private(set) var pushingProfiles: Set<String> = []
     /// Per-item push spinners, keyed by ``itemKey(_:profile:id:)``.
     private(set) var pushingItems: Set<String> = []
-    /// Per-item outcome errors (nil entry == cleared/success), keyed like
-    /// `pushingItems`.
-    private(set) var itemErrors: [String: String] = [:]
 
     /// Bumped on every refresh so revealed env secrets re-mask (mirrors
     /// ``EnvironmentHarness``'s refresh token).
@@ -411,17 +408,18 @@ final class ProfileSyncHarness {
         guard let action = skillAction(for: item) else { return }
         let key = itemKey("skill", profile: profile, id: item.id)
         pushingItems.insert(key)
-        itemErrors[key] = nil
         let outcome = await engine.pushSkills(
             actions: [action], toProfile: profile, runnerProvider: makeRunnerProvider()
         ).first
         pushingItems.remove(key)
-        if let error = outcome?.error {
-            itemErrors[key] = error
-            banners?.surfaceError("profiles", error)
-        }
         await refreshProfile(profile)
-        flagSilentSkillNoop(item, profile: profile, output: outcome?.output ?? "")
+        if let error = outcome?.error {
+            banners?.surfaceError("profiles", error)
+        } else {
+            // Only check for a silent no-op when the push itself reported success
+            // — a hard error already surfaced its own banner above.
+            flagSilentSkillNoop(item, profile: profile, output: outcome?.output ?? "")
+        }
     }
 
     /// `hermes skills install`/`update` can exit 0 without taking effect. If the
@@ -429,9 +427,7 @@ final class ProfileSyncHarness {
     /// surface a short, actionable banner; the full Hermes output (often just
     /// progress noise) goes to the App Log rather than the banner.
     private func flagSilentSkillNoop(_ item: SkillDriftItem, profile: String, output: String) {
-        let key = itemKey("skill", profile: profile, id: item.id)
-        guard itemErrors[key] == nil,
-              let still = skillsDrift[profile]?.items.first(where: { $0.name == item.name }) else { return }
+        guard let still = skillsDrift[profile]?.items.first(where: { $0.name == item.name }) else { return }
         let action: String
         let result: String
         switch still.kind {
@@ -441,9 +437,7 @@ final class ProfileSyncHarness {
         if !output.isEmpty {
             AppLog.general.error("Skill sync no-op: \(action, privacy: .public) “\(item.name, privacy: .public)” in “\(profile, privacy: .public)” reported success without effect. Hermes output: \(output, privacy: .public)")
         }
-        let message = "\(action) “\(item.name)” in “\(profile)” reported success \(result) (see App Logs)."
-        itemErrors[key] = message
-        banners?.surfaceError("profiles", message)
+        banners?.surfaceError("profiles", "\(action) “\(item.name)” in “\(profile)” reported success \(result) (see App Logs).")
     }
 
     func syncAllSkills(profile: String) async {
@@ -693,10 +687,6 @@ final class ProfileSyncHarness {
         pushingItems.contains(itemKey(resource, profile: profile, id: id))
     }
 
-    func itemError(_ resource: String, profile: String, id: String) -> String? {
-        itemErrors[itemKey(resource, profile: profile, id: id)]
-    }
-
     private func runItemPush(
         profile: String,
         resource: String,
@@ -705,10 +695,8 @@ final class ProfileSyncHarness {
     ) async {
         let key = itemKey(resource, profile: profile, id: id)
         pushingItems.insert(key)
-        itemErrors[key] = nil
         defer { pushingItems.remove(key) }
         if let error = await work() {
-            itemErrors[key] = error
             banners?.surfaceError("profiles", error)
         }
     }
