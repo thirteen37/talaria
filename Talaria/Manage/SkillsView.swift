@@ -522,8 +522,19 @@ struct SkillsView: View {
         // iPad); the iPhone shell has no Browse, so this never renders there.
         // A single self-contained list — each row expands in place to show the
         // full description and hub actions, so there's no secondary pane.
-        primaryPane(harness: harness)
-            .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+        PlatformSplit(
+            showsSecondary: Binding(
+                get: { harness.selected != nil },
+                set: { if !$0 { harness.selectionID = nil } }
+            ),
+            secondaryTitle: harness.selected?.name
+        ) {
+            primaryPane(harness: harness)
+                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+        } secondary: {
+            detailPane(harness: harness)
+                .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
+        }
         .toolbar {
             ToolbarItem {
                 Button {
@@ -733,9 +744,8 @@ struct SkillsView: View {
 
     @ViewBuilder
     private func skillsList(harness: SkillsHarness) -> some View {
-        // A grouped, inline-expanding list (like the Environment screen): each
-        // row collapses to a summary and grows in place when selected to reveal
-        // the full description and the hub Update / Remove actions — no pane.
+        // Summary rows only; selecting one opens the `PlatformSplit` detail
+        // panel (`SkillDetail`) with the description + kind-appropriate actions.
         List(selection: Binding(
             get: { harness.selectionID },
             set: { harness.selectionID = $0 }
@@ -743,23 +753,10 @@ struct SkillsView: View {
             ForEach(harness.rows) { skill in
                 SkillRow(
                     skill: skill,
-                    isExpanded: harness.selectionID == skill.name,
                     kind: harness.kind(for: skill.name),
-                    isOfficial: harness.isOfficial(skill.name),
                     updateAvailable: harness.updatableNames.contains(skill.name),
-                    mutationsAvailable: mutationsAvailable,
-                    removeAvailable: removeAvailable,
-                    lifecycleAvailable: lifecycleAvailable,
-                    publishAvailable: publishAvailable,
-                    busy: harness.busy.contains(skill.name),
                     toggling: harness.toggling.contains(skill.name),
-                    onToggle: { enabled in Task { await harness.setEnabled(skill.name, enabled: enabled) } },
-                    onUpdate: { Task { await harness.update(skill.name) } },
-                    onRemove: { Task { await harness.remove(skill.name) } },
-                    onAudit: { Task { await harness.audit(skill.name) } },
-                    onReset: { Task { await harness.reset(skill.name) } },
-                    onRepair: { Task { await harness.repair(skill.name) } },
-                    onPublish: { publishTarget = PublishTarget(skillName: skill.name, path: defaultPublishPath(for: skill)) }
+                    onToggle: { enabled in Task { await harness.setEnabled(skill.name, enabled: enabled) } }
                 )
                 .tag(skill.name)
             }
@@ -770,6 +767,32 @@ struct SkillsView: View {
             }
         }
         .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private func detailPane(harness: SkillsHarness) -> some View {
+        if let skill = harness.selected {
+            SkillDetail(
+                skill: skill,
+                kind: harness.kind(for: skill.name),
+                isOfficial: harness.isOfficial(skill.name),
+                updateAvailable: harness.updatableNames.contains(skill.name),
+                mutationsAvailable: mutationsAvailable,
+                removeAvailable: removeAvailable,
+                lifecycleAvailable: lifecycleAvailable,
+                publishAvailable: publishAvailable,
+                forceRemoveAvailable: forceRemoveAvailable,
+                forceRemovePath: skillDirectoryPath(for: skill),
+                busy: harness.busy.contains(skill.name),
+                onUpdate: { Task { await harness.update(skill.name) } },
+                onRemove: { Task { await harness.remove(skill.name) } },
+                onAudit: { Task { await harness.audit(skill.name) } },
+                onReset: { Task { await harness.reset(skill.name) } },
+                onRepair: { Task { await harness.repair(skill.name) } },
+                onPublish: { publishTarget = PublishTarget(skillName: skill.name, path: skillDirectoryPath(for: skill)) },
+                onForceRemove: { Task { await harness.forceRemove(skill.name, category: skill.category) } }
+            )
+        }
     }
 
     /// The on-disk directory a skill occupies under the local skills root
@@ -854,17 +877,68 @@ private struct SkillSearchRow: View {
     }
 }
 
-/// One inline-expanding row in the installed-skills list (mirroring the
-/// Environment screen's `EnvVarRow`). Collapsed, it shows the skill name (with a
-/// Hub/Local badge and an update hint), a one-line description preview, its
-/// category, and the enable toggle. Selected (`isExpanded`) it grows in place to
-/// reveal the full description and a **kind-appropriate** action cluster — hub:
-/// Update / Audit / Remove; builtin: Repair (official only) / Reset; local:
-/// Publish. `confirmingRemove` is per-row state, so the Remove confirmation
-/// lives here rather than on the harness.
+/// One summary row in the installed-skills list. Name + Hub/Local pill + an
+/// update-available hint + category + the enable toggle. Selecting it opens the
+/// detail panel (`SkillDetail`); the row itself carries no actions or expansion.
 private struct SkillRow: View {
     let skill: DashboardSkill
-    let isExpanded: Bool
+    let kind: SkillKind?
+    let updateAvailable: Bool
+    let toggling: Bool
+    let onToggle: (Bool) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Text(skill.name)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                switch kind {
+                case .hub:
+                    SkillPill(text: "Hub", color: .blue)
+                case .local:
+                    SkillPill(text: "Local", color: .secondary)
+                case .builtin, .none:
+                    EmptyView()
+                }
+                if updateAvailable {
+                    Image(systemName: "arrow.up.circle")
+                        .font(.caption)
+                        .foregroundStyle(.blue)
+                        .help("An update is available from the source")
+                        .accessibilityLabel("Update available")
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            if let category = skill.category, !category.isEmpty {
+                Text(category)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Toggle("", isOn: Binding(
+                get: { skill.enabled },
+                set: { onToggle($0) }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .disabled(toggling)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+/// The detail panel for the selected skill (the `PlatformSplit` secondary):
+/// full description plus a kind-appropriate action cluster — hub: Update /
+/// Audit / Remove; builtin: Repair (official) / Reset; local: Publish — plus a
+/// universal, destructive **Force remove** (local profiles only). Mirrors
+/// `PluginDetail`'s prop-drilling style. Per-row confirmations live here.
+private struct SkillDetail: View {
+    let skill: DashboardSkill
     let kind: SkillKind?
     let isOfficial: Bool
     let updateAvailable: Bool
@@ -872,115 +946,92 @@ private struct SkillRow: View {
     let removeAvailable: Bool
     let lifecycleAvailable: Bool
     let publishAvailable: Bool
+    let forceRemoveAvailable: Bool
+    /// The on-disk directory Force remove deletes, named in its confirmation.
+    let forceRemovePath: String
     let busy: Bool
-    let toggling: Bool
-    let onToggle: (Bool) -> Void
     let onUpdate: () -> Void
     let onRemove: () -> Void
     let onAudit: () -> Void
     let onReset: () -> Void
     let onRepair: () -> Void
     let onPublish: () -> Void
+    let onForceRemove: () -> Void
 
     @State private var confirmingRemove = false
-
-    /// True when there's a non-empty description to show.
-    private var hasDescription: Bool { !(skill.description ?? "").isEmpty }
+    @State private var confirmingForceRemove = false
 
     var body: some View {
-        // Header (name + toggle) and a detail row beneath it. The description
-        // always lives in the detail row — same position, gap and font whether
-        // the row is selected or not — so expanding only un-truncates the text
-        // and reveals the actions, never shifts the description.
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 6) {
                     Text(skill.name)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                        .font(.headline)
+                        .textSelection(.enabled)
                     switch kind {
                     case .hub:
                         SkillPill(text: "Hub", color: .blue)
                     case .local:
                         SkillPill(text: "Local", color: .secondary)
-                    case .builtin, .none:
+                    case .builtin:
+                        SkillPill(text: "Built-in", color: .secondary)
+                    case .none:
                         EmptyView()
                     }
                     if updateAvailable {
                         Image(systemName: "arrow.up.circle")
-                            .font(.caption)
                             .foregroundStyle(.blue)
                             .help("An update is available from the source")
                             .accessibilityLabel("Update available")
                     }
                 }
 
-                Spacer(minLength: 8)
-
                 if let category = skill.category, !category.isEmpty {
                     Text(category)
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
                 }
 
-                Toggle("", isOn: Binding(
-                    get: { skill.enabled },
-                    set: { onToggle($0) }
-                ))
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .disabled(toggling)
-            }
+                if let description = skill.description, !description.isEmpty {
+                    Divider()
+                    Text(description)
+                        .font(.body)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
-            detailRow
+                Divider()
+                actions
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .padding(.vertical, 6)
-        .padding(.trailing, 4)
         .alert("Remove \(skill.name)?", isPresented: $confirmingRemove) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) { onRemove() }
         } message: {
             Text("This deletes the installed skill from the Hermes host.")
         }
-    }
-
-    /// The description (left) and, when expanded, the kind-appropriate actions
-    /// (right) on one shared row — like the Environment screen. The description
-    /// is single-line when collapsed and wraps when expanded, but its
-    /// position/size never change, so selecting a row isn't visually jarring.
-    @ViewBuilder
-    private var detailRow: some View {
-        if hasDescription || (isExpanded && kind != nil) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                if hasDescription {
-                    Text(skill.description ?? "")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .lineLimit(isExpanded ? nil : 1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    // Keep the actions pinned right even with no description.
-                    Spacer(minLength: 0)
-                }
-
-                // The action cluster differs by skill kind, and only shows once
-                // the row is expanded.
-                if isExpanded, let kind {
-                    actions(for: kind)
-                }
-            }
+        .alert("Force remove \(skill.name)?", isPresented: $confirmingForceRemove) {
+            Button("Cancel", role: .cancel) {}
+            Button("Force remove", role: .destructive) { onForceRemove() }
+        } message: {
+            Text(forceRemoveMessage)
         }
     }
 
-    /// Trailing-aligned, kind-specific action buttons with any explanatory
-    /// caption directly beneath them.
+    private var forceRemoveMessage: String {
+        let base = "This permanently deletes the skill directory at \(forceRemovePath)."
+        // `if case .builtin? =` (not `==`) so SkillKind needn't be Equatable.
+        if case .builtin? = kind {
+            return base + " A built-in skill may be re-seeded on the next sync unless you opt out of bundled skills."
+        }
+        return base
+    }
+
     @ViewBuilder
-    private func actions(for kind: SkillKind) -> some View {
-        VStack(alignment: .trailing, spacing: 4) {
+    private var actions: some View {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 switch kind {
                 case .hub:
@@ -989,36 +1040,32 @@ private struct SkillRow: View {
                     builtinButtons
                 case .local:
                     localButtons
+                case .none:
+                    EmptyView()
                 }
+                forceRemoveButton
                 if busy { ProgressView().controlSize(.small) }
             }
-            caption(for: kind)
+            captions
         }
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     /// hub: Update / Audit / Remove.
     @ViewBuilder
     private var hubButtons: some View {
-        Button {
-            onUpdate()
-        } label: {
+        Button { onUpdate() } label: {
             Label("Update", systemImage: "arrow.triangle.2.circlepath")
         }
         .disabled(busy || !mutationsAvailable)
         .help("Pull the latest version from the source")
 
-        Button {
-            onAudit()
-        } label: {
+        Button { onAudit() } label: {
             Label("Audit", systemImage: "checkmark.shield")
         }
         .disabled(busy || !lifecycleAvailable)
         .help("Re-scan this skill and show the security report")
 
-        Button(role: .destructive) {
-            confirmingRemove = true
-        } label: {
+        Button(role: .destructive) { confirmingRemove = true } label: {
             Label("Remove", systemImage: "trash")
         }
         .disabled(busy || !removeAvailable)
@@ -1029,18 +1076,14 @@ private struct SkillRow: View {
     @ViewBuilder
     private var builtinButtons: some View {
         if isOfficial {
-            Button {
-                onRepair()
-            } label: {
+            Button { onRepair() } label: {
                 Label("Repair", systemImage: "bandage")
             }
             .disabled(busy || !lifecycleAvailable)
             .help("Backfill this official skill's hub metadata")
         }
 
-        Button {
-            onReset()
-        } label: {
+        Button { onReset() } label: {
             Label("Reset", systemImage: "arrow.uturn.backward")
         }
         .disabled(busy || !lifecycleAvailable)
@@ -1050,33 +1093,35 @@ private struct SkillRow: View {
     /// local: Publish.
     @ViewBuilder
     private var localButtons: some View {
-        Button {
-            onPublish()
-        } label: {
+        Button { onPublish() } label: {
             Label("Publish", systemImage: "square.and.arrow.up")
         }
         .disabled(busy || !publishAvailable || !lifecycleAvailable)
         .help("Publish this local skill to a registry")
     }
 
-    /// Per-kind explanatory caption for unavailable affordances.
+    /// Universal destructive force-delete of the skill directory.
+    private var forceRemoveButton: some View {
+        Button(role: .destructive) { confirmingForceRemove = true } label: {
+            Label("Force remove", systemImage: "trash.slash")
+        }
+        .disabled(busy || !forceRemoveAvailable)
+        .help("Delete this skill's files directly from disk")
+    }
+
+    /// Explanatory captions for unavailable affordances. Uses `if case .X? =`
+    /// (not `==`) so SkillKind needn't be Equatable.
     @ViewBuilder
-    private func caption(for kind: SkillKind) -> some View {
-        switch kind {
-        case .hub:
-            if !mutationsAvailable {
-                captionText("Admin runner unavailable.")
-            } else if !removeAvailable {
-                // Update works over SSH/NIO; uninstall needs a local stdin
-                // prompt (no `--yes` in v0.14.0), so Remove is disabled here.
-                captionText("Remove is unavailable on remote profiles.")
-            }
-        case .local:
-            if !publishAvailable {
-                captionText("Publish is available on local profiles only.")
-            }
-        case .builtin:
-            EmptyView()
+    private var captions: some View {
+        if case .hub? = kind, !mutationsAvailable {
+            captionText("Admin runner unavailable.")
+        } else if case .hub? = kind, !removeAvailable {
+            captionText("Remove is unavailable on remote profiles.")
+        } else if case .local? = kind, !publishAvailable {
+            captionText("Publish is available on local profiles only.")
+        }
+        if !forceRemoveAvailable {
+            captionText("Force remove is available on local profiles only.")
         }
     }
 
