@@ -878,8 +878,10 @@ private struct SkillSearchRow: View {
 }
 
 /// One summary row in the installed-skills list. Name + Hub/Local pill + an
-/// update-available hint + category + the enable toggle. Selecting it opens the
-/// detail panel (`SkillDetail`); the row itself carries no actions or expansion.
+/// update-available hint + category + the enable toggle, over a single-line
+/// description preview. Selecting it opens the detail panel (`SkillDetail`),
+/// which shows the full, wrapping description; the row itself carries no actions
+/// or expansion.
 private struct SkillRow: View {
     let skill: DashboardSkill
     let kind: SkillKind?
@@ -888,45 +890,57 @@ private struct SkillRow: View {
     let onToggle: (Bool) -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Text(skill.name)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                switch kind {
-                case .hub:
-                    SkillPill(text: "Hub", color: .blue)
-                case .local:
-                    SkillPill(text: "Local", color: .secondary)
-                case .builtin, .none:
-                    EmptyView()
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Text(skill.name)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    switch kind {
+                    case .hub:
+                        SkillPill(text: "Hub", color: .blue)
+                    case .local:
+                        SkillPill(text: "Local", color: .secondary)
+                    case .builtin, .none:
+                        EmptyView()
+                    }
+                    if updateAvailable {
+                        Image(systemName: "arrow.up.circle")
+                            .font(.caption)
+                            .foregroundStyle(.blue)
+                            .help("An update is available from the source")
+                            .accessibilityLabel("Update available")
+                    }
                 }
-                if updateAvailable {
-                    Image(systemName: "arrow.up.circle")
+
+                Spacer(minLength: 8)
+
+                if let category = skill.category, !category.isEmpty {
+                    Text(category)
                         .font(.caption)
-                        .foregroundStyle(.blue)
-                        .help("An update is available from the source")
-                        .accessibilityLabel("Update available")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
+
+                Toggle("", isOn: Binding(
+                    get: { skill.enabled },
+                    set: { onToggle($0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .disabled(toggling)
             }
 
-            Spacer(minLength: 8)
-
-            if let category = skill.category, !category.isEmpty {
-                Text(category)
+            // One-line preview; the full description lives in the detail panel.
+            if let description = skill.description, !description.isEmpty {
+                Text(description)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-
-            Toggle("", isOn: Binding(
-                get: { skill.enabled },
-                set: { onToggle($0) }
-            ))
-            .labelsHidden()
-            .toggleStyle(.switch)
-            .controlSize(.small)
-            .disabled(toggling)
         }
         .padding(.vertical, 4)
     }
