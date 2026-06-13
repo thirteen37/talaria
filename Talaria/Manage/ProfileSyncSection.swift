@@ -253,6 +253,16 @@ final class ProfileSyncHarness {
         profileLoads[name] = nil
     }
 
+    /// Recomputes one profile's drift after an out-of-band write — the desktop
+    /// config comparison copies rows through the config editor's own `save()`
+    /// (immediateCopy), which never touches this harness, so without this the
+    /// "Config (N)" badge and "Sync everything" button keep reporting pre-copy
+    /// drift until a manual Refresh. Same cost as the per-row `syncConfigItem`
+    /// refetch, which it mirrors.
+    func reloadDrift(for profile: String) async {
+        await refreshProfile(profile)
+    }
+
     /// Re-fetches just one profile (plus default stays cached) after a push, so a
     /// successful sync collapses that profile's rows without a full sweep.
     private func refreshProfile(_ name: String, addingToNamed: Bool = false) async {
@@ -1136,7 +1146,7 @@ struct ProfileSyncView: View {
                 await harness.loadSkillContentDrift(for: selected)
             }
         case .config:
-            configComparison(selected)
+            configComparison(selected, harness: harness)
         case .environment:
             EnvComparisonView(harness: harness, profile: selected)
         }
@@ -1176,7 +1186,7 @@ struct ProfileSyncView: View {
     }
 
     @ViewBuilder
-    private func configComparison(_ selected: String) -> some View {
+    private func configComparison(_ selected: String, harness: ProfileSyncHarness) -> some View {
         if let editor = configEditor {
             if let dest = editor.dest, dest.profileName == selected {
                 EditableComparisonView(
@@ -1187,7 +1197,10 @@ struct ProfileSyncView: View {
                     allowReverseCopy: false,
                     // Per-row copy must honor the same exclusion the bulk payload
                     // does — never let a stale `auxiliary.*.base_url` be pushed.
-                    copyExcluded: { ConfigSyncScope.isExcludedFromPush(dotpath: $0) }
+                    copyExcluded: { ConfigSyncScope.isExcludedFromPush(dotpath: $0) },
+                    // The copy writes through the editor's own save(); recompute the
+                    // harness drift so the badge/button stop reporting pre-copy drift.
+                    onImmediateCopy: { Task { await harness.reloadDrift(for: selected) } }
                 )
             } else {
                 ProgressView("Loading config…").frame(maxWidth: .infinity, maxHeight: .infinity)

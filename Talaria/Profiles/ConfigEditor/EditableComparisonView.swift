@@ -30,6 +30,11 @@ struct EditableComparisonView: View {
     /// (e.g. the stale `auxiliary.*.base_url` per-slot override). nil ⇒ every
     /// differing row is copyable (the plain config editor).
     var copyExcluded: ((String) -> Bool)?
+    /// Called after an `immediateCopy` row save completes. The sync surface uses
+    /// it to recompute its drift (the copy writes through the editor's own
+    /// `save()`, which this view's owner can't otherwise observe). Ignored when
+    /// `immediateCopy` is false (the plain editor).
+    var onImmediateCopy: (() -> Void)?
     /// Purely presentational key/description search — composes with
     /// `showDifferencesOnly`; only changes which rows render, never
     /// `working`/dirty/save. Ephemeral view state (resets on a compare switch).
@@ -128,7 +133,8 @@ struct EditableComparisonView: View {
                                             dest: dest,
                                             immediateCopy: immediateCopy,
                                             allowReverseCopy: allowReverseCopy,
-                                            copyDisabled: copyExcluded?(row.key) ?? false
+                                            copyDisabled: copyExcluded?(row.key) ?? false,
+                                            onImmediateCopy: onImmediateCopy
                                         )
                                     }
                                 }
@@ -192,6 +198,9 @@ private struct ComparisonRowView: View {
     /// still shows the difference but can't be pushed (it's excluded from the
     /// sync payload). See ``EditableComparisonView/copyExcluded``.
     var copyDisabled = false
+    /// Invoked after an `immediateCopy` save lands (see
+    /// ``EditableComparisonView/onImmediateCopy``).
+    var onImmediateCopy: (() -> Void)?
 
     @State private var hovering = false
 
@@ -278,7 +287,7 @@ private struct ComparisonRowView: View {
                 if sourceValue != destValue {
                     Button {
                         dest.copyValue(sourceValue, into: destField)
-                        if immediateCopy { Task { await dest.save() } }
+                        if immediateCopy { Task { await dest.save(); onImmediateCopy?() } }
                     } label: {
                         Image(systemName: "arrow.right")
                     }
@@ -288,7 +297,7 @@ private struct ComparisonRowView: View {
                     if allowReverseCopy {
                         Button {
                             source.copyValue(destValue, into: sourceField)
-                            if immediateCopy { Task { await source.save() } }
+                            if immediateCopy { Task { await source.save(); onImmediateCopy?() } }
                         } label: {
                             Image(systemName: "arrow.left")
                         }
