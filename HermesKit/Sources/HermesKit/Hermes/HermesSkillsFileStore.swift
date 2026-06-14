@@ -620,7 +620,7 @@ public enum HermesSkillsFileStore {
     /// `:` (or the whole line when there is no colon), whitespace-trimmed.
     public static func parseBundledManifestNames(_ text: String) -> Set<String> {
         var names: Set<String> = []
-        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        for rawLine in text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             if line.isEmpty || line.hasPrefix("#") { continue }
             let name = line.firstIndex(of: ":").map { String(line[..<$0]) } ?? line

@@ -61,4 +61,15 @@ struct HermesSkillsFileStoreManifestTests {
             hermesHome: nil, homeDirectory: nil)
         #expect(path == "~/.hermes/skills/.bundled_manifest")
     }
+
+    @Test func remoteManifestPathHandlesTildePrefixedHermesHome() {
+        let path = HermesSkillsFileStore.bundledManifestRemotePath(
+            hermesHome: "~/.custom-hermes", homeDirectory: "/Users/hermes")
+        #expect(path == "/Users/hermes/.custom-hermes/skills/.bundled_manifest")
+    }
+
+    @Test func parsesCRLFLineEndings() {
+        let text = "airtable:abc123\r\nnotion:def456\r\n"
+        #expect(HermesSkillsFileStore.parseBundledManifestNames(text) == ["airtable", "notion"])
+    }
 }
