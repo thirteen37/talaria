@@ -36,6 +36,13 @@ Run this script before a v1 release candidate.
      directory is gone on disk.
    - Toolbar **Bundled skills** menu → Opt out / Opt back in / Re-seed now (verify the
      `~/.hermes/skills/.no-bundled-skills` marker appears/disappears).
+   - **Inactive built-in skills** (local **and** remote): if any built-in Hermes tracks in
+     `~/.hermes/skills/.bundled_manifest` is inactive (deleted, or sitting under
+     `~/.hermes/skills/.archive/`), an **Inactive built-in skills** section lists them below the
+     installed list. Click **Restore** on one → it runs `hermes skills reset`; the row leaves the
+     section and the skill reappears in the active list after refresh (verify its directory now
+     exists under `~/.hermes/skills/<category>/`). The section is hidden when `.bundled_manifest`
+     is absent or nothing is inactive; Restore is disabled without an admin runner.
    - On a **remote (SSH)** profile: Audit/Reset/Repair/Publish/Force remove and the preview all work;
      clean **Remove** is disabled (its stdin confirm can't cross SSH) — use Force remove instead.
    - Point at a **< 0.15.1** Hermes (or simulate) → the lifecycle actions + Bundled-skills menu show
