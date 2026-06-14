@@ -182,6 +182,35 @@ struct BundledSkillsResyncServiceTests {
     }
 
     @Test
+    func historicalMatchIgnoresCommittedHiddenFiles() throws {
+        let (repo, source) = try makeSourceRepo()
+        let skillsRoot = try makeTempDir()
+        defer {
+            try? FileManager.default.removeItem(at: repo)
+            try? FileManager.default.removeItem(at: skillsRoot)
+        }
+        // The v1 source carries a committed dot-file; the on-disk copy is hashed
+        // with `.skipsHiddenFiles`, so the git-derived historical hash must skip
+        // hidden files too — otherwise the pristine v1 copy never matches and the
+        // skill is wrongly classified `skipModified` instead of `update`.
+        let sourceV1 = try writeSkill(root: source, path: "software-development/debugging", name: "debugging", body: "v1")
+        try "*.log\n".write(to: sourceV1.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try commit(repo, message: "v1 with dotfile")
+        _ = try writeSkill(root: skillsRoot, path: "software-development/debugging", name: "debugging", body: "v1")
+        _ = try writeSkill(root: source, path: "software-development/debugging", name: "debugging", body: "v2")
+        try commit(repo, message: "v2")
+        try "software-development/debugging:0000\n".write(
+            to: skillsRoot.appendingPathComponent(".talaria_upstream_bundled_manifest"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let plan = try BundledSkillsResyncService(sourceRoot: source, skillsRoot: skillsRoot).preview()
+        #expect(plan.items.first?.action == .update)
+        #expect(plan.items.first?.reason.contains("historical") == true)
+    }
+
+    @Test
     func skipsLocallyModifiedTrackedSkill() throws {
         let (repo, source) = try makeSourceRepo()
         let skillsRoot = try makeTempDir()

@@ -138,9 +138,13 @@ public struct GitBundledSkillsHistoryChecker: BundledSkillsHistoryChecking {
         process.standardOutput = stdout
         process.standardError = stderr
         try process.run()
+        // Drain stdout BEFORE waiting: if the child fills the pipe buffer
+        // (~64KB) it blocks on write while we'd block in waitUntilExit(),
+        // deadlocking. Read to EOF first, then reap.
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return "" }
-        return String(decoding: stdout.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        return String(decoding: data, as: UTF8.self)
     }
 
     private static func gitData(repoRoot: URL, arguments: [String]) throws -> Data? {
@@ -152,9 +156,13 @@ public struct GitBundledSkillsHistoryChecker: BundledSkillsHistoryChecking {
         process.standardOutput = stdout
         process.standardError = stderr
         try process.run()
+        // Drain stdout BEFORE waiting (see `git` above): `git cat-file blob`
+        // streams a skill file's full content, which can exceed the pipe buffer
+        // and deadlock against waitUntilExit().
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
-        return stdout.fileHandleForReading.readDataToEndOfFile()
+        return data
     }
 
     private static func directoryHashInGitCommit(repoRoot: URL, commit: String, pathInRepo: String) throws -> String? {
@@ -174,7 +182,14 @@ public struct GitBundledSkillsHistoryChecker: BundledSkillsHistoryChecking {
             let fullPath = String(decoding: pathBytes, as: UTF8.self)
             let prefix = pathInRepo + "/"
             guard fullPath.hasPrefix(prefix) else { continue }
-            fileEntries.append((String(fullPath.dropFirst(prefix.count)), String(headerParts[2])))
+            let relative = String(fullPath.dropFirst(prefix.count))
+            // Match `sha256DirectoryHash`'s `.skipsHiddenFiles`: ignore dot-files
+            // and anything under a hidden directory, so the git-derived hash
+            // lines up with the on-disk hash for a pristine copy (otherwise a
+            // skill with a committed dot-file never matches and is wrongly
+            // classified `skipModified` instead of `update`).
+            if relative.split(separator: "/").contains(where: { $0.hasPrefix(".") }) { continue }
+            fileEntries.append((relative, String(headerParts[2])))
         }
         guard !fileEntries.isEmpty else { return nil }
         var hasher = SHA256()
