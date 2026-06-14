@@ -755,7 +755,9 @@ struct SkillsView: View {
                 get: { harness.selected != nil },
                 set: { if !$0 { harness.selectionID = nil } }
             ),
-            secondaryTitle: harness.selected?.name
+            secondaryTitle: harness.selected?.name,
+            secondarySubtitle: detailSubtitle(harness),
+            secondaryBadges: detailBadges(harness)
         ) {
             primaryPane(harness: harness)
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
@@ -818,6 +820,29 @@ struct SkillsView: View {
         .task(id: harness.selectionID) {
             await harness.loadPreview()
         }
+    }
+
+    /// Badges shown in the selected skill's panel header: its kind, then an
+    /// "update available" pill when applicable.
+    private func detailBadges(_ harness: SkillsHarness) -> [PanelBadge] {
+        guard let skill = harness.selected else { return [] }
+        var badges: [PanelBadge] = []
+        switch harness.kind(for: skill.name) {
+        case .hub: badges.append(PanelBadge(text: "Hub", tint: .blue))
+        case .local: badges.append(PanelBadge(text: "Local"))
+        case .builtin: badges.append(PanelBadge(text: "Built-in"))
+        case .none: break
+        }
+        if harness.updatableNames.contains(skill.name) {
+            badges.append(PanelBadge(text: "Update available", tint: .blue, systemImage: "arrow.up.circle"))
+        }
+        return badges
+    }
+
+    /// Sub-heading shown in the selected skill's panel header: its category.
+    private func detailSubtitle(_ harness: SkillsHarness) -> String? {
+        guard let category = harness.selected?.category, !category.isEmpty else { return nil }
+        return category
     }
 
     /// Bundled-skill seeding actions, grouped in one toolbar menu. Gated behind
@@ -1065,9 +1090,9 @@ private struct SkillSearchRow: View {
                     Text(result.name)
                         .font(.subheadline.weight(.medium))
                         .lineLimit(1)
-                    SkillPill(text: result.source, color: .secondary)
+                    PanelBadgeView(badge: PanelBadge(text: result.source))
                     if !result.trustLevel.isEmpty {
-                        SkillPill(text: result.trustLevel, color: trustColor(result.trustLevel))
+                        PanelBadgeView(badge: PanelBadge(text: result.trustLevel, tint: trustColor(result.trustLevel)))
                     }
                 }
                 if !result.description.isEmpty {
@@ -1130,9 +1155,9 @@ private struct SkillRow: View {
                         .truncationMode(.middle)
                     switch kind {
                     case .hub:
-                        SkillPill(text: "Hub", color: .blue)
+                        PanelBadgeView(badge: PanelBadge(text: "Hub", tint: .blue))
                     case .local:
-                        SkillPill(text: "Local", color: .secondary)
+                        PanelBadgeView(badge: PanelBadge(text: "Local"))
                     case .builtin, .none:
                         EmptyView()
                     }
@@ -1215,36 +1240,7 @@ private struct SkillDetail: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 6) {
-                    Text(skill.name)
-                        .font(.headline)
-                        .textSelection(.enabled)
-                    switch kind {
-                    case .hub:
-                        SkillPill(text: "Hub", color: .blue)
-                    case .local:
-                        SkillPill(text: "Local", color: .secondary)
-                    case .builtin:
-                        SkillPill(text: "Built-in", color: .secondary)
-                    case .none:
-                        EmptyView()
-                    }
-                    if updateAvailable {
-                        Image(systemName: "arrow.up.circle")
-                            .foregroundStyle(.blue)
-                            .help("An update is available from the source")
-                            .accessibilityLabel("Update available")
-                    }
-                }
-
-                if let category = skill.category, !category.isEmpty {
-                    Text(category)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-
                 if let description = skill.description, !description.isEmpty {
-                    Divider()
                     Text(description)
                         .font(.body)
                         .textSelection(.enabled)
@@ -1431,23 +1427,6 @@ private struct SkillDetail: View {
         Text(text)
             .font(.caption)
             .foregroundStyle(.secondary)
-    }
-}
-
-/// Tinted rounded capsule for source / trust / status labels, matching the
-/// `PluginPill` styling on the Plugins surface.
-private struct SkillPill: View {
-    let text: String
-    let color: Color
-
-    var body: some View {
-        Text(text)
-            .font(.caption2)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.15), in: Capsule())
-            .foregroundStyle(color == .secondary ? Color.secondary : color)
-            .lineLimit(1)
     }
 }
 
