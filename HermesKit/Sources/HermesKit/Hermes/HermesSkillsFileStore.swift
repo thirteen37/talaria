@@ -637,6 +637,20 @@ public enum HermesSkillsFileStore {
         tracked.subtracting(active).sorted()
     }
 
+    /// Absolute path of a **remote** host's `skills/.bundled_manifest`, for the
+    /// inactive-builtins read. Normalizes `hermesHome` via
+    /// ``HermesHomePaths/relativePath(hermesHome:tail:)`` and prepends the
+    /// caller-resolved remote `$HOME` (`homeDirectory`) for the home-relative
+    /// case so the path is absolute (the read goes over SSH with no shell to
+    /// expand `~`). An absolute `hermesHome` passes through; when `homeDirectory`
+    /// is nil a `~`-prefixed best-effort path is returned.
+    public static func bundledManifestRemotePath(hermesHome: String?, homeDirectory: String?) -> String {
+        let rel = HermesHomePaths.relativePath(hermesHome: hermesHome, tail: "skills/.bundled_manifest")
+        if rel.hasPrefix("/") { return rel }
+        if let homeDirectory, !homeDirectory.isEmpty { return "\(homeDirectory)/\(rel)" }
+        return "~/\(rel)"
+    }
+
     /// The local skills root (`<hermesHome>/skills`, default `~/.hermes/skills`),
     /// with `~` expanded. Shared by force-delete and the Publish default path.
     public static func localSkillsRoot(hermesHome: String?) -> URL {

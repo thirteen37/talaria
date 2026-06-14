@@ -43,4 +43,22 @@ struct HermesSkillsFileStoreManifestTests {
         let tracked: Set<String> = ["a", "b"]
         #expect(HermesSkillsFileStore.inactiveTrackedNames(tracked: tracked, active: ["a", "b", "c"]) == [])
     }
+
+    @Test func remoteManifestPathPrependsResolvedHomeForHomeRelativeHermesHome() {
+        let path = HermesSkillsFileStore.bundledManifestRemotePath(
+            hermesHome: nil, homeDirectory: "/Users/hermes")
+        #expect(path == "/Users/hermes/.hermes/skills/.bundled_manifest")
+    }
+
+    @Test func remoteManifestPathPassesThroughAbsoluteHermesHome() {
+        let path = HermesSkillsFileStore.bundledManifestRemotePath(
+            hermesHome: "/opt/hermes", homeDirectory: "/Users/hermes")
+        #expect(path == "/opt/hermes/skills/.bundled_manifest")
+    }
+
+    @Test func remoteManifestPathFallsBackToTildeWhenHomeUnknown() {
+        let path = HermesSkillsFileStore.bundledManifestRemotePath(
+            hermesHome: nil, homeDirectory: nil)
+        #expect(path == "~/.hermes/skills/.bundled_manifest")
+    }
 }
