@@ -442,17 +442,43 @@ final class SkillsHarness {
         }
     }
 
-    /// Refreshes ``inactiveTracked`` = manifest-tracked names minus the active
-    /// (discoverable) skills in `rows`. Best-effort: a missing/unreadable
-    /// `.bundled_manifest` (opted-out / fresh profile) clears the set.
+    /// Refreshes ``inactiveTracked`` = manifest-tracked built-ins whose files are
+    /// NOT present on the active (non-archived) skills tree — the genuinely
+    /// absent ones that `hermes skills reset` can re-seed. (Present-but-filtered
+    /// skills — environment/platform/disabled — are intentionally excluded, since
+    /// Restore can't bring them back; their files already exist.) Best-effort: a
+    /// missing manifest or unavailable host shell clears the set.
     func loadInactiveTracked() async {
         guard let content = await readBundledManifest() else {
             inactiveTracked = []
             return
         }
         let tracked = HermesSkillsFileStore.parseBundledManifestNames(content)
-        let active = Set(rows.map(\.name))
-        inactiveTracked = HermesSkillsFileStore.inactiveTrackedNames(tracked: tracked, active: active)
+        guard !tracked.isEmpty, let present = await loadPresentSkillNames() else {
+            inactiveTracked = []
+            return
+        }
+        inactiveTracked = HermesSkillsFileStore.inactiveTrackedNames(tracked: tracked, present: present)
+    }
+
+    /// The frontmatter names of every `SKILL.md` on the active (non-archived)
+    /// skills tree, via one batched host-shell `find … grep` round trip (local
+    /// `/bin/sh` or remote SSH). Returns nil when no host shell is available, so
+    /// the caller leaves the inactive list empty rather than flagging present
+    /// skills as restorable.
+    private func loadPresentSkillNames() async -> Set<String>? {
+        guard let hostShell else { return nil }
+        let command: String
+        do {
+            command = try HermesSkillsFileStore.presentSkillNamesListingCommand(hermesHome: profile?.hermesHome)
+        } catch {
+            return nil
+        }
+        guard let result = try? await hostShell.runShell(command, workingDirectory: nil),
+              result.exitCode == 0 else {
+            return nil
+        }
+        return HermesSkillsFileStore.parsePresentSkillNames(result.stdout)
     }
 
     /// Reads the profile's `skills/.bundled_manifest` (local `FileManager`, or
