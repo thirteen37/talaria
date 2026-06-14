@@ -375,7 +375,8 @@ struct SoulAndPersonalitiesView: View {
                 // intercepted) and reseeds cleanly — see the view's dirty-guard note.
                 set: { if !$0 { harness.select(nil) } }
             ),
-            secondaryTitle: secondaryTitle(harness)
+            secondaryTitle: secondaryTitle(harness),
+            secondaryBadges: secondaryBadges(harness)
         ) {
             primaryPane(harness: harness, soul: soul)
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
@@ -471,6 +472,19 @@ struct SoulAndPersonalitiesView: View {
         case .soul?: return "SOUL.md"
         case let .personality(name)?: return name
         case nil: return nil
+        }
+    }
+
+    private func secondaryBadges(_ harness: PersonalitiesHarness) -> [PanelBadge] {
+        switch harness.selection {
+        case .soul?:
+            var badges = [PanelBadge(text: "base")]
+            if harness.activePrompt.isEmpty { badges.append(PanelBadge(text: "Active", tint: .green)) }
+            return badges
+        case let .personality(name)?:
+            return harness.activeName == name ? [PanelBadge(text: "Active", tint: .green)] : []
+        case nil:
+            return []
         }
     }
 
@@ -675,20 +689,6 @@ private struct SoulDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Text("SOUL.md")
-                    .font(.headline)
-                Text("base")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if isActive == true {
-                    Text("Active")
-                        .font(.caption)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.green.opacity(0.2), in: Capsule())
-                }
-            }
             Text("The base system prompt. Active when no personality overlay is set.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -798,17 +798,12 @@ private struct PersonalityDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Name")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 TextField("Name", text: $harness.draftName)
-                    .font(.headline)
-                    .textFieldStyle(.plain)
-                if isActive {
-                    Text("Active")
-                        .font(.caption)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.green.opacity(0.2), in: Capsule())
-                }
+                    .textFieldStyle(.roundedBorder)
             }
 
             if harness.personalityNameCollision {
