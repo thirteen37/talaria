@@ -352,7 +352,11 @@ final class SkillsHarness {
         }
         // Read the directory-name match first (common case → one read), then the rest.
         let ordered = paths.filter { parentName($0) == name } + paths.filter { parentName($0) != name }
-        for md in ordered.prefix(120) {
+        // Read in order until the frontmatter name matches. The parent-dir-name
+        // match is front-loaded, so a normally-named skill resolves in ~one read;
+        // the cap only bounds a pathological full scan (each read is an SSH round
+        // trip on remote) and is set well above realistic skill-library sizes.
+        for md in ordered.prefix(300) {
             guard previewName == name else { return }
             guard let content = try? await HermesFileStore.read(
                 resolvedPath: md, isLocal: isLocalProfile, transfer: transfer, profile: profile
