@@ -216,11 +216,44 @@ struct PlatformSplit<Primary: View, Secondary: View>: View {
     @ViewBuilder
     private var pushedSecondary: some View {
         if let secondaryTitle {
-            secondary()
+            secondaryWithMetadata
                 .navigationTitle(secondaryTitle)
                 .navigationBarTitleDisplayMode(.inline)
         } else {
+            secondaryWithMetadata
+        }
+    }
+
+    /// The pushed page has no `PanelHeader` (the nav bar owns the title), so the
+    /// icon / badges / sub-heading the header shows on macOS/iPad would otherwise
+    /// be lost on iPhone. Surface them as a metadata strip above the content when
+    /// present; fall back to the bare content otherwise.
+    @ViewBuilder
+    private var secondaryWithMetadata: some View {
+        if secondaryBadges.isEmpty, secondarySubtitle == nil, secondaryIcon == nil {
             secondary()
+        } else {
+            VStack(spacing: 0) {
+                HStack(spacing: 6) {
+                    if let secondaryIcon {
+                        Image(systemName: secondaryIcon)
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(secondaryBadges, id: \.self) { PanelBadgeView(badge: $0) }
+                    if let secondarySubtitle {
+                        Text(secondarySubtitle)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                Divider()
+                secondary()
+            }
         }
     }
 }
