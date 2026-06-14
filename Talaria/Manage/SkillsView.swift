@@ -1034,7 +1034,6 @@ struct SkillsView: View {
                 skill: skill,
                 kind: harness.kind(for: skill.name),
                 isOfficial: harness.isOfficial(skill.name),
-                updateAvailable: harness.updatableNames.contains(skill.name),
                 mutationsAvailable: mutationsAvailable,
                 removeAvailable: removeAvailable,
                 lifecycleAvailable: lifecycleAvailable,
@@ -1212,7 +1211,6 @@ private struct SkillDetail: View {
     let skill: DashboardSkill
     let kind: SkillKind?
     let isOfficial: Bool
-    let updateAvailable: Bool
     let mutationsAvailable: Bool
     let removeAvailable: Bool
     let lifecycleAvailable: Bool

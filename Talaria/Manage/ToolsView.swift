@@ -92,7 +92,8 @@ struct ToolsView: View {
                 get: { harness.selectedToolID != nil },
                 set: { if !$0 { harness.selectedToolID = nil } }
             ),
-            secondaryTitle: configTitle(harness)
+            secondaryTitle: configTitle(harness),
+            secondarySubtitle: configSubtitle(harness)
         ) {
             matrixPane(harness: harness)
                 .frame(minWidth: Idiom.isPhone ? nil : 420, maxWidth: .infinity, maxHeight: .infinity)
@@ -131,12 +132,24 @@ struct ToolsView: View {
         }
     }
 
-    /// Title for the pushed iPhone config page — the selected tool's friendly
-    /// label (or raw id). nil when nothing is selected (the pane is hidden).
+    /// Title for the selected tool's config panel header — the tool's friendly
+    /// label with any leading emoji peeled off (it can't render as an SF Symbol).
+    /// nil when nothing is selected (the pane is hidden).
     private func configTitle(_ harness: ToolsMatrixHarness) -> String? {
-        guard let toolID = harness.selectedToolID,
-              let row = harness.matrix?.rows.first(where: { $0.name == toolID }) else { return nil }
-        return row.label ?? row.name
+        guard let row = selectedRow(harness) else { return nil }
+        return toolLabelParts(row).title
+    }
+
+    /// Sub-heading for the config panel header: the raw tool id, shown only when
+    /// the tool has a friendly label (so the id isn't redundant with the title).
+    private func configSubtitle(_ harness: ToolsMatrixHarness) -> String? {
+        guard let row = selectedRow(harness) else { return nil }
+        return toolLabelParts(row).showsSlug ? row.name : nil
+    }
+
+    private func selectedRow(_ harness: ToolsMatrixHarness) -> ToolsMatrix.Row? {
+        guard let toolID = harness.selectedToolID else { return nil }
+        return harness.matrix?.rows.first(where: { $0.name == toolID })
     }
 
     @ViewBuilder
