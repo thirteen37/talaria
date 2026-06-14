@@ -1088,6 +1088,33 @@ struct SkillsView: View {
                 )
                 .tag(skill.name)
             }
+            if !harness.inactiveTracked.isEmpty {
+                Section {
+                    ForEach(harness.inactiveTracked, id: \.self) { name in
+                        HStack {
+                            Text(name)
+                            Spacer()
+                            Button {
+                                Task { await harness.reset(name) }
+                            } label: {
+                                if harness.busy.contains(name) {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Label("Restore", systemImage: "arrow.uturn.backward.circle")
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(harness.runner == nil || harness.busy.contains(name))
+                            .help("Restore this built-in skill so Hermes manages it again")
+                        }
+                        .selectionDisabled()
+                    }
+                } header: {
+                    Text("Inactive built-in skills")
+                } footer: {
+                    Text("Tracked by Hermes but not active — e.g. archived or removed. Restore re-seeds it from the bundled checkout.")
+                }
+            }
         }
         .overlay {
             if harness.rows.isEmpty, !harness.isLoading {
