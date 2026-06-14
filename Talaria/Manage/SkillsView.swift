@@ -129,6 +129,9 @@ final class SkillsHarness {
     /// path and is reused by Publish. nil when not yet resolved or not found.
     var resolvedDir: String?
     var resolvedDirName: String?
+    /// Cached remote `$HOME` for this SSH profile (stable per session), so the
+    /// inactive-builtins manifest read doesn't re-resolve it on every refresh.
+    private var resolvedRemoteHome: String?
 
     init(
         client: DashboardClient,
@@ -390,14 +393,14 @@ final class SkillsHarness {
         switch profile?.kind {
         case .ssh:
             guard let hostShell else { return nil }
-            var home: String?
-            if let result = try? await hostShell.runShell("command printf '%s' \"$HOME\"", workingDirectory: nil),
+            if resolvedRemoteHome == nil,
+               let result = try? await hostShell.runShell("command printf '%s' \"$HOME\"", workingDirectory: nil),
                result.exitCode == 0 {
                 let resolved = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-                home = resolved.isEmpty ? nil : resolved
+                resolvedRemoteHome = resolved.isEmpty ? nil : resolved
             }
             let path = HermesSkillsFileStore.bundledManifestRemotePath(
-                hermesHome: profile?.hermesHome, homeDirectory: home)
+                hermesHome: profile?.hermesHome, homeDirectory: resolvedRemoteHome)
             return try? await HermesFileStore.read(
                 resolvedPath: path, isLocal: false, transfer: transfer, profile: profile)
         case .local, .none:
@@ -581,7 +584,12 @@ final class SkillsHarness {
         }
     }
 
-    /// Clears a builtin skill's `user-modified` tracking (safe `skills reset`).
+    /// Runs `hermes skills reset` for a built-in skill. For a skill whose active
+    /// copy is still present this just clears its sync-manifest `user-modified`
+    /// tracking; for one that's absent (deleted or archived), dropping the
+    /// manifest entry lets the follow-up sync re-copy it from the bundled
+    /// checkout — i.e. it restores it. Used by both the per-skill Reset action
+    /// and the Inactive built-in skills "Restore" button.
     func reset(_ name: String) async {
         guard let runner else { return }
         busy.insert(name)
@@ -1117,7 +1125,7 @@ struct SkillsView: View {
             }
         }
         .overlay {
-            if harness.rows.isEmpty, !harness.isLoading {
+            if harness.rows.isEmpty, harness.inactiveTracked.isEmpty, !harness.isLoading {
                 ContentUnavailableView("No skills", systemImage: "wand.and.stars")
             }
         }
