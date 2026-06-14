@@ -394,7 +394,14 @@ final class SkillsHarness {
         return nil
     }
 
-    func refresh() async {
+    /// Reloads the installed list (+ hub/updatable badges) and, by default, the
+    /// inactive-built-ins set. Pass `includingInactive: false` from the
+    /// enable/disable toggle path: the inactive set is invariant under toggling
+    /// (it depends only on the manifest and on-disk file presence, neither of
+    /// which a toggle changes), so recomputing it there would just burn a
+    /// host-shell `find`+`grep` scan and a manifest read — ~2 SSH round trips —
+    /// on every toggle for no change.
+    func refresh(includingInactive: Bool = true) async {
         isLoading = true
         defer { isLoading = false }
         do {
@@ -406,7 +413,9 @@ final class SkillsHarness {
             banners?.surfaceError(bannerKey, error.localizedDescription)
         }
         await refreshHubInstalled()
-        await loadInactiveTracked()
+        if includingInactive {
+            await loadInactiveTracked()
+        }
         // Probe every hub skill for upstream updates fire-and-forget so the
         // "Update available" badges populate without adding network latency to
         // `refresh()` (which also runs on every enable/disable toggle).
@@ -511,7 +520,8 @@ final class SkillsHarness {
             try await client.toggleSkill(name: name, enabled: enabled)
             // Refresh so the row reflects what the server actually persisted —
             // dashboard returns 200 on toggle without a body, so we read back.
-            await refresh()
+            // Skip the inactive-builtins scan: toggling can't change it.
+            await refresh(includingInactive: false)
         } catch {
             lastError = error.localizedDescription
             banners?.surfaceError(bannerKey, error.localizedDescription)
