@@ -254,7 +254,8 @@ struct PluginsView: View {
                 get: { harness.selected != nil },
                 set: { if !$0 { harness.selectionID = nil } }
             ),
-            secondaryTitle: harness.selected?.name
+            secondaryTitle: harness.selected?.name,
+            secondaryBadges: detailBadges(harness)
         ) {
             primaryPane(harness: harness)
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
@@ -283,6 +284,21 @@ struct PluginsView: View {
             ),
             severity: .warning
         )
+    }
+
+    /// Badges shown in the selected plugin's panel header: source, version,
+    /// runtime status, and (when absent) a "no dashboard tab" marker.
+    private func detailBadges(_ harness: PluginsHarness) -> [PanelBadge] {
+        guard let plugin = harness.selected else { return [] }
+        var badges: [PanelBadge] = [
+            PanelBadge(text: plugin.source),
+            PanelBadge(text: plugin.version),
+            PanelBadge(text: plugin.statusLabel, tint: plugin.statusColor),
+        ]
+        if !plugin.hasDashboardManifest {
+            badges.append(PanelBadge(text: "No dashboard tab"))
+        }
+        return badges
     }
 
     // MARK: - Primary pane (providers + install form + table)
@@ -405,7 +421,7 @@ struct PluginsView: View {
                 Text(plugin.name)
             }
             TableColumn("Source") { plugin in
-                PluginPill(text: plugin.source, color: .secondary)
+                PanelBadgeView(badge: PanelBadge(text: plugin.source))
             }
             .width(90)
             TableColumn("Version") { plugin in
@@ -415,7 +431,7 @@ struct PluginsView: View {
             }
             .width(80)
             TableColumn("Status") { plugin in
-                PluginPill(text: plugin.statusLabel, color: plugin.statusColor)
+                PanelBadgeView(badge: PanelBadge(text: plugin.statusLabel, tint: plugin.statusColor))
             }
             .width(90)
         }
@@ -467,23 +483,6 @@ extension DashboardPlugin {
     }
 }
 
-/// Inline pill following the badge styling used across the Manage surfaces —
-/// a tinted, rounded capsule for source / status labels.
-private struct PluginPill: View {
-    let text: String
-    let color: Color
-
-    var body: some View {
-        Text(text)
-            .font(.caption2)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.15), in: Capsule())
-            .foregroundStyle(color == .secondary ? Color.secondary : color)
-            .lineLimit(1)
-    }
-}
-
 private struct PluginDetail: View {
     let plugin: DashboardPlugin
     let busy: Bool
@@ -497,21 +496,7 @@ private struct PluginDetail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(plugin.name)
-                .font(.headline)
-                .textSelection(.enabled)
-
-            HStack(spacing: 6) {
-                PluginPill(text: plugin.source, color: .secondary)
-                PluginPill(text: plugin.version, color: .secondary)
-                PluginPill(text: plugin.statusLabel, color: plugin.statusColor)
-                if !plugin.hasDashboardManifest {
-                    PluginPill(text: "No dashboard tab", color: .secondary)
-                }
-            }
-
             if !plugin.description.isEmpty {
-                Divider()
                 Text(plugin.description)
                     .font(.body)
                     .textSelection(.enabled)
