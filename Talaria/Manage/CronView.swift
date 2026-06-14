@@ -200,7 +200,7 @@ struct CronView: View {
             secondaryTitle: editorTitle(harness)
         ) {
             jobsTable(harness: harness)
-                .frame(minWidth: Idiom.isPhone ? nil : 360, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 280, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             editorPane(harness: harness)
                 .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)

@@ -379,7 +379,7 @@ struct SoulAndPersonalitiesView: View {
             secondaryBadges: secondaryBadges(harness)
         ) {
             primaryPane(harness: harness, soul: soul)
-                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             detailPane(harness: harness, soul: soul)
                 .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)

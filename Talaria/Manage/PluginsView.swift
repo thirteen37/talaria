@@ -258,7 +258,7 @@ struct PluginsView: View {
             secondaryBadges: detailBadges(harness)
         ) {
             primaryPane(harness: harness)
-                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 280, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             detailPane(harness: harness)
                 .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)

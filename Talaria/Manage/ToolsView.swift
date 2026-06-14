@@ -96,7 +96,7 @@ struct ToolsView: View {
             secondarySubtitle: configSubtitle(harness)
         ) {
             matrixPane(harness: harness)
-                .frame(minWidth: Idiom.isPhone ? nil : 420, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 320, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             configPane(harness: harness)
                 .frame(minWidth: 240, idealWidth: 360, maxWidth: .infinity, maxHeight: .infinity)

@@ -297,7 +297,7 @@ struct GatewayView: View {
                 secondaryIcon: detailIcon(harness)
             ) {
                 platformList(harness: harness)
-                    .frame(minWidth: Idiom.isPhone ? nil : 360, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: Idiom.isPhone ? nil : 280, maxWidth: .infinity, maxHeight: .infinity)
             } secondary: {
                 detailPane(harness: harness)
                     .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
