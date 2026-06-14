@@ -140,16 +140,30 @@ func platformTUIDetail(tabId: SessionId, spec: TUILaunchSpec?) -> some View {
 /// call sites compile against both halves.
 struct PlatformSplit<Primary: View, Secondary: View>: View {
     @Binding var showsSecondary: Bool
+    private let secondaryTitle: String?
+    private let secondaryIcon: String?
+    private let secondarySubtitle: String?
+    private let secondaryBadges: [PanelBadge]
+    private let secondaryClosable: Bool
     @ViewBuilder var primary: () -> Primary
     @ViewBuilder var secondary: () -> Secondary
 
     init(
         showsSecondary: Binding<Bool> = .constant(true),
         secondaryTitle: String? = nil,
+        secondaryIcon: String? = nil,
+        secondarySubtitle: String? = nil,
+        secondaryBadges: [PanelBadge] = [],
+        secondaryClosable: Bool = true,
         @ViewBuilder primary: @escaping () -> Primary,
         @ViewBuilder secondary: @escaping () -> Secondary
     ) {
         self._showsSecondary = showsSecondary
+        self.secondaryTitle = secondaryTitle
+        self.secondaryIcon = secondaryIcon
+        self.secondarySubtitle = secondarySubtitle
+        self.secondaryBadges = secondaryBadges
+        self.secondaryClosable = secondaryClosable
         self.primary = primary
         self.secondary = secondary
     }
@@ -175,7 +189,21 @@ struct PlatformSplit<Primary: View, Secondary: View>: View {
             let topInset = proxy.safeAreaInsets.top
             HSplitView {
                 primary()
-                if showsSecondary { secondary() }
+                if showsSecondary {
+                    if secondaryClosable {
+                        VStack(spacing: 0) {
+                            PanelHeader(
+                                title: secondaryTitle,
+                                systemImage: secondaryIcon,
+                                subtitle: secondarySubtitle,
+                                badges: secondaryBadges
+                            ) { showsSecondary = false }
+                            secondary()
+                        }
+                    } else {
+                        secondary()
+                    }
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.top, topInset)

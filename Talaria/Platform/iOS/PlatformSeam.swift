@@ -154,23 +154,37 @@ func platformTUIDetail(tabId: SessionId, spec: TUILaunchSpec?) -> some View {
 struct PlatformSplit<Primary: View, Secondary: View>: View {
     @Binding var showsSecondary: Bool
     private let secondaryTitle: String?
+    private let secondaryIcon: String?
+    private let secondarySubtitle: String?
+    private let secondaryBadges: [PanelBadge]
+    private let secondaryClosable: Bool
     @ViewBuilder var primary: () -> Primary
     @ViewBuilder var secondary: () -> Secondary
 
     init(
         showsSecondary: Binding<Bool> = .constant(true),
         secondaryTitle: String? = nil,
+        secondaryIcon: String? = nil,
+        secondarySubtitle: String? = nil,
+        secondaryBadges: [PanelBadge] = [],
+        secondaryClosable: Bool = true,
         @ViewBuilder primary: @escaping () -> Primary,
         @ViewBuilder secondary: @escaping () -> Secondary
     ) {
         self._showsSecondary = showsSecondary
         self.secondaryTitle = secondaryTitle
+        self.secondaryIcon = secondaryIcon
+        self.secondarySubtitle = secondarySubtitle
+        self.secondaryBadges = secondaryBadges
+        self.secondaryClosable = secondaryClosable
         self.primary = primary
         self.secondary = secondary
     }
 
     var body: some View {
         if Idiom.isPhone {
+            // iPhone keeps the nav-push + Back affordance (title shown inline) —
+            // adding a header here would double the title.
             primary()
                 .navigationDestination(isPresented: $showsSecondary) { pushedSecondary }
         } else {
@@ -178,7 +192,19 @@ struct PlatformSplit<Primary: View, Secondary: View>: View {
                 primary()
                 if showsSecondary {
                     Divider()
-                    secondary()
+                    if secondaryClosable {
+                        VStack(spacing: 0) {
+                            PanelHeader(
+                                title: secondaryTitle,
+                                systemImage: secondaryIcon,
+                                subtitle: secondarySubtitle,
+                                badges: secondaryBadges
+                            ) { showsSecondary = false }
+                            secondary()
+                        }
+                    } else {
+                        secondary()
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
