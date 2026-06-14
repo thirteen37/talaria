@@ -612,6 +612,24 @@ public enum HermesSkillsFileStore {
         }
     }
 
+    // MARK: - Bundled manifest (Hermes `.bundled_manifest`)
+
+    /// The set of skill names Hermes tracks in its `skills/.bundled_manifest`
+    /// (one `name:hash` line per skill in v2, plain `name` in v1). Blank lines
+    /// and `#` comment lines are ignored; the name is the text before the first
+    /// `:` (or the whole line when there is no colon), whitespace-trimmed.
+    public static func parseBundledManifestNames(_ text: String) -> Set<String> {
+        var names: Set<String> = []
+        for rawLine in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            let name = line.firstIndex(of: ":").map { String(line[..<$0]) } ?? line
+            let trimmed = name.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty { names.insert(trimmed) }
+        }
+        return names
+    }
+
     /// The local skills root (`<hermesHome>/skills`, default `~/.hermes/skills`),
     /// with `~` expanded. Shared by force-delete and the Publish default path.
     public static func localSkillsRoot(hermesHome: String?) -> URL {
