@@ -570,7 +570,7 @@ private struct DraftMCPServerEditor: View {
 
     var body: some View {
         Form {
-            Section(isEditing ? "Edit MCP server (re-create)" : "New MCP server") {
+            Section {
                 TextField("Name", text: $draft.name)
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
@@ -767,7 +767,7 @@ private struct MCPCatalogView: View {
 
     var body: some View {
         List {
-            Section("MCP Catalog") {
+            Section {
                 if entries.isEmpty {
                     if isLoading {
                         ProgressView()

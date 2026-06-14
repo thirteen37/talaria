@@ -150,8 +150,7 @@ struct ToolsView: View {
                 remaskToken: harness.remaskToken,
                 onSave: { key, value in Task { await harness.saveEnv(key: key, value: value) } },
                 onDelete: { key in Task { await harness.deleteEnv(key: key) } },
-                reveal: { key in await harness.revealEnv(key: key) },
-                onClose: { harness.selectedToolID = nil }
+                reveal: { key in await harness.revealEnv(key: key) }
             )
         } else {
             // PlatformSplit only renders this when `showsSecondary` is true, so
@@ -321,12 +320,9 @@ private struct ToolConfigEditor: View {
     let onSave: (String, String) -> Void
     let onDelete: (String) -> Void
     let reveal: (String) async -> String?
-    let onClose: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(vars) { envVar in
@@ -346,36 +342,6 @@ private struct ToolConfigEditor: View {
         }
         // Reset every field's typed/revealed draft when switching tools.
         .id(tool.id)
-    }
-
-    private var header: some View {
-        let parts = toolLabelParts(tool)
-        return HStack(spacing: 10) {
-            if let icon = parts.icon {
-                Text(icon).font(.title3)
-            }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(parts.title)
-                    .font(.headline)
-                    .lineLimit(1)
-                if parts.showsSlug {
-                    Text(tool.name)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-            Button {
-                onClose()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Close")
-            .help("Close the config panel")
-        }
-        .padding()
     }
 }
 

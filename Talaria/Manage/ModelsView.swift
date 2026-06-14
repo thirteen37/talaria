@@ -822,19 +822,8 @@ struct ModelsView: View {
     @ViewBuilder
     private func pickerPane(harness: ModelsHarness) -> some View {
         if let target = harness.pickerTarget {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text(pickerTitle(target))
-                        .font(.headline)
-                    Spacer()
-                    Button("Cancel") { harness.cancelPick() }
-                        .help("Close the model picker")
-                }
-                .padding(12)
-                Divider()
-                pickerList(harness: harness, target: target)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            pickerList(harness: harness, target: target)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
 
@@ -873,8 +862,8 @@ struct ModelsView: View {
             }
             .formStyle(.grouped)
             // Block a duplicate POST from a second tap while the chosen model's
-            // write is still round-tripping. Cancel lives in the pane header
-            // (outside this Form), so it stays tappable.
+            // write is still round-tripping. The panel header's close button
+            // (outside this Form) stays tappable.
             .disabled(harness.isWriting(for: target))
         }
     }

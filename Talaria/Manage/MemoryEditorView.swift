@@ -421,8 +421,6 @@ private struct MemoryFileDetail: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                Text(editor.file.fileName)
-                    .font(.headline)
                 Spacer()
                 Text("\(editor.charCount)/\(editor.file.charCap) chars")
                     .font(.caption.monospacedDigit())

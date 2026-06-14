@@ -1129,14 +1129,18 @@ struct ProfileSyncView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 if let panel = skillDiff {
-                    Divider()
-                    SkillDiffPanelView(
-                        panel: panel,
-                        defaultName: HermesProfiles.defaultProfileName,
-                        profileName: selected,
+                    BottomPanel(
+                        title: panel.skillName,
+                        systemImage: "rectangle.split.2x1",
+                        height: 340,
                         onClose: { skillDiff = nil }
-                    )
-                    .frame(height: 340)
+                    ) {
+                        SkillDiffColumns(
+                            panel: panel,
+                            defaultName: HermesProfiles.defaultProfileName,
+                            profileName: selected
+                        )
+                    }
                 }
             }
             // Detect content drift for unmanaged skills lazily when the Skills
@@ -1701,29 +1705,17 @@ private struct SkillDiffPanel {
     let rows: [SkillDiffRow]
 }
 
-/// A bottom-anchored, read-only side-by-side comparison of a customized skill's
-/// `SKILL.md`: the default profile (left) against the selected profile (right).
-/// Anchored at the bottom (not the side) so the two columns get the full width.
-private struct SkillDiffPanelView: View {
+/// The read-only, side-by-side column body of a customized skill's `SKILL.md`
+/// comparison: the default profile (left) against the selected profile (right).
+/// Hosted in a ``BottomPanel`` (which supplies the title + close chrome) so the
+/// two columns get the full width.
+private struct SkillDiffColumns: View {
     let panel: SkillDiffPanel
     let defaultName: String
     let profileName: String
-    let onClose: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "rectangle.split.2x1")
-                Text(panel.skillName).font(.headline).lineLimit(1)
-                Spacer()
-                Button { onClose() } label: { Image(systemName: "xmark.circle.fill") }
-                    .buttonStyle(.borderless)
-                    .accessibilityLabel("Close comparison")
-                    .help("Close the comparison")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-
             HStack(spacing: 1) {
                 Text(defaultName).frame(maxWidth: .infinity, alignment: .leading)
                 Text(profileName).frame(maxWidth: .infinity, alignment: .leading)
@@ -1731,7 +1723,7 @@ private struct SkillDiffPanelView: View {
             .font(.caption.weight(.semibold))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 12)
-            .padding(.bottom, 4)
+            .padding(.vertical, 4)
 
             Divider()
             content

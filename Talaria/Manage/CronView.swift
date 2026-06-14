@@ -343,7 +343,7 @@ private struct DraftJobEditor: View {
 
     var body: some View {
         Form {
-            Section("New cron job") {
+            Section {
                 TextField("Name (optional)", text: $draft.name)
                 TextField("Schedule (e.g. */5 * * * *)", text: $draft.schedule)
                     .font(.system(.body, design: .monospaced))
