@@ -131,9 +131,13 @@ func platformTUIDetail(tabId: SessionId, spec: TUILaunchSpec?) -> some View {
 }
 
 /// Width the split reserves for the primary pane so a wide secondary can never
-/// overflow the window and push its header's close button off-screen. Set to the
-/// largest primary minimum across the closable surfaces (Tools' tool matrix); a
-/// secondary wider than `region - this` clips its content rather than the close.
+/// overflow the window and push its header's close button off-screen. A secondary
+/// wider than `region - this` clips its content rather than the close.
+///
+/// Set to the largest primary minimum across the closable surfaces *except*
+/// Kanban, whose board still uses a 420pt minimum pending its own layout fix — so
+/// Kanban's close button can still be clipped in a narrow window until that lands.
+/// Every other surface caps its primary at ≤ 320pt, so this reservation holds.
 private let reservedPrimaryWidth: CGFloat = 320
 
 /// Two-pane split for desktop surfaces. macOS uses a resizable `HSplitView`.
