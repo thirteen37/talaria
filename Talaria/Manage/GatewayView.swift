@@ -656,8 +656,8 @@ private struct PlatformDetailEditor: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Spacer()
             ConnectionPill(state: group.connection?.state)
+            Spacer()
         }
     }
 
@@ -699,8 +699,8 @@ private struct StatusOnlyDetail: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
-                    Spacer()
                     ConnectionPill(state: row.platform.state)
+                    Spacer()
                 }
                 Divider()
                 if let message = row.platform.errorMessage, !message.isEmpty {
