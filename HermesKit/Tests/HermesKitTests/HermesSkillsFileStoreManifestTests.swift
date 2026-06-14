@@ -32,7 +32,7 @@ struct HermesSkillsFileStoreManifestTests {
         #expect(HermesSkillsFileStore.parseBundledManifestNames("") == [])
     }
 
-    @Test func inactiveIsTrackedMinusActiveSorted() {
+    @Test func inactiveIsTrackedMinusPresentSorted() {
         let tracked: Set<String> = ["airtable", "notion", "ocr-and-documents", "github"]
         let present: Set<String> = ["github", "notion"]
         #expect(HermesSkillsFileStore.inactiveTrackedNames(tracked: tracked, present: present)

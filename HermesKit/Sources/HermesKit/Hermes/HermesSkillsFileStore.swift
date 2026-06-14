@@ -787,7 +787,7 @@ public enum HermesSkillsFileStore {
         guard !rel.split(separator: "/").contains("..") else { throw RemoteForceDeleteError.unsafePath }
         let quoted = ShellQuoting.shellQuote(rel)
         let base = rel.hasPrefix("/") ? quoted : "\"$HOME\"/\(quoted)"
-        return "command find \(base) -name SKILL.md -not -path '*/.archive/*' -not -path '*/.curator_backups/*' -not -path '*/.hub/*' -exec grep -h -m1 '^name:' {} +"
+        return "command find \(base) -name SKILL.md -not -path '*/.archive/*' -not -path '*/.curator_backups/*' -not -path '*/.hub/*' -exec grep -h -m1 '^name:' {} + 2>/dev/null"
     }
 
     /// Parses ``presentSkillNamesListingCommand`` output (one `name: <value>`
