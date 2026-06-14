@@ -796,6 +796,21 @@ public enum HermesSkillsFileStore {
         return "command find \(base) -mindepth 1 -maxdepth 1 -type d 2>/dev/null"
     }
 
+    /// A `/bin/sh` command (host shell, local or remote) that lists EVERY
+    /// `SKILL.md` under the skills root — used to locate an *inactive* built-in
+    /// (one not in the dashboard list, e.g. archived under `.archive/`) whose
+    /// category isn't known. `find` descends hidden dirs (so `.archive/` is
+    /// included). `$HOME` is double-quoted; the relative part is shell-quoted.
+    public static func skillMarkdownListingCommand(hermesHome: String?) throws -> String {
+        let rel = HermesHomePaths.relativePath(hermesHome: hermesHome, tail: "skills")
+        guard !rel.split(separator: "/").contains("..") else { throw RemoteForceDeleteError.unsafePath }
+        let quoted = ShellQuoting.shellQuote(rel)
+        let base = rel.hasPrefix("/") ? quoted : "\"$HOME\"/\(quoted)"
+        // `command` bypasses a shell function/alias named `find` (see the rm/find
+        // commands above for the remote zsh rationale).
+        return "command find \(base) -name SKILL.md -type f 2>/dev/null"
+    }
+
     /// Splits a directory-listing command's stdout into trimmed, non-empty
     /// absolute directory paths.
     public static func parseDirectoryListing(_ output: String) -> [String] {

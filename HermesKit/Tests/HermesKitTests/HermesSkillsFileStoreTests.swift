@@ -197,6 +197,20 @@ struct HermesSkillsFileStoreTests {
         }
     }
 
+    // MARK: - skillMarkdownListingCommand
+
+    @Test
+    func markdownListingCommandScansSkillsRootUnderHome() throws {
+        let cmd = try HermesSkillsFileStore.skillMarkdownListingCommand(hermesHome: nil)
+        #expect(cmd == "command find \"$HOME\"/'.hermes/skills' -name SKILL.md -type f 2>/dev/null")
+    }
+
+    @Test
+    func markdownListingCommandAbsoluteHermesHome() throws {
+        let cmd = try HermesSkillsFileStore.skillMarkdownListingCommand(hermesHome: "/opt/hermes")
+        #expect(cmd == "command find '/opt/hermes/skills' -name SKILL.md -type f 2>/dev/null")
+    }
+
     // MARK: - parseDirectoryListing
 
     @Test
