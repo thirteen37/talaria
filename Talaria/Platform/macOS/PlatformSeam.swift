@@ -130,6 +130,12 @@ func platformTUIDetail(tabId: SessionId, spec: TUILaunchSpec?) -> some View {
     }
 }
 
+/// Width the split reserves for the primary pane so a wide secondary can never
+/// overflow the window and push its header's close button off-screen. Set to the
+/// largest primary minimum across the closable surfaces (Tools' tool matrix); a
+/// secondary wider than `region - this` clips its content rather than the close.
+private let reservedPrimaryWidth: CGFloat = 320
+
 /// Two-pane split for desktop surfaces. macOS uses a resizable `HSplitView`.
 ///
 /// `showsSecondary` is a `Binding` purely so the iOS half can clear the call
@@ -190,19 +196,29 @@ struct PlatformSplit<Primary: View, Secondary: View>: View {
             HSplitView {
                 primary()
                 if showsSecondary {
-                    if secondaryClosable {
-                        VStack(spacing: 0) {
-                            PanelHeader(
-                                title: secondaryTitle,
-                                systemImage: secondaryIcon,
-                                subtitle: secondarySubtitle,
-                                badges: secondaryBadges
-                            ) { showsSecondary = false }
+                    Group {
+                        if secondaryClosable {
+                            VStack(spacing: 0) {
+                                PanelHeader(
+                                    title: secondaryTitle,
+                                    systemImage: secondaryIcon,
+                                    subtitle: secondarySubtitle,
+                                    badges: secondaryBadges
+                                ) { showsSecondary = false }
+                                secondary()
+                            }
+                        } else {
                             secondary()
                         }
-                    } else {
-                        secondary()
                     }
+                    // Cap the secondary so the split can't overflow the window:
+                    // reserve `reservedPrimaryWidth` for the primary, so the
+                    // secondary's trailing edge — and the header's right-aligned
+                    // close button — always stays on screen. A no-op until the
+                    // window is too narrow to fit both panes; then the secondary's
+                    // content clips on the right while the close stays put.
+                    // `proxy.size.width` is the detail region (window minus nav).
+                    .frame(maxWidth: max(240, proxy.size.width - reservedPrimaryWidth))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
