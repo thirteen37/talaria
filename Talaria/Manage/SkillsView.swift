@@ -90,10 +90,12 @@ final class SkillsHarness {
     /// remove/publish), to disable their buttons.
     var busy: Set<String> = []
     /// Single in-flight flag for the global bundled-seeding actions
-    /// (opt-out / opt-in / re-seed), which aren't keyed by a skill name.
+    /// (opt-out / opt-in / resync), which aren't keyed by a skill name.
     var seedingBusy: Bool = false
     /// Captured `skills audit` report awaiting presentation; cleared on dismiss.
     var auditReport: SkillAuditReport?
+    /// Previewed local built-in skill resync plan awaiting confirmation.
+    var resyncPlan: BundledSkillsResyncPlan?
 
     private let client: DashboardClient
     let runner: HermesAdminRunning?
@@ -596,10 +598,52 @@ final class SkillsHarness {
         await runSeeding { try await HermesSkillsHub.optIn(runner: $0) }
     }
 
-    /// Re-enables and immediately re-seeds bundled skills (`skills opt-in
-    /// --sync`).
-    func reseed() async {
-        await runSeeding { try await HermesSkillsHub.optIn(runner: $0, sync: true) }
+    /// Builds a local filesystem preview against `~/.hermes/hermes-agent/skills`
+    /// without mutating the profile's skills tree.
+    func previewBundledResync() async {
+        guard !seedingBusy else { return }
+        guard isLocalProfile else {
+            let message = "Built-in skill resync is available only for local Hermes profiles."
+            lastError = message
+            banners?.surfaceError(bannerKey, message)
+            return
+        }
+        seedingBusy = true
+        defer { seedingBusy = false }
+        do {
+            let skillsRoot = self.skillsRoot
+            resyncPlan = try await Task.detached {
+                try BundledSkillsResyncService(skillsRoot: skillsRoot).preview()
+            }.value
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
+    }
+
+    /// Applies the exact previewed resync plan, then refreshes the dashboard
+    /// list so new/updated skills appear in the installed table.
+    func applyBundledResync(_ plan: BundledSkillsResyncPlan) async {
+        guard !seedingBusy else { return }
+        seedingBusy = true
+        defer { seedingBusy = false }
+        do {
+            let skillsRoot = self.skillsRoot
+            let result = try await Task.detached {
+                try BundledSkillsResyncService(skillsRoot: skillsRoot).apply(plan)
+            }.value
+            resyncPlan = nil
+            await refresh()
+            let skipped = result.skipped.count
+            var parts = ["\(result.added.count) added", "\(result.updated.count) updated", "\(skipped) skipped"]
+            if let commit = result.sourceCommit?.prefix(12) {
+                parts.append("source \(commit)")
+            }
+            banners?.surfaceSuccess(bannerKey, "Resynced built-in skills: \(parts.joined(separator: ", ")).")
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
     }
 
     /// Shared driver for the three bundled-seeding actions: single in-flight
@@ -813,6 +857,16 @@ struct SkillsView: View {
         )) { report in
             AuditReportSheet(report: report)
         }
+        .sheet(isPresented: Binding(
+            get: { harness.resyncPlan != nil },
+            set: { if !$0 { harness.resyncPlan = nil } }
+        )) {
+            if let plan = harness.resyncPlan {
+                BundledSkillsResyncSheet(plan: plan) {
+                    Task { await harness.applyBundledResync(plan) }
+                }
+            }
+        }
         // Load the selected skill's SKILL.md preview; re-fires (and cancels the
         // prior load) whenever the selection changes.
         .task(id: harness.selectionID) {
@@ -841,11 +895,11 @@ struct SkillsView: View {
             .help("Re-enables seeding of built-in skills into this profile")
 
             Button {
-                Task { await harness.reseed() }
+                Task { await harness.previewBundledResync() }
             } label: {
-                Label("Re-seed bundled skills now", systemImage: "arrow.clockwise.circle")
+                Label("Resync built-in skills", systemImage: "arrow.clockwise.circle")
             }
-            .help("Re-enables seeding and copies the built-in skills in immediately")
+            .help("Preview and copy built-in skills from the local Hermes source checkout")
         } label: {
             Label("Bundled skills", systemImage: "shippingbox")
         }
@@ -1448,6 +1502,120 @@ private struct SkillPill: View {
             .background(color.opacity(0.15), in: Capsule())
             .foregroundStyle(color == .secondary ? Color.secondary : color)
             .lineLimit(1)
+    }
+}
+
+/// Confirmation sheet for Talaria's local built-in skills resync. The plan is
+/// read-only; writes happen only after Confirm calls back into the harness.
+private struct BundledSkillsResyncSheet: View {
+    let plan: BundledSkillsResyncPlan
+    let onConfirm: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private var actionableCount: Int {
+        plan.count(.add) + plan.count(.update)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Resync built-in skills")
+                        .font(.headline)
+                    if let commit = plan.sourceCommit {
+                        Text("Source commit \(commit.prefix(12))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
+                Spacer()
+                Text("\(actionableCount) changes")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    section(.add, title: "Add", systemImage: "plus.circle")
+                    section(.update, title: "Update", systemImage: "arrow.triangle.2.circlepath")
+                    section(.skipUnchanged, title: "Up to date", systemImage: "checkmark.circle")
+                    section(.skipModified, title: "Skip: locally modified", systemImage: "pencil.circle")
+                    section(.skipUnknown, title: "Skip: unknown existing skill", systemImage: "questionmark.circle")
+                    section(.skipDeleted, title: "Deleted locally", systemImage: "minus.circle")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(minHeight: 280, maxHeight: 520)
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Confirm") {
+                    onConfirm()
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(actionableCount == 0)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 620)
+    }
+
+    @ViewBuilder
+    private func section(_ action: BundledSkillsResyncAction, title: String, systemImage: String) -> some View {
+        let rows = plan.items.filter { $0.action == action }
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("\(title) (\(rows.count))", systemImage: systemImage)
+                    .font(.subheadline.weight(.semibold))
+                VStack(spacing: 0) {
+                    ForEach(rows) { item in
+                        HStack(alignment: .top, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(item.name)
+                                        .font(.caption.weight(.medium))
+                                    if let category = item.category, !category.isEmpty {
+                                        SkillPill(text: category, color: .secondary)
+                                    }
+                                }
+                                Text(item.path)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Text(item.reason)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            Spacer(minLength: 8)
+                            hashPair(item)
+                        }
+                        .padding(.vertical, 6)
+                        Divider()
+                    }
+                }
+                .padding(.horizontal, 8)
+                .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func hashPair(_ item: BundledSkillsResyncItem) -> some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            if let currentHash = item.currentHash {
+                Text("local \(currentHash.prefix(8))")
+            }
+            Text("source \(item.sourceHash.prefix(8))")
+        }
+        .font(.caption2.monospaced())
+        .foregroundStyle(.tertiary)
+        .textSelection(.enabled)
     }
 }
 
