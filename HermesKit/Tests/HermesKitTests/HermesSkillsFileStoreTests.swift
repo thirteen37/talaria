@@ -211,6 +211,20 @@ struct HermesSkillsFileStoreTests {
         #expect(cmd == "command find '/opt/hermes/skills' -name SKILL.md -type f 2>/dev/null")
     }
 
+    // MARK: - presentSkillNamesListingCommand
+
+    @Test
+    func presentNamesCommandScansActiveTreeUnderHome() throws {
+        let cmd = try HermesSkillsFileStore.presentSkillNamesListingCommand(hermesHome: nil)
+        #expect(cmd == "command find \"$HOME\"/'.hermes/skills' -name SKILL.md -not -path '*/.archive/*' -not -path '*/.curator_backups/*' -not -path '*/.hub/*' -exec grep -h -m1 '^name:' {} +")
+    }
+
+    @Test
+    func presentNamesCommandAbsoluteHermesHome() throws {
+        let cmd = try HermesSkillsFileStore.presentSkillNamesListingCommand(hermesHome: "/opt/hermes")
+        #expect(cmd == "command find '/opt/hermes/skills' -name SKILL.md -not -path '*/.archive/*' -not -path '*/.curator_backups/*' -not -path '*/.hub/*' -exec grep -h -m1 '^name:' {} +")
+    }
+
     // MARK: - parseDirectoryListing
 
     @Test

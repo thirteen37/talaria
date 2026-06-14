@@ -630,11 +630,12 @@ public enum HermesSkillsFileStore {
         return names
     }
 
-    /// Bundled-skill names Hermes tracks but that are not currently active
-    /// (discoverable) — i.e. deleted or archived under `.archive/`. Sorted for a
-    /// stable UI order. Restoring one runs `hermes skills reset`.
-    public static func inactiveTrackedNames(tracked: Set<String>, active: Set<String>) -> [String] {
-        tracked.subtracting(active).sorted()
+    /// Bundled-skill names Hermes tracks but whose files are not present on the
+    /// active (non-archived) skills tree — i.e. genuinely absent (deleted or
+    /// archived), so `hermes skills reset` can re-seed them. Excludes skills that
+    /// are present but merely filtered out of the dashboard list. Sorted.
+    public static func inactiveTrackedNames(tracked: Set<String>, present: Set<String>) -> [String] {
+        tracked.subtracting(present).sorted()
     }
 
     /// Absolute path of a **remote** host's `skills/.bundled_manifest`, for the
@@ -771,6 +772,40 @@ public enum HermesSkillsFileStore {
             return value.isEmpty ? nil : value
         }
         return nil
+    }
+
+    /// A `/bin/sh` command (host shell, local or remote) that prints the
+    /// frontmatter `name:` line of every `SKILL.md` on the **active** skills
+    /// tree — i.e. excluding the non-discoverable `.archive/`, `.curator_backups/`
+    /// and `.hub/` subtrees. One batched `find … -exec grep` round trip; the
+    /// caller passes the output to ``parsePresentSkillNames``. Used to tell which
+    /// tracked built-ins are genuinely absent (restorable) versus present but
+    /// merely filtered out of the dashboard offer list (environment/platform/
+    /// disabled), which `hermes skills reset` cannot restore.
+    public static func presentSkillNamesListingCommand(hermesHome: String?) throws -> String {
+        let rel = HermesHomePaths.relativePath(hermesHome: hermesHome, tail: "skills")
+        guard !rel.split(separator: "/").contains("..") else { throw RemoteForceDeleteError.unsafePath }
+        let quoted = ShellQuoting.shellQuote(rel)
+        let base = rel.hasPrefix("/") ? quoted : "\"$HOME\"/\(quoted)"
+        return "command find \(base) -name SKILL.md -not -path '*/.archive/*' -not -path '*/.curator_backups/*' -not -path '*/.hub/*' -exec grep -h -m1 '^name:' {} +"
+    }
+
+    /// Parses ``presentSkillNamesListingCommand`` output (one `name: <value>`
+    /// line per present skill) into the set of frontmatter names, stripping
+    /// surrounding quotes. Tolerates blank lines, non-`name:` lines, and CRLF.
+    public static func parsePresentSkillNames(_ output: String) -> Set<String> {
+        var names: Set<String> = []
+        for rawLine in output.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("name:") else { continue }
+            var value = String(line.dropFirst("name:".count)).trimmingCharacters(in: .whitespaces)
+            if value.count >= 2,
+               (value.hasPrefix("\"") && value.hasSuffix("\"")) || (value.hasPrefix("'") && value.hasSuffix("'")) {
+                value = String(value.dropFirst().dropLast())
+            }
+            if !value.isEmpty { names.insert(value) }
+        }
+        return names
     }
 
     /// A `/bin/sh` command (via the host shell, local or remote) that lists the

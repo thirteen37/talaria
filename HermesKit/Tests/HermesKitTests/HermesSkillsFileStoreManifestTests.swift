@@ -34,14 +34,29 @@ struct HermesSkillsFileStoreManifestTests {
 
     @Test func inactiveIsTrackedMinusActiveSorted() {
         let tracked: Set<String> = ["airtable", "notion", "ocr-and-documents", "github"]
-        let active: Set<String> = ["github", "notion"]
-        #expect(HermesSkillsFileStore.inactiveTrackedNames(tracked: tracked, active: active)
+        let present: Set<String> = ["github", "notion"]
+        #expect(HermesSkillsFileStore.inactiveTrackedNames(tracked: tracked, present: present)
                 == ["airtable", "ocr-and-documents"])
     }
 
     @Test func inactiveIsEmptyWhenAllActive() {
         let tracked: Set<String> = ["a", "b"]
-        #expect(HermesSkillsFileStore.inactiveTrackedNames(tracked: tracked, active: ["a", "b", "c"]) == [])
+        #expect(HermesSkillsFileStore.inactiveTrackedNames(tracked: tracked, present: ["a", "b", "c"]) == [])
+    }
+
+    @Test func parsesPresentSkillNamesFromGrepOutput() {
+        let out = """
+        name: kanban-orchestrator
+        name: "quoted-name"
+        name: 'single-quoted'
+        """
+        #expect(HermesSkillsFileStore.parsePresentSkillNames(out)
+                == ["kanban-orchestrator", "quoted-name", "single-quoted"])
+    }
+
+    @Test func parsePresentSkillNamesIgnoresBlankAndNonNameLinesAndCRLF() {
+        let out = "name: a\r\n\r\nnot-a-name-line\r\nname:   b  \r\n"
+        #expect(HermesSkillsFileStore.parsePresentSkillNames(out) == ["a", "b"])
     }
 
     @Test func remoteManifestPathPrependsResolvedHomeForHomeRelativeHermesHome() {
