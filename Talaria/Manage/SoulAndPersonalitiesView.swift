@@ -382,7 +382,7 @@ struct SoulAndPersonalitiesView: View {
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             detailPane(harness: harness, soul: soul)
-                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar { toolbar(harness: harness, soul: soul) }
         // Hard errors route to the top-of-window strip; this surface has no

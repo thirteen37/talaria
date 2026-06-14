@@ -99,7 +99,7 @@ struct ToolsView: View {
                 .frame(minWidth: Idiom.isPhone ? nil : 420, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             configPane(harness: harness)
-                .frame(minWidth: 320, idealWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 240, idealWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Hard errors route to the top-of-window strip; only the capability

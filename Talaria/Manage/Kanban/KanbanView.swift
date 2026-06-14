@@ -116,7 +116,7 @@ struct KanbanView: View {
                 .frame(minWidth: Idiom.isPhone ? nil : 420, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             secondaryPane(harness: harness)
-                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar { toolbar(harness: harness) }
         .manageBanner(bannerMessage(harness), severity: bannerSeverity(harness))
