@@ -264,22 +264,35 @@ final class SkillsHarness {
     /// Force-remove confirmation. Best-effort: a missing/unlocatable skill shows a
     /// soft note, not a banner error.
     func loadPreview() async {
-        guard let skill = selected else {
-            previewName = nil
-            previewText = nil
-            previewError = nil
-            previewLoading = false
-            resolvedDir = nil
-            resolvedDirName = nil
+        guard let id = selectionID else {
+            clearPreview()
             return
         }
+        if let skill = rows.first(where: { $0.name == id }) {
+            await loadActivePreview(skill)
+        } else if inactiveTracked.contains(id) {
+            await loadInactivePreview(name: id)
+        } else {
+            clearPreview()
+        }
+    }
+
+    private func clearPreview() {
+        previewName = nil
+        previewText = nil
+        previewError = nil
+        previewLoading = false
+        resolvedDir = nil
+        resolvedDirName = nil
+    }
+
+    /// Resolves the selected active skill's directory and renders its `SKILL.md`
+    /// preview. (Unchanged behavior — extracted from the former `loadPreview`.)
+    private func loadActivePreview(_ skill: DashboardSkill) async {
         previewName = skill.name
         previewText = nil
         previewError = nil
         previewLoading = true
-        // Guard the clear by `previewName` like the writes below, so the losing
-        // side of a fast selection race doesn't drop the spinner while the
-        // winning task is still reading.
         defer { if previewName == skill.name { previewLoading = false } }
 
         let dir = await resolveSkillDirectory(for: skill)
@@ -301,6 +314,57 @@ final class SkillsHarness {
             guard previewName == skill.name else { return }
             previewError = error.localizedDescription
         }
+    }
+
+    /// Locates an *inactive* built-in's `SKILL.md` (it's not in the dashboard
+    /// list, so we don't know its category) by listing every `SKILL.md` under the
+    /// skills root and matching the frontmatter `name`, preferring a directory
+    /// whose name equals the skill. Renders the matched source as the preview.
+    /// Best-effort: a soft note if it can't be located.
+    private func loadInactivePreview(name: String) async {
+        previewName = name
+        previewText = nil
+        previewError = nil
+        previewLoading = true
+        resolvedDir = nil
+        resolvedDirName = nil
+        defer { if previewName == name { previewLoading = false } }
+
+        guard let hostShell else {
+            if previewName == name { previewError = "Couldn't locate this skill on disk." }
+            return
+        }
+        let command: String
+        do {
+            command = try HermesSkillsFileStore.skillMarkdownListingCommand(hermesHome: profile?.hermesHome)
+        } catch {
+            if previewName == name { previewError = "Couldn't locate this skill on disk." }
+            return
+        }
+        guard let listing = try? await hostShell.runShell(command, workingDirectory: nil),
+              listing.exitCode == 0 else {
+            if previewName == name { previewError = "Couldn't locate this skill on disk." }
+            return
+        }
+        let paths = HermesSkillsFileStore.parseDirectoryListing(listing.stdout)
+        func parentName(_ p: String) -> String {
+            ((p as NSString).deletingLastPathComponent as NSString).lastPathComponent
+        }
+        // Read the directory-name match first (common case → one read), then the rest.
+        let ordered = paths.filter { parentName($0) == name } + paths.filter { parentName($0) != name }
+        for md in ordered.prefix(120) {
+            guard previewName == name else { return }
+            guard let content = try? await HermesFileStore.read(
+                resolvedPath: md, isLocal: isLocalProfile, transfer: transfer, profile: profile
+            ) else { continue }
+            if HermesSkillsFileStore.frontmatterName(content) == name {
+                guard previewName == name else { return }
+                previewText = content
+                return
+            }
+        }
+        guard previewName == name else { return }
+        previewError = "Couldn't locate this skill on disk."
     }
 
     /// True once the manual install field has a non-empty identifier.
@@ -845,10 +909,10 @@ struct SkillsView: View {
         // selected skill's description, actions, and SKILL.md preview on the right.
         PlatformSplit(
             showsSecondary: Binding(
-                get: { harness.selected != nil },
+                get: { harness.selectionID != nil },
                 set: { if !$0 { harness.selectionID = nil } }
             ),
-            secondaryTitle: harness.selected?.name
+            secondaryTitle: harness.selected?.name ?? harness.selectionID
         ) {
             primaryPane(harness: harness)
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
@@ -1115,7 +1179,7 @@ struct SkillsView: View {
                             .disabled(harness.runner == nil || harness.busy.contains(name))
                             .help("Restore this built-in skill so Hermes manages it again")
                         }
-                        .selectionDisabled()
+                        .tag(name)
                     }
                 } header: {
                     Text("Inactive built-in skills")
@@ -1166,6 +1230,16 @@ struct SkillsView: View {
                     }
                 },
                 onForceRemove: { Task { await harness.forceRemove(skill) } }
+            )
+        } else if let id = harness.selectionID, harness.inactiveTracked.contains(id) {
+            InactiveSkillDetail(
+                name: id,
+                previewText: harness.previewText,
+                previewError: harness.previewError,
+                previewLoading: harness.previewLoading,
+                busy: harness.busy.contains(id),
+                restoreAvailable: harness.runner != nil,
+                onRestore: { Task { await harness.reset(id) } }
             )
         }
     }
@@ -1308,6 +1382,94 @@ private struct SkillRow: View {
     }
 }
 
+/// The highlighted `SKILL.md` source block, shared by the active and inactive
+/// skill detail panes.
+private struct SkillSourcePreview: View {
+    let previewText: String?
+    let previewError: String?
+    let previewLoading: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Preview")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            if previewLoading {
+                ProgressView().controlSize(.small)
+            } else if let previewText, !previewText.isEmpty {
+                Text(Self.highlighted(previewText))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+            } else {
+                Text(previewError ?? "Preview unavailable.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Highlights the SKILL.md source: the leading `---`-fenced YAML frontmatter
+    /// with the YAML theme, the markdown body with the markdown theme. Falls back
+    /// to whole-document markdown highlighting when there's no frontmatter.
+    static func highlighted(_ text: String) -> AttributedString {
+        guard let parts = MarkdownFrontmatter.split(text) else {
+            return AttributedString(MarkdownHighlightTheme.attributed(text))
+        }
+        let combined = NSMutableAttributedString()
+        combined.append(YAMLHighlightTheme.attributed(parts.frontmatter))
+        combined.append(MarkdownHighlightTheme.attributed(parts.body))
+        return AttributedString(combined)
+    }
+}
+
+/// Detail panel for a selected *inactive* built-in skill: name, an
+/// explanatory subtitle, a Restore action, and the `SKILL.md` preview.
+private struct InactiveSkillDetail: View {
+    let name: String
+    let previewText: String?
+    let previewError: String?
+    let previewLoading: Bool
+    let busy: Bool
+    let restoreAvailable: Bool
+    let onRestore: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 6) {
+                    Text(name)
+                        .font(.headline)
+                        .textSelection(.enabled)
+                    SkillPill(text: "Built-in", color: .secondary)
+                }
+                Text("Tracked by Hermes but not active — e.g. archived or removed.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+                Button { onRestore() } label: {
+                    if busy {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("Restore", systemImage: "arrow.uturn.backward.circle")
+                    }
+                }
+                .disabled(busy || !restoreAvailable)
+                .help("Restore this built-in skill so Hermes manages it again")
+
+                Divider()
+                SkillSourcePreview(previewText: previewText, previewError: previewError, previewLoading: previewLoading)
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+}
+
 /// The detail panel for the selected skill (the `PlatformSplit` secondary):
 /// full description plus a kind-appropriate action cluster — hub: Update /
 /// Audit / Remove; builtin: Repair (official) / Reset; local: Publish — plus a
@@ -1385,7 +1547,7 @@ private struct SkillDetail: View {
                 actions
 
                 Divider()
-                preview
+                SkillSourcePreview(previewText: previewText, previewError: previewError, previewLoading: previewLoading)
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1432,47 +1594,6 @@ private struct SkillDetail: View {
             }
             captions
         }
-    }
-
-    /// The skill's `SKILL.md` source, rendered read-only with markdown syntax
-    /// highlighting (the same `MarkdownHighlightTheme` the Soul/Memory editors
-    /// use). Loading shows a spinner; a missing/unreadable file shows a soft
-    /// note. Renders inline so the whole detail panel scrolls for long skills.
-    @ViewBuilder
-    private var preview: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Preview")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-
-            if previewLoading {
-                ProgressView().controlSize(.small)
-            } else if let previewText, !previewText.isEmpty {
-                Text(Self.highlighted(previewText))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-            } else {
-                Text(previewError ?? "Preview unavailable.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// Highlights the SKILL.md source: the leading `---`-fenced YAML frontmatter
-    /// with the YAML theme, the markdown body with the markdown theme. Falls back
-    /// to whole-document markdown highlighting when there's no frontmatter.
-    private static func highlighted(_ text: String) -> AttributedString {
-        guard let parts = MarkdownFrontmatter.split(text) else {
-            return AttributedString(MarkdownHighlightTheme.attributed(text))
-        }
-        let combined = NSMutableAttributedString()
-        combined.append(YAMLHighlightTheme.attributed(parts.frontmatter))
-        combined.append(MarkdownHighlightTheme.attributed(parts.body))
-        return AttributedString(combined)
     }
 
     /// hub: Update / Audit / Remove.
