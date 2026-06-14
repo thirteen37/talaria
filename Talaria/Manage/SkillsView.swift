@@ -96,6 +96,10 @@ final class SkillsHarness {
     var auditReport: SkillAuditReport?
     /// Previewed local built-in skill resync plan awaiting confirmation.
     var resyncPlan: BundledSkillsResyncPlan?
+    /// Bundled built-in skills Hermes tracks in `.bundled_manifest` but that are
+    /// not currently active (deleted, or moved into `.archive/`). Each can be
+    /// restored via `hermes skills reset`. Populated by ``loadInactiveTracked``.
+    var inactiveTracked: [String] = []
 
     private let client: DashboardClient
     let runner: HermesAdminRunning?
@@ -331,6 +335,7 @@ final class SkillsHarness {
             banners?.surfaceError(bannerKey, error.localizedDescription)
         }
         await refreshHubInstalled()
+        await loadInactiveTracked()
         // Probe every hub skill for upstream updates fire-and-forget so the
         // "Update available" badges populate without adding network latency to
         // `refresh()` (which also runs on every enable/disable toggle).
@@ -363,6 +368,42 @@ final class SkillsHarness {
                 lastError = error.localizedDescription
                 banners?.surfaceError(bannerKey, error.localizedDescription)
             }
+        }
+    }
+
+    /// Refreshes ``inactiveTracked`` = manifest-tracked names minus the active
+    /// (discoverable) skills in `rows`. Best-effort: a missing/unreadable
+    /// `.bundled_manifest` (opted-out / fresh profile) clears the set.
+    func loadInactiveTracked() async {
+        guard let content = await readBundledManifest() else {
+            inactiveTracked = []
+            return
+        }
+        let tracked = HermesSkillsFileStore.parseBundledManifestNames(content)
+        let active = Set(rows.map(\.name))
+        inactiveTracked = HermesSkillsFileStore.inactiveTrackedNames(tracked: tracked, active: active)
+    }
+
+    /// Reads the profile's `skills/.bundled_manifest` (local `FileManager`, or
+    /// remote over SSH via ``HermesFileStore``). Returns nil if it can't be read.
+    private func readBundledManifest() async -> String? {
+        switch profile?.kind {
+        case .ssh:
+            guard let hostShell else { return nil }
+            var home: String?
+            if let result = try? await hostShell.runShell("command printf '%s' \"$HOME\"", workingDirectory: nil),
+               result.exitCode == 0 {
+                let resolved = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                home = resolved.isEmpty ? nil : resolved
+            }
+            let path = HermesSkillsFileStore.bundledManifestRemotePath(
+                hermesHome: profile?.hermesHome, homeDirectory: home)
+            return try? await HermesFileStore.read(
+                resolvedPath: path, isLocal: false, transfer: transfer, profile: profile)
+        case .local, .none:
+            let path = skillsRoot.appendingPathComponent(".bundled_manifest", isDirectory: false).path
+            return try? await HermesFileStore.read(
+                resolvedPath: path, isLocal: true, transfer: transfer, profile: profile)
         }
     }
 
