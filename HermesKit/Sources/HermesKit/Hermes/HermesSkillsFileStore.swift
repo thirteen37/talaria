@@ -630,6 +630,13 @@ public enum HermesSkillsFileStore {
         return names
     }
 
+    /// Bundled-skill names Hermes tracks but that are not currently active
+    /// (discoverable) — i.e. deleted or archived under `.archive/`. Sorted for a
+    /// stable UI order. Restoring one runs `hermes skills reset`.
+    public static func inactiveTrackedNames(tracked: Set<String>, active: Set<String>) -> [String] {
+        tracked.subtracting(active).sorted()
+    }
+
     /// The local skills root (`<hermesHome>/skills`, default `~/.hermes/skills`),
     /// with `~` expanded. Shared by force-delete and the Publish default path.
     public static func localSkillsRoot(hermesHome: String?) -> URL {

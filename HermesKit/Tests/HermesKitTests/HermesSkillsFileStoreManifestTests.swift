@@ -31,4 +31,16 @@ struct HermesSkillsFileStoreManifestTests {
     @Test func emptyTextYieldsEmptySet() {
         #expect(HermesSkillsFileStore.parseBundledManifestNames("") == [])
     }
+
+    @Test func inactiveIsTrackedMinusActiveSorted() {
+        let tracked: Set<String> = ["airtable", "notion", "ocr-and-documents", "github"]
+        let active: Set<String> = ["github", "notion"]
+        #expect(HermesSkillsFileStore.inactiveTrackedNames(tracked: tracked, active: active)
+                == ["airtable", "ocr-and-documents"])
+    }
+
+    @Test func inactiveIsEmptyWhenAllActive() {
+        let tracked: Set<String> = ["a", "b"]
+        #expect(HermesSkillsFileStore.inactiveTrackedNames(tracked: tracked, active: ["a", "b", "c"]) == [])
+    }
 }
