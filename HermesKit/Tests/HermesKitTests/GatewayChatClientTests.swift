@@ -247,6 +247,7 @@ struct GatewayChatClientTests {
             Issue.record("expected permissionRequest, got \(note)")
             return
         }
+        #expect(event.kind == .permission)
         #expect(event.request.options.contains { $0.optionId == "once" })
         #expect(event.request.options.contains { $0.optionId == "deny" })
 
@@ -255,6 +256,32 @@ struct GatewayChatClientTests {
         let respondFrame = try await fake.waitForSent(at: sentBefore)
         #expect(method(of: respondFrame) == "approval.respond")
         #expect(stringParam(respondFrame, "choice") == "once")
+    }
+
+    @Test
+    func clarifyRequestRoundTrips() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        var iterator = client.notifications.makeAsyncIterator()
+
+        fake.pushInbound(eventFrame(type: "clarify.request", sessionId: sid, payload: [
+            "request_id": .string("clar-1"),
+            "question": .string("Where are you looking to dine?"),
+            "choices": .array([.string("Garden"), .string("Patio"), .string("Bar"), .string("Main hall")])
+        ]))
+        let note = try await requireNext(&iterator)
+        guard case let .permissionRequest(event) = note else {
+            Issue.record("expected permissionRequest, got \(note)")
+            return
+        }
+        #expect(event.kind == .question)
+        #expect(event.request.toolCall.title == "Where are you looking to dine?")
+        #expect(event.request.options.map(\.name) == ["Garden", "Patio", "Bar", "Main hall"])
+
+        let sentBefore = fake.sent.count
+        await event.respond(.selected(SelectedPermissionOutcome(optionId: "Patio")))
+        let respondFrame = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: respondFrame) == "clarify.respond")
+        #expect(stringParam(respondFrame, "answer") == "Patio")
     }
 
     @Test

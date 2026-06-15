@@ -430,7 +430,7 @@ public actor GatewayChatClient: ChatBackend {
             PermissionOption(optionId: "deny", name: "Reject", kind: .rejectOnce)
         ]
         let request = RequestPermissionRequest(sessionId: sid, toolCall: toolCall, options: options)
-        let event = PermissionRequestEvent(id: .string("approval-\(permissionCounter)"), request: request) { [weak self] outcome in
+        let event = PermissionRequestEvent(id: .string("approval-\(permissionCounter)"), request: request, kind: .permission) { [weak self] outcome in
             await self?.respondApproval(outcome: outcome)
         }
         notificationContinuation.yield(.permissionRequest(event))
@@ -466,7 +466,7 @@ public actor GatewayChatClient: ChatBackend {
             : choices.map { PermissionOption(optionId: $0, name: $0, kind: .allowOnce) }
         let toolCall = ToolCallUpdate(toolCallId: "clarify-\(permissionCounter)", title: question, status: .pending)
         let request = RequestPermissionRequest(sessionId: sid, toolCall: toolCall, options: options)
-        let event = PermissionRequestEvent(id: .string("clarify-\(permissionCounter)"), request: request) { [weak self] outcome in
+        let event = PermissionRequestEvent(id: .string("clarify-\(permissionCounter)"), request: request, kind: .question) { [weak self] outcome in
             await self?.respondText(requestId: requestId, method: "clarify.respond", field: "answer", outcome: outcome)
         }
         notificationContinuation.yield(.permissionRequest(event))
@@ -485,7 +485,7 @@ public actor GatewayChatClient: ChatBackend {
         let toolCall = ToolCallUpdate(toolCallId: "secret-\(permissionCounter)", title: prompt, status: .pending)
         let options = [PermissionOption(optionId: "", name: "Cancel", kind: .rejectOnce)]
         let request = RequestPermissionRequest(sessionId: sid, toolCall: toolCall, options: options)
-        let event = PermissionRequestEvent(id: .string("secret-\(permissionCounter)"), request: request) { [weak self] outcome in
+        let event = PermissionRequestEvent(id: .string("secret-\(permissionCounter)"), request: request, kind: .secret) { [weak self] outcome in
             await self?.respondText(requestId: requestId, method: method, field: field, outcome: outcome)
         }
         notificationContinuation.yield(.permissionRequest(event))

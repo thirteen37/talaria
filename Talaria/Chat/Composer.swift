@@ -5,6 +5,9 @@ struct Composer: View {
     @Binding var prompt: String
     var isSending: Bool
     var isBlocked: Bool
+    /// Placeholder shown while `isBlocked` — varies by the pending prompt kind
+    /// (permission / question / secret) so it matches the status line.
+    var blockedPlaceholder: String = "Waiting for permission"
     var availableCommands: [AvailableCommand]
     var send: () -> Void
     var cancel: () -> Void
@@ -42,7 +45,7 @@ struct Composer: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            TextField(isBlocked ? "Waiting for permission" : "Message Hermes", text: $prompt, axis: .vertical)
+            TextField(isBlocked ? blockedPlaceholder : "Message Hermes", text: $prompt, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...6)
                 .disabled(isBlocked)

@@ -67,11 +67,21 @@ final class ChatNotifier: NSObject {
         )
     }
 
-    /// Posts the "tool needs approval" banner for `sessionId` in `profileId`'s
-    /// window. `toolName` names the blocked tool when known.
-    func postToolApproval(profileId: UUID, sessionId: SessionId, title: String?, toolName: String?) {
+    /// Posts the "needs your input" banner for a blocking prompt in `profileId`'s
+    /// window. The copy matches the in-app rendering per ``UserPromptKind``: a
+    /// tool approval, an agent question, or a secure-value request. `detail` names
+    /// the tool / carries the question text when known.
+    func postToolApproval(profileId: UUID, sessionId: SessionId, title: String?, kind: UserPromptKind, detail: String?) {
         let chat = displayTitle(title)
-        let body = toolName.map { "“\($0)” needs your approval." } ?? "A tool needs your approval."
+        let body: String
+        switch kind {
+        case .permission:
+            body = detail.map { "“\($0)” needs your approval." } ?? "A tool needs your approval."
+        case .question:
+            body = detail.map { "The agent asked: “\($0)”" } ?? "The agent has a question for you."
+        case .secret:
+            body = detail.map { "“\($0)” needs a secure value." } ?? "The agent needs a secure value."
+        }
         post(
             profileId: profileId,
             sessionId: sessionId,

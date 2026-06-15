@@ -134,6 +134,12 @@ struct DesktopServerWindow: View {
             previous?.tearDown()
             if UITestFlags.opensScreenshotChat {
                 await fixture.openScreenshotSession()
+                if let promptKind = UITestFlags.screenshotPromptKind {
+                    // Let the chat surface attach its notification observer before
+                    // the scripted prompt is emitted, so the sheet actually shows.
+                    try? await Task.sleep(for: .milliseconds(400))
+                    fixture.emitScreenshotPrompt(promptKind)
+                }
             }
             return
         }

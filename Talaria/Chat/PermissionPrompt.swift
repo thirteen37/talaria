@@ -15,14 +15,16 @@ struct PermissionPrompt: View {
     private var promptBody: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "hand.raised.fill")
+                Image(systemName: headerIcon)
                     .font(.title3)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(headerIconColor)
                     .frame(width: 28)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Permission Required")
-                        .font(.headline)
+                    if let headerTitle {
+                        Text(headerTitle)
+                            .font(.headline)
+                    }
                     Text(state.request.toolCall.title ?? state.request.toolCall.toolCallId)
                         .font(.callout)
                         .textSelection(.enabled)
@@ -35,16 +37,16 @@ struct PermissionPrompt: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(state.request.options, id: \.optionId) { option in
-                    Button {
-                        select(option)
-                    } label: {
-                        Label(option.name, systemImage: iconName(for: option.kind))
-                            .frame(maxWidth: .infinity, alignment: .leading)
+            // `.secret`/`.sudo` can't capture a typed value yet (v1 limitation —
+            // see `emitTextSecret`), so its only option is a Cancel placeholder
+            // that does exactly what the bottom Cancel does. Suppress it rather
+            // than show two cancel affordances; the bottom Cancel unblocks the
+            // agent with an empty value.
+            if state.kind != .secret {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(state.request.options, id: \.optionId) { option in
+                        optionButton(option)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(tint(for: option.kind))
                 }
             }
 
@@ -53,6 +55,54 @@ struct PermissionPrompt: View {
                 Button("Cancel", role: .cancel, action: cancel)
                     .keyboardShortcut(.cancelAction)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func optionButton(_ option: PermissionOption) -> some View {
+        // A clarify question's choices are answers, not allow/deny — render them
+        // as neutral bordered buttons with no allow/deny icon.
+        if state.kind == .question {
+            Button {
+                select(option)
+            } label: {
+                Text(option.name)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.bordered)
+        } else {
+            Button {
+                select(option)
+            } label: {
+                Label(option.name, systemImage: iconName(for: option.kind))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(tint(for: option.kind))
+        }
+    }
+
+    private var headerTitle: String? {
+        switch state.kind {
+        case .permission: "Permission Required"
+        case .question: nil   // the question text alone carries the meaning
+        case .secret: nil
+        }
+    }
+
+    private var headerIcon: String {
+        switch state.kind {
+        case .permission: "hand.raised.fill"
+        case .question: "questionmark.circle"
+        case .secret: "lock.fill"
+        }
+    }
+
+    private var headerIconColor: Color {
+        switch state.kind {
+        case .permission: .orange
+        case .question: .accentColor
+        case .secret: .secondary
         }
     }
 
