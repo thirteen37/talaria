@@ -293,13 +293,14 @@ struct GatewayView: View {
                     get: { harness.selectedItem != nil },
                     set: { if !$0 { harness.selectionID = nil } }
                 ),
-                secondaryTitle: detailTitle(harness)
+                secondaryTitle: detailTitle(harness),
+                secondaryIcon: detailIcon(harness)
             ) {
                 platformList(harness: harness)
-                    .frame(minWidth: Idiom.isPhone ? nil : 360, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: Idiom.isPhone ? nil : 280, maxWidth: .infinity, maxHeight: .infinity)
             } secondary: {
                 detailPane(harness: harness)
-                    .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -429,6 +430,14 @@ struct GatewayView: View {
         switch harness.selectedItem {
         case let .platform(group): return group.displayName
         case let .statusOnly(row): return row.name
+        case nil: return nil
+        }
+    }
+
+    private func detailIcon(_ harness: GatewayHarness) -> String? {
+        switch harness.selectedItem {
+        case let .platform(group): return group.systemImage
+        case .statusOnly: return "antenna.radiowaves.left.and.right"
         case nil: return nil
         }
     }
@@ -647,13 +656,8 @@ private struct PlatformDetailEditor: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: group.systemImage)
-                .font(.title2)
-                .foregroundStyle(.tint)
-            Text(group.displayName)
-                .font(.title3.weight(.semibold))
-            Spacer()
             ConnectionPill(state: group.connection?.state)
+            Spacer()
         }
     }
 
@@ -695,13 +699,8 @@ private struct StatusOnlyDetail: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
-                    Image(systemName: "antenna.radiowaves.left.and.right")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                    Text(row.name)
-                        .font(.title3.weight(.semibold))
-                    Spacer()
                     ConnectionPill(state: row.platform.state)
+                    Spacer()
                 }
                 Divider()
                 if let message = row.platform.errorMessage, !message.isEmpty {

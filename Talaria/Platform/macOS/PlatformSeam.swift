@@ -130,6 +130,16 @@ func platformTUIDetail(tabId: SessionId, spec: TUILaunchSpec?) -> some View {
     }
 }
 
+/// Width the split reserves for the primary pane so a wide secondary can never
+/// overflow the window and push its header's close button off-screen. A secondary
+/// wider than `region - this` clips its content rather than the close.
+///
+/// Set to the largest primary minimum across the closable surfaces *except*
+/// Kanban, whose board still uses a 420pt minimum pending its own layout fix — so
+/// Kanban's close button can still be clipped in a narrow window until that lands.
+/// Every other surface caps its primary at ≤ 320pt, so this reservation holds.
+private let reservedPrimaryWidth: CGFloat = 320
+
 /// Two-pane split for desktop surfaces. macOS uses a resizable `HSplitView`.
 ///
 /// `showsSecondary` is a `Binding` purely so the iOS half can clear the call
@@ -140,16 +150,30 @@ func platformTUIDetail(tabId: SessionId, spec: TUILaunchSpec?) -> some View {
 /// call sites compile against both halves.
 struct PlatformSplit<Primary: View, Secondary: View>: View {
     @Binding var showsSecondary: Bool
+    private let secondaryTitle: String?
+    private let secondaryIcon: String?
+    private let secondarySubtitle: String?
+    private let secondaryBadges: [PanelBadge]
+    private let secondaryClosable: Bool
     @ViewBuilder var primary: () -> Primary
     @ViewBuilder var secondary: () -> Secondary
 
     init(
         showsSecondary: Binding<Bool> = .constant(true),
         secondaryTitle: String? = nil,
+        secondaryIcon: String? = nil,
+        secondarySubtitle: String? = nil,
+        secondaryBadges: [PanelBadge] = [],
+        secondaryClosable: Bool = true,
         @ViewBuilder primary: @escaping () -> Primary,
         @ViewBuilder secondary: @escaping () -> Secondary
     ) {
         self._showsSecondary = showsSecondary
+        self.secondaryTitle = secondaryTitle
+        self.secondaryIcon = secondaryIcon
+        self.secondarySubtitle = secondarySubtitle
+        self.secondaryBadges = secondaryBadges
+        self.secondaryClosable = secondaryClosable
         self.primary = primary
         self.secondary = secondary
     }
@@ -175,7 +199,31 @@ struct PlatformSplit<Primary: View, Secondary: View>: View {
             let topInset = proxy.safeAreaInsets.top
             HSplitView {
                 primary()
-                if showsSecondary { secondary() }
+                if showsSecondary {
+                    Group {
+                        if secondaryClosable {
+                            VStack(spacing: 0) {
+                                PanelHeader(
+                                    title: secondaryTitle,
+                                    systemImage: secondaryIcon,
+                                    subtitle: secondarySubtitle,
+                                    badges: secondaryBadges
+                                ) { showsSecondary = false }
+                                secondary()
+                            }
+                        } else {
+                            secondary()
+                        }
+                    }
+                    // Cap the secondary so the split can't overflow the window:
+                    // reserve `reservedPrimaryWidth` for the primary, so the
+                    // secondary's trailing edge — and the header's right-aligned
+                    // close button — always stays on screen. A no-op until the
+                    // window is too narrow to fit both panes; then the secondary's
+                    // content clips on the right while the close stays put.
+                    // `proxy.size.width` is the detail region (window minus nav).
+                    .frame(maxWidth: max(240, proxy.size.width - reservedPrimaryWidth))
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.top, topInset)

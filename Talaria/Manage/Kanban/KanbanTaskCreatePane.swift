@@ -15,7 +15,7 @@ struct KanbanTaskCreatePane: View {
 
     var body: some View {
         Form {
-            Section("New task") {
+            Section {
                 TextField("Title", text: $draft.title)
                 TextField("Body", text: $draft.body, axis: .vertical)
                     .lineLimit(3...8)

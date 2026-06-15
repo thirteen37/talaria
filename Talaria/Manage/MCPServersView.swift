@@ -403,10 +403,10 @@ struct MCPServersView: View {
             secondaryTitle: editorTitle(harness)
         ) {
             serversTable(harness: harness)
-                .frame(minWidth: Idiom.isPhone ? nil : 360, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 280, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             editorPane(harness: harness)
-                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar { toolbar(harness: harness) }
         // Hard errors route to the top-of-window strip; only the capability warning stays in-surface.
@@ -570,7 +570,7 @@ private struct DraftMCPServerEditor: View {
 
     var body: some View {
         Form {
-            Section(isEditing ? "Edit MCP server (re-create)" : "New MCP server") {
+            Section {
                 TextField("Name", text: $draft.name)
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
@@ -767,7 +767,7 @@ private struct MCPCatalogView: View {
 
     var body: some View {
         List {
-            Section("MCP Catalog") {
+            Section {
                 if entries.isEmpty {
                     if isLoading {
                         ProgressView()
