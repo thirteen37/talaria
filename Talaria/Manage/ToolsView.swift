@@ -92,13 +92,14 @@ struct ToolsView: View {
                 get: { harness.selectedToolID != nil },
                 set: { if !$0 { harness.selectedToolID = nil } }
             ),
-            secondaryTitle: configTitle(harness)
+            secondaryTitle: configTitle(harness),
+            secondarySubtitle: configSubtitle(harness)
         ) {
             matrixPane(harness: harness)
-                .frame(minWidth: Idiom.isPhone ? nil : 420, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 320, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             configPane(harness: harness)
-                .frame(minWidth: 320, idealWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 240, idealWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Hard errors route to the top-of-window strip; only the capability
@@ -131,12 +132,24 @@ struct ToolsView: View {
         }
     }
 
-    /// Title for the pushed iPhone config page — the selected tool's friendly
-    /// label (or raw id). nil when nothing is selected (the pane is hidden).
+    /// Title for the selected tool's config panel header — the tool's friendly
+    /// label with any leading emoji peeled off (it can't render as an SF Symbol).
+    /// nil when nothing is selected (the pane is hidden).
     private func configTitle(_ harness: ToolsMatrixHarness) -> String? {
-        guard let toolID = harness.selectedToolID,
-              let row = harness.matrix?.rows.first(where: { $0.name == toolID }) else { return nil }
-        return row.label ?? row.name
+        guard let row = selectedRow(harness) else { return nil }
+        return toolLabelParts(row).title
+    }
+
+    /// Sub-heading for the config panel header: the raw tool id, shown only when
+    /// the tool has a friendly label (so the id isn't redundant with the title).
+    private func configSubtitle(_ harness: ToolsMatrixHarness) -> String? {
+        guard let row = selectedRow(harness) else { return nil }
+        return toolLabelParts(row).showsSlug ? row.name : nil
+    }
+
+    private func selectedRow(_ harness: ToolsMatrixHarness) -> ToolsMatrix.Row? {
+        guard let toolID = harness.selectedToolID else { return nil }
+        return harness.matrix?.rows.first(where: { $0.name == toolID })
     }
 
     @ViewBuilder
@@ -150,8 +163,7 @@ struct ToolsView: View {
                 remaskToken: harness.remaskToken,
                 onSave: { key, value in Task { await harness.saveEnv(key: key, value: value) } },
                 onDelete: { key in Task { await harness.deleteEnv(key: key) } },
-                reveal: { key in await harness.revealEnv(key: key) },
-                onClose: { harness.selectedToolID = nil }
+                reveal: { key in await harness.revealEnv(key: key) }
             )
         } else {
             // PlatformSplit only renders this when `showsSecondary` is true, so
@@ -321,12 +333,9 @@ private struct ToolConfigEditor: View {
     let onSave: (String, String) -> Void
     let onDelete: (String) -> Void
     let reveal: (String) async -> String?
-    let onClose: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(vars) { envVar in
@@ -346,36 +355,6 @@ private struct ToolConfigEditor: View {
         }
         // Reset every field's typed/revealed draft when switching tools.
         .id(tool.id)
-    }
-
-    private var header: some View {
-        let parts = toolLabelParts(tool)
-        return HStack(spacing: 10) {
-            if let icon = parts.icon {
-                Text(icon).font(.title3)
-            }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(parts.title)
-                    .font(.headline)
-                    .lineLimit(1)
-                if parts.showsSlug {
-                    Text(tool.name)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-            Button {
-                onClose()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Close")
-            .help("Close the config panel")
-        }
-        .padding()
     }
 }
 

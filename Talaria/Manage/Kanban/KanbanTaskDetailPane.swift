@@ -179,7 +179,7 @@ struct KanbanTaskDetailPane: View {
 
     @ViewBuilder
     private var editorSection: some View {
-        Section("Task") {
+        Section {
             LabeledContent("ID") {
                 Text(card.id).font(.system(.body, design: .monospaced)).textSelection(.enabled)
             }

@@ -670,10 +670,10 @@ struct ProfilesView: View {
             secondaryTitle: editorTitle(harness)
         ) {
             profilesTable(harness: harness)
-                .frame(minWidth: Idiom.isPhone ? nil : 360, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 280, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             editorPane(harness: harness)
-                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar { toolbar(harness: harness) }
         // Hard errors route to the top-of-window strip; only the capability warnings stay in-surface.
@@ -993,13 +993,6 @@ private struct ProfileDraftEditor: View {
     let onSave: (ProfileDraft) -> Void
     let onCancel: () -> Void
 
-    private var title: String {
-        switch draft.mode {
-        case let .clone(source): return "Clone “\(source)”"
-        case let .rename(original): return "Rename “\(original)”"
-        }
-    }
-
     private var actionLabel: String {
         switch draft.mode {
         case .clone: return "Clone"
@@ -1009,7 +1002,7 @@ private struct ProfileDraftEditor: View {
 
     var body: some View {
         Form {
-            Section(title) {
+            Section {
                 TextField("New name", text: $draft.newName)
                     .textFieldStyle(.roundedBorder)
                 Text("Lowercase letters, digits, “-” or “_”. Starts with a letter or digit.")
@@ -1182,7 +1175,7 @@ private struct InstallFormView: View {
 
     var body: some View {
         Form {
-            Section("Install distribution") {
+            Section {
                 labeledField("Source", text: $draft.source, prompt: "git URL or local directory")
                 labeledField("Name", text: $draft.name, prompt: "optional — defaults to repo name")
                 Toggle("Record source as an alias", isOn: $draft.alias)
@@ -1324,7 +1317,6 @@ private struct ManifestEditorView: View {
         // left of the label column exactly as intended.
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
-                heading("Manifest", emphasized: true)
                 field("Name", text: $state.fields.name, prompt: "my-distribution")
                 field("Version", text: $state.fields.version, prompt: "1.0.0")
                 field("Description", text: $state.fields.description, prompt: "What this distribution does")

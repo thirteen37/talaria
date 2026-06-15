@@ -200,10 +200,10 @@ struct CronView: View {
             secondaryTitle: editorTitle(harness)
         ) {
             jobsTable(harness: harness)
-                .frame(minWidth: Idiom.isPhone ? nil : 360, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 280, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             editorPane(harness: harness)
-                .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
         }
         .toolbar { toolbar(harness: harness) }
         // Hard errors route to the top-of-window strip; only the capability
@@ -343,7 +343,7 @@ private struct DraftJobEditor: View {
 
     var body: some View {
         Form {
-            Section("New cron job") {
+            Section {
                 TextField("Name (optional)", text: $draft.name)
                 TextField("Schedule (e.g. */5 * * * *)", text: $draft.schedule)
                     .font(.system(.body, design: .monospaced))
