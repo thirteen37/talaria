@@ -90,10 +90,16 @@ final class SkillsHarness {
     /// remove/publish), to disable their buttons.
     var busy: Set<String> = []
     /// Single in-flight flag for the global bundled-seeding actions
-    /// (opt-out / opt-in / re-seed), which aren't keyed by a skill name.
+    /// (opt-out / opt-in / resync), which aren't keyed by a skill name.
     var seedingBusy: Bool = false
     /// Captured `skills audit` report awaiting presentation; cleared on dismiss.
     var auditReport: SkillAuditReport?
+    /// Previewed local built-in skill resync plan awaiting confirmation.
+    var resyncPlan: BundledSkillsResyncPlan?
+    /// Bundled built-in skills Hermes tracks in `.bundled_manifest` but that are
+    /// not currently active (deleted, or moved into `.archive/`). Each can be
+    /// restored via `hermes skills reset`. Populated by ``loadInactiveTracked``.
+    var inactiveTracked: [String] = []
 
     private let client: DashboardClient
     let runner: HermesAdminRunning?
@@ -123,6 +129,9 @@ final class SkillsHarness {
     /// path and is reused by Publish. nil when not yet resolved or not found.
     var resolvedDir: String?
     var resolvedDirName: String?
+    /// Cached remote `$HOME` for this SSH profile (stable per session), so the
+    /// inactive-builtins manifest read doesn't re-resolve it on every refresh.
+    private var resolvedRemoteHome: String?
 
     init(
         client: DashboardClient,
@@ -255,22 +264,35 @@ final class SkillsHarness {
     /// Force-remove confirmation. Best-effort: a missing/unlocatable skill shows a
     /// soft note, not a banner error.
     func loadPreview() async {
-        guard let skill = selected else {
-            previewName = nil
-            previewText = nil
-            previewError = nil
-            previewLoading = false
-            resolvedDir = nil
-            resolvedDirName = nil
+        guard let id = selectionID else {
+            clearPreview()
             return
         }
+        if let skill = rows.first(where: { $0.name == id }) {
+            await loadActivePreview(skill)
+        } else if inactiveTracked.contains(id) {
+            await loadInactivePreview(name: id)
+        } else {
+            clearPreview()
+        }
+    }
+
+    private func clearPreview() {
+        previewName = nil
+        previewText = nil
+        previewError = nil
+        previewLoading = false
+        resolvedDir = nil
+        resolvedDirName = nil
+    }
+
+    /// Resolves the selected active skill's directory and renders its `SKILL.md`
+    /// preview. (Unchanged behavior — extracted from the former `loadPreview`.)
+    private func loadActivePreview(_ skill: DashboardSkill) async {
         previewName = skill.name
         previewText = nil
         previewError = nil
         previewLoading = true
-        // Guard the clear by `previewName` like the writes below, so the losing
-        // side of a fast selection race doesn't drop the spinner while the
-        // winning task is still reading.
         defer { if previewName == skill.name { previewLoading = false } }
 
         let dir = await resolveSkillDirectory(for: skill)
@@ -292,6 +314,61 @@ final class SkillsHarness {
             guard previewName == skill.name else { return }
             previewError = error.localizedDescription
         }
+    }
+
+    /// Locates an *inactive* built-in's `SKILL.md` (it's not in the dashboard
+    /// list, so we don't know its category) by listing every `SKILL.md` under the
+    /// skills root and matching the frontmatter `name`, preferring a directory
+    /// whose name equals the skill. Renders the matched source as the preview.
+    /// Best-effort: a soft note if it can't be located.
+    private func loadInactivePreview(name: String) async {
+        previewName = name
+        previewText = nil
+        previewError = nil
+        previewLoading = true
+        resolvedDir = nil
+        resolvedDirName = nil
+        defer { if previewName == name { previewLoading = false } }
+
+        guard let hostShell else {
+            if previewName == name { previewError = "Couldn't locate this skill on disk." }
+            return
+        }
+        let command: String
+        do {
+            command = try HermesSkillsFileStore.skillMarkdownListingCommand(hermesHome: profile?.hermesHome)
+        } catch {
+            if previewName == name { previewError = "Couldn't locate this skill on disk." }
+            return
+        }
+        guard let listing = try? await hostShell.runShell(command, workingDirectory: nil),
+              listing.exitCode == 0 else {
+            if previewName == name { previewError = "Couldn't locate this skill on disk." }
+            return
+        }
+        let paths = HermesSkillsFileStore.parseDirectoryListing(listing.stdout)
+        func parentName(_ p: String) -> String {
+            ((p as NSString).deletingLastPathComponent as NSString).lastPathComponent
+        }
+        // Read the directory-name match first (common case → one read), then the rest.
+        let ordered = paths.filter { parentName($0) == name } + paths.filter { parentName($0) != name }
+        // Read in order until the frontmatter name matches. The parent-dir-name
+        // match is front-loaded, so a normally-named skill resolves in ~one read;
+        // the cap only bounds a pathological full scan (each read is an SSH round
+        // trip on remote) and is set well above realistic skill-library sizes.
+        for md in ordered.prefix(300) {
+            guard previewName == name else { return }
+            guard let content = try? await HermesFileStore.read(
+                resolvedPath: md, isLocal: isLocalProfile, transfer: transfer, profile: profile
+            ) else { continue }
+            if HermesSkillsFileStore.frontmatterName(content) == name {
+                guard previewName == name else { return }
+                previewText = content
+                return
+            }
+        }
+        guard previewName == name else { return }
+        previewError = "Couldn't locate this skill on disk."
     }
 
     /// True once the manual install field has a non-empty identifier.
@@ -317,7 +394,14 @@ final class SkillsHarness {
         return nil
     }
 
-    func refresh() async {
+    /// Reloads the installed list (+ hub/updatable badges) and, by default, the
+    /// inactive-built-ins set. Pass `includingInactive: false` from the
+    /// enable/disable toggle path: the inactive set is invariant under toggling
+    /// (it depends only on the manifest and on-disk file presence, neither of
+    /// which a toggle changes), so recomputing it there would just burn a
+    /// host-shell `find`+`grep` scan and a manifest read — ~2 SSH round trips —
+    /// on every toggle for no change.
+    func refresh(includingInactive: Bool = true) async {
         isLoading = true
         defer { isLoading = false }
         do {
@@ -329,6 +413,9 @@ final class SkillsHarness {
             banners?.surfaceError(bannerKey, error.localizedDescription)
         }
         await refreshHubInstalled()
+        if includingInactive {
+            await loadInactiveTracked()
+        }
         // Probe every hub skill for upstream updates fire-and-forget so the
         // "Update available" badges populate without adding network latency to
         // `refresh()` (which also runs on every enable/disable toggle).
@@ -364,6 +451,68 @@ final class SkillsHarness {
         }
     }
 
+    /// Refreshes ``inactiveTracked`` = manifest-tracked built-ins whose files are
+    /// NOT present on the active (non-archived) skills tree — the genuinely
+    /// absent ones that `hermes skills reset` can re-seed. (Present-but-filtered
+    /// skills — environment/platform/disabled — are intentionally excluded, since
+    /// Restore can't bring them back; their files already exist.) Best-effort: a
+    /// missing manifest or unavailable host shell clears the set.
+    func loadInactiveTracked() async {
+        guard let content = await readBundledManifest() else {
+            inactiveTracked = []
+            return
+        }
+        let tracked = HermesSkillsFileStore.parseBundledManifestNames(content)
+        guard !tracked.isEmpty, let present = await loadPresentSkillNames() else {
+            inactiveTracked = []
+            return
+        }
+        inactiveTracked = HermesSkillsFileStore.inactiveTrackedNames(tracked: tracked, present: present)
+    }
+
+    /// The frontmatter names of every `SKILL.md` on the active (non-archived)
+    /// skills tree, via one batched host-shell `find … grep` round trip (local
+    /// `/bin/sh` or remote SSH). Returns nil when no host shell is available, so
+    /// the caller leaves the inactive list empty rather than flagging present
+    /// skills as restorable.
+    private func loadPresentSkillNames() async -> Set<String>? {
+        guard let hostShell else { return nil }
+        let command: String
+        do {
+            command = try HermesSkillsFileStore.presentSkillNamesListingCommand(hermesHome: profile?.hermesHome)
+        } catch {
+            return nil
+        }
+        guard let result = try? await hostShell.runShell(command, workingDirectory: nil),
+              result.exitCode == 0 else {
+            return nil
+        }
+        return HermesSkillsFileStore.parsePresentSkillNames(result.stdout)
+    }
+
+    /// Reads the profile's `skills/.bundled_manifest` (local `FileManager`, or
+    /// remote over SSH via ``HermesFileStore``). Returns nil if it can't be read.
+    private func readBundledManifest() async -> String? {
+        switch profile?.kind {
+        case .ssh:
+            guard let hostShell else { return nil }
+            if resolvedRemoteHome == nil,
+               let result = try? await hostShell.runShell("command printf '%s' \"$HOME\"", workingDirectory: nil),
+               result.exitCode == 0 {
+                let resolved = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+                resolvedRemoteHome = resolved.isEmpty ? nil : resolved
+            }
+            let path = HermesSkillsFileStore.bundledManifestRemotePath(
+                hermesHome: profile?.hermesHome, homeDirectory: resolvedRemoteHome)
+            return try? await HermesFileStore.read(
+                resolvedPath: path, isLocal: false, transfer: transfer, profile: profile)
+        case .local, .none:
+            let path = skillsRoot.appendingPathComponent(".bundled_manifest", isDirectory: false).path
+            return try? await HermesFileStore.read(
+                resolvedPath: path, isLocal: true, transfer: transfer, profile: profile)
+        }
+    }
+
     func setEnabled(_ name: String, enabled: Bool) async {
         toggling.insert(name)
         defer { toggling.remove(name) }
@@ -371,7 +520,8 @@ final class SkillsHarness {
             try await client.toggleSkill(name: name, enabled: enabled)
             // Refresh so the row reflects what the server actually persisted —
             // dashboard returns 200 on toggle without a body, so we read back.
-            await refresh()
+            // Skip the inactive-builtins scan: toggling can't change it.
+            await refresh(includingInactive: false)
         } catch {
             lastError = error.localizedDescription
             banners?.surfaceError(bannerKey, error.localizedDescription)
@@ -538,7 +688,12 @@ final class SkillsHarness {
         }
     }
 
-    /// Clears a builtin skill's `user-modified` tracking (safe `skills reset`).
+    /// Runs `hermes skills reset` for a built-in skill. For a skill whose active
+    /// copy is still present this just clears its sync-manifest `user-modified`
+    /// tracking; for one that's absent (deleted or archived), dropping the
+    /// manifest entry lets the follow-up sync re-copy it from the bundled
+    /// checkout — i.e. it restores it. Used by both the per-skill Reset action
+    /// and the Inactive built-in skills "Restore" button.
     func reset(_ name: String) async {
         guard let runner else { return }
         busy.insert(name)
@@ -596,10 +751,52 @@ final class SkillsHarness {
         await runSeeding { try await HermesSkillsHub.optIn(runner: $0) }
     }
 
-    /// Re-enables and immediately re-seeds bundled skills (`skills opt-in
-    /// --sync`).
-    func reseed() async {
-        await runSeeding { try await HermesSkillsHub.optIn(runner: $0, sync: true) }
+    /// Builds a local filesystem preview against `~/.hermes/hermes-agent/skills`
+    /// without mutating the profile's skills tree.
+    func previewBundledResync() async {
+        guard !seedingBusy else { return }
+        guard isLocalProfile else {
+            let message = "Built-in skill resync is available only for local Hermes profiles."
+            lastError = message
+            banners?.surfaceError(bannerKey, message)
+            return
+        }
+        seedingBusy = true
+        defer { seedingBusy = false }
+        do {
+            let skillsRoot = self.skillsRoot
+            resyncPlan = try await Task.detached {
+                try BundledSkillsResyncService(skillsRoot: skillsRoot).preview()
+            }.value
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
+    }
+
+    /// Applies the exact previewed resync plan, then refreshes the dashboard
+    /// list so new/updated skills appear in the installed table.
+    func applyBundledResync(_ plan: BundledSkillsResyncPlan) async {
+        guard !seedingBusy else { return }
+        seedingBusy = true
+        defer { seedingBusy = false }
+        do {
+            let skillsRoot = self.skillsRoot
+            let result = try await Task.detached {
+                try BundledSkillsResyncService(skillsRoot: skillsRoot).apply(plan)
+            }.value
+            resyncPlan = nil
+            await refresh()
+            let skipped = result.skipped.count
+            var parts = ["\(result.added.count) added", "\(result.updated.count) updated", "\(skipped) skipped"]
+            if let commit = result.sourceCommit?.prefix(12) {
+                parts.append("source \(commit)")
+            }
+            banners?.surfaceSuccess(bannerKey, "Resynced built-in skills: \(parts.joined(separator: ", ")).")
+        } catch {
+            lastError = error.localizedDescription
+            banners?.surfaceError(bannerKey, error.localizedDescription)
+        }
     }
 
     /// Shared driver for the three bundled-seeding actions: single in-flight
@@ -752,10 +949,10 @@ struct SkillsView: View {
         // selected skill's description, actions, and SKILL.md preview on the right.
         PlatformSplit(
             showsSecondary: Binding(
-                get: { harness.selected != nil },
+                get: { harness.selectionID != nil },
                 set: { if !$0 { harness.selectionID = nil } }
             ),
-            secondaryTitle: harness.selected?.name,
+            secondaryTitle: harness.selected?.name ?? harness.selectionID,
             secondarySubtitle: detailSubtitle(harness),
             secondaryBadges: detailBadges(harness)
         ) {
@@ -815,6 +1012,16 @@ struct SkillsView: View {
         )) { report in
             AuditReportSheet(report: report)
         }
+        .sheet(isPresented: Binding(
+            get: { harness.resyncPlan != nil },
+            set: { if !$0 { harness.resyncPlan = nil } }
+        )) {
+            if let plan = harness.resyncPlan {
+                BundledSkillsResyncSheet(plan: plan) {
+                    Task { await harness.applyBundledResync(plan) }
+                }
+            }
+        }
         // Load the selected skill's SKILL.md preview; re-fires (and cancels the
         // prior load) whenever the selection changes.
         .task(id: harness.selectionID) {
@@ -866,11 +1073,11 @@ struct SkillsView: View {
             .help("Re-enables seeding of built-in skills into this profile")
 
             Button {
-                Task { await harness.reseed() }
+                Task { await harness.previewBundledResync() }
             } label: {
-                Label("Re-seed bundled skills now", systemImage: "arrow.clockwise.circle")
+                Label("Resync built-in skills", systemImage: "arrow.clockwise.circle")
             }
-            .help("Re-enables seeding and copies the built-in skills in immediately")
+            .help("Preview and copy built-in skills from the local Hermes source checkout")
         } label: {
             Label("Bundled skills", systemImage: "shippingbox")
         }
@@ -1018,9 +1225,36 @@ struct SkillsView: View {
                 )
                 .tag(skill.name)
             }
+            if !harness.inactiveTracked.isEmpty {
+                Section {
+                    ForEach(harness.inactiveTracked, id: \.self) { name in
+                        HStack {
+                            Text(name)
+                            Spacer()
+                            Button {
+                                Task { await harness.reset(name) }
+                            } label: {
+                                if harness.busy.contains(name) {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Label("Restore", systemImage: "arrow.uturn.backward.circle")
+                                }
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(harness.runner == nil || harness.busy.contains(name))
+                            .help("Restore this built-in skill so Hermes manages it again")
+                        }
+                        .tag(name)
+                    }
+                } header: {
+                    Text("Inactive built-in skills")
+                } footer: {
+                    Text("Tracked by Hermes but not active — e.g. archived or removed. Restore re-seeds it from the bundled checkout.")
+                }
+            }
         }
         .overlay {
-            if harness.rows.isEmpty, !harness.isLoading {
+            if harness.rows.isEmpty, harness.inactiveTracked.isEmpty, !harness.isLoading {
                 ContentUnavailableView("No skills", systemImage: "wand.and.stars")
             }
         }
@@ -1060,6 +1294,16 @@ struct SkillsView: View {
                     }
                 },
                 onForceRemove: { Task { await harness.forceRemove(skill) } }
+            )
+        } else if let id = harness.selectionID, harness.inactiveTracked.contains(id) {
+            InactiveSkillDetail(
+                name: id,
+                previewText: harness.previewText,
+                previewError: harness.previewError,
+                previewLoading: harness.previewLoading,
+                busy: harness.busy.contains(id),
+                restoreAvailable: harness.runner != nil,
+                onRestore: { Task { await harness.reset(id) } }
             )
         }
     }
@@ -1202,6 +1446,94 @@ private struct SkillRow: View {
     }
 }
 
+/// The highlighted `SKILL.md` source block, shared by the active and inactive
+/// skill detail panes.
+private struct SkillSourcePreview: View {
+    let previewText: String?
+    let previewError: String?
+    let previewLoading: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Preview")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            if previewLoading {
+                ProgressView().controlSize(.small)
+            } else if let previewText, !previewText.isEmpty {
+                Text(Self.highlighted(previewText))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+            } else {
+                Text(previewError ?? "Preview unavailable.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Highlights the SKILL.md source: the leading `---`-fenced YAML frontmatter
+    /// with the YAML theme, the markdown body with the markdown theme. Falls back
+    /// to whole-document markdown highlighting when there's no frontmatter.
+    static func highlighted(_ text: String) -> AttributedString {
+        guard let parts = MarkdownFrontmatter.split(text) else {
+            return AttributedString(MarkdownHighlightTheme.attributed(text))
+        }
+        let combined = NSMutableAttributedString()
+        combined.append(YAMLHighlightTheme.attributed(parts.frontmatter))
+        combined.append(MarkdownHighlightTheme.attributed(parts.body))
+        return AttributedString(combined)
+    }
+}
+
+/// Detail panel for a selected *inactive* built-in skill: name, an
+/// explanatory subtitle, a Restore action, and the `SKILL.md` preview.
+private struct InactiveSkillDetail: View {
+    let name: String
+    let previewText: String?
+    let previewError: String?
+    let previewLoading: Bool
+    let busy: Bool
+    let restoreAvailable: Bool
+    let onRestore: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 6) {
+                    Text(name)
+                        .font(.headline)
+                        .textSelection(.enabled)
+                    PanelBadgeView(badge: PanelBadge(text: "Built-in"))
+                }
+                Text("Tracked by Hermes but not active — e.g. archived or removed.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Divider()
+                Button { onRestore() } label: {
+                    if busy {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("Restore", systemImage: "arrow.uturn.backward.circle")
+                    }
+                }
+                .disabled(busy || !restoreAvailable)
+                .help("Restore this built-in skill so Hermes manages it again")
+
+                Divider()
+                SkillSourcePreview(previewText: previewText, previewError: previewError, previewLoading: previewLoading)
+            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+}
+
 /// The detail panel for the selected skill (the `PlatformSplit` secondary):
 /// full description plus a kind-appropriate action cluster — hub: Update /
 /// Audit / Remove; builtin: Repair (official) / Reset; local: Publish — plus a
@@ -1249,7 +1581,7 @@ private struct SkillDetail: View {
                 actions
 
                 Divider()
-                preview
+                SkillSourcePreview(previewText: previewText, previewError: previewError, previewLoading: previewLoading)
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1296,47 +1628,6 @@ private struct SkillDetail: View {
             }
             captions
         }
-    }
-
-    /// The skill's `SKILL.md` source, rendered read-only with markdown syntax
-    /// highlighting (the same `MarkdownHighlightTheme` the Soul/Memory editors
-    /// use). Loading shows a spinner; a missing/unreadable file shows a soft
-    /// note. Renders inline so the whole detail panel scrolls for long skills.
-    @ViewBuilder
-    private var preview: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Preview")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-
-            if previewLoading {
-                ProgressView().controlSize(.small)
-            } else if let previewText, !previewText.isEmpty {
-                Text(Self.highlighted(previewText))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
-            } else {
-                Text(previewError ?? "Preview unavailable.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// Highlights the SKILL.md source: the leading `---`-fenced YAML frontmatter
-    /// with the YAML theme, the markdown body with the markdown theme. Falls back
-    /// to whole-document markdown highlighting when there's no frontmatter.
-    private static func highlighted(_ text: String) -> AttributedString {
-        guard let parts = MarkdownFrontmatter.split(text) else {
-            return AttributedString(MarkdownHighlightTheme.attributed(text))
-        }
-        let combined = NSMutableAttributedString()
-        combined.append(YAMLHighlightTheme.attributed(parts.frontmatter))
-        combined.append(MarkdownHighlightTheme.attributed(parts.body))
-        return AttributedString(combined)
     }
 
     /// hub: Update / Audit / Remove.
@@ -1425,6 +1716,120 @@ private struct SkillDetail: View {
         Text(text)
             .font(.caption)
             .foregroundStyle(.secondary)
+    }
+}
+
+/// Confirmation sheet for Talaria's local built-in skills resync. The plan is
+/// read-only; writes happen only after Confirm calls back into the harness.
+private struct BundledSkillsResyncSheet: View {
+    let plan: BundledSkillsResyncPlan
+    let onConfirm: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    private var actionableCount: Int {
+        plan.count(.add) + plan.count(.update)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Resync built-in skills")
+                        .font(.headline)
+                    if let commit = plan.sourceCommit {
+                        Text("Source commit \(commit.prefix(12))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
+                Spacer()
+                Text("\(actionableCount) changes")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    section(.add, title: "Add", systemImage: "plus.circle")
+                    section(.update, title: "Update", systemImage: "arrow.triangle.2.circlepath")
+                    section(.skipUnchanged, title: "Up to date", systemImage: "checkmark.circle")
+                    section(.skipModified, title: "Skip: locally modified", systemImage: "pencil.circle")
+                    section(.skipUnknown, title: "Skip: unknown existing skill", systemImage: "questionmark.circle")
+                    section(.skipDeleted, title: "Deleted locally", systemImage: "minus.circle")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(minHeight: 280, maxHeight: 520)
+
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Confirm") {
+                    onConfirm()
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(actionableCount == 0)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 620)
+    }
+
+    @ViewBuilder
+    private func section(_ action: BundledSkillsResyncAction, title: String, systemImage: String) -> some View {
+        let rows = plan.items.filter { $0.action == action }
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("\(title) (\(rows.count))", systemImage: systemImage)
+                    .font(.subheadline.weight(.semibold))
+                VStack(spacing: 0) {
+                    ForEach(rows) { item in
+                        HStack(alignment: .top, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(item.name)
+                                        .font(.caption.weight(.medium))
+                                    if let category = item.category, !category.isEmpty {
+                                        PanelBadgeView(badge: PanelBadge(text: category))
+                                    }
+                                }
+                                Text(item.path)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.tertiary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Text(item.reason)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            Spacer(minLength: 8)
+                            hashPair(item)
+                        }
+                        .padding(.vertical, 6)
+                        Divider()
+                    }
+                }
+                .padding(.horizontal, 8)
+                .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func hashPair(_ item: BundledSkillsResyncItem) -> some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            if let currentHash = item.currentHash {
+                Text("local \(currentHash.prefix(8))")
+            }
+            Text("source \(item.sourceHash.prefix(8))")
+        }
+        .font(.caption2.monospaced())
+        .foregroundStyle(.tertiary)
+        .textSelection(.enabled)
     }
 }
 
