@@ -336,6 +336,50 @@ struct ScreenshotFixtureAdminRunner: HermesAdminRunning {
     }
 }
 
+/// Holds the in-process ``MockChatBackend`` the screenshot fixture builds so a
+/// scripted prompt (`-screenshotSurface chat-clarify|chat-approval|chat-secret`)
+/// can be injected into the open chat after it boots. Screenshot mode is a
+/// single window for the process lifetime, so a shared main-actor slot suffices.
+@MainActor
+enum ScreenshotPromptInjector {
+    static var backend: MockChatBackend?
+}
+
+/// The per-kind sample blocking-prompt data shared by the fixture injector
+/// (``ServerWindowHarness/emitScreenshotPrompt(_:)``) and the headless renderer
+/// (`PromptShotRenderer`), so the two demonstrations of the same three prompt
+/// kinds can't drift. Mirrors what `GatewayChatClient` emits for
+/// clarify / approval / secret.
+enum ScreenshotPromptFixture {
+    static func request(_ kind: UserPromptKind, sessionId: SessionId) -> RequestPermissionRequest {
+        let title: String
+        let content: [ToolCallContent]?
+        let options: [PermissionOption]
+        switch kind {
+        case .question:
+            title = "Where are you looking to dine?"
+            content = nil
+            options = ["Garden terrace", "Patio", "Bar seating", "Main hall"].map {
+                PermissionOption(optionId: $0, name: $0, kind: .allowOnce)
+            }
+        case .permission:
+            title = "Run a shell command"
+            content = [.content(Content(content: .text("rm -rf ./build")))]
+            options = [
+                PermissionOption(optionId: "once", name: "Run", kind: .allowOnce),
+                PermissionOption(optionId: "always", name: "Always allow", kind: .allowAlways),
+                PermissionOption(optionId: "deny", name: "Reject", kind: .rejectOnce),
+            ]
+        case .secret:
+            title = "Enter your sudo password to continue"
+            content = nil
+            options = [PermissionOption(optionId: "", name: "Cancel", kind: .rejectOnce)]
+        }
+        let toolCall = ToolCallUpdate(toolCallId: "screenshot-prompt", title: title, status: .pending, content: content)
+        return RequestPermissionRequest(sessionId: sessionId, toolCall: toolCall, options: options)
+    }
+}
+
 @MainActor
 extension ServerWindowHarness {
     static func makeScreenshotFixture() -> ServerWindowHarness {
@@ -344,9 +388,9 @@ extension ServerWindowHarness {
             token: { "fixture-token" },
             http: ScreenshotFixtureDashboardHTTP()
         )
-        let manager = SessionManager(backendFactory: {
-            MockChatBackend(sessionId: ScreenshotFixtures.primarySessionID)
-        })
+        let backend = MockChatBackend(sessionId: ScreenshotFixtures.primarySessionID)
+        ScreenshotPromptInjector.backend = backend
+        let manager = SessionManager(backendFactory: { backend })
         let store = SessionsStore(
             manager: manager,
             adminRunner: ScreenshotFixtureAdminRunner(),
@@ -370,5 +414,16 @@ extension ServerWindowHarness {
 
     func openScreenshotSession() async {
         await store.openExisting(ScreenshotFixtures.primarySessionSummary)
+    }
+
+    /// Injects one scripted blocking prompt of the requested kind into the open
+    /// fixture chat so its rendering can be screenshotted. Demonstrates that a
+    /// `.question` (clarify) and `.secret` no longer wear the `.permission`
+    /// "Permission Required" chrome.
+    func emitScreenshotPrompt(_ kind: UserPromptKind) {
+        guard let backend = ScreenshotPromptInjector.backend else { return }
+        let request = ScreenshotPromptFixture.request(kind, sessionId: ScreenshotFixtures.primarySessionID)
+        let event = PermissionRequestEvent(id: .string("screenshot-prompt"), request: request, kind: kind) { _ in }
+        backend.emit(.permissionRequest(event))
     }
 }

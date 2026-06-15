@@ -781,9 +781,12 @@ final class SessionsStore {
         notifier.postAgentFinished(profileId: profileId, sessionId: id, title: title ?? chatTitle(for: id))
     }
 
-    /// Posts a "tool approval needed" banner for `id` unless the user is already
-    /// watching this chat. Called from the `.permissionRequest` observer.
-    private func notifyToolApproval(id: SessionId, toolName: String?) {
+    /// Posts a "needs your input" banner for `id` unless the user is already
+    /// watching this chat. Called from the `.permissionRequest` observer; the
+    /// banner copy matches the in-app rendering per `kind` (approval / question /
+    /// secret). The user's single "Tool approval needed" setting still gates all
+    /// three, since each blocks the turn waiting on the user.
+    private func notifyToolApproval(id: SessionId, kind: UserPromptKind, detail: String?) {
         guard let profileId, let notifier else { return }
         guard NotificationPolicy.shouldNotifyToolApproval(
             settings: notifier.settings,
@@ -794,7 +797,8 @@ final class SessionsStore {
             profileId: profileId,
             sessionId: id,
             title: chatTitle(for: id),
-            toolName: toolName
+            kind: kind,
+            detail: detail
         )
     }
 
@@ -824,7 +828,7 @@ final class SessionsStore {
             // Permission requests pause the turn waiting on the user; still
             // active in spirit, so keep showing working.
             statuses[id] = .working
-            notifyToolApproval(id: id, toolName: event.request.toolCall.title)
+            notifyToolApproval(id: id, kind: event.kind, detail: event.request.toolCall.title)
         case let .clientRequestError(_, _, message):
             statuses[id] = .error(message)
         case let .sessionUpdate(notification):

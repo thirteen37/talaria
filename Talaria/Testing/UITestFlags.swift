@@ -1,4 +1,5 @@
 import Foundation
+import HermesKit
 
 /// Launch-argument flags the UI test bundle passes to the app.
 enum UITestFlags {
@@ -24,12 +25,25 @@ enum UITestFlags {
 
     static var screenshotBrowseDestination: BrowseDestination? {
         guard let screenshotSurface else { return .sessions }
-        if screenshotSurface == "chat" { return nil }
+        if screenshotSurface == "chat" || screenshotSurface.hasPrefix("chat-") { return nil }
         return BrowseDestination(rawValue: screenshotSurface) ?? .sessions
     }
 
     static var opensScreenshotChat: Bool {
-        screenshotSurface == "chat"
+        guard let screenshotSurface else { return false }
+        return screenshotSurface == "chat" || screenshotSurface.hasPrefix("chat-")
+    }
+
+    /// For the `chat-clarify` / `chat-approval` / `chat-secret` screenshot
+    /// surfaces, the blocking-prompt kind to inject into the open chat so its
+    /// rendering can be captured. `nil` for every other surface.
+    static var screenshotPromptKind: UserPromptKind? {
+        switch screenshotSurface {
+        case "chat-clarify": .question
+        case "chat-approval": .permission
+        case "chat-secret": .secret
+        default: nil
+        }
     }
 
     private static var arguments: [String] {

@@ -102,6 +102,7 @@ extension Optional where Wrapped == ToolCallStatus {
 struct PermissionPromptState: Identifiable {
     let id: JSONRPCID
     var request: RequestPermissionRequest
+    var kind: UserPromptKind = .permission
     var respond: (PermissionOutcome) async -> Void
 }
 

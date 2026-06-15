@@ -61,6 +61,7 @@ struct ChatView: View {
                     prompt: $viewModel.prompt,
                     isSending: viewModel.isSending,
                     isBlocked: viewModel.pendingPermission != nil,
+                    blockedPlaceholder: viewModel.blockedPlaceholder,
                     availableCommands: viewModel.availableCommands,
                     send: { Task { await viewModel.sendPrompt() } },
                     cancel: { Task { await viewModel.cancel() } }
@@ -612,10 +613,27 @@ final class LocalChatViewModel {
             status: event.request.toolCall.status ?? .pending,
             content: event.request.toolCall.content
         )
-        pendingPermission = PermissionPromptState(id: event.id, request: event.request) { outcome in
+        pendingPermission = PermissionPromptState(id: event.id, request: event.request, kind: event.kind) { outcome in
             await event.respond(outcome)
         }
-        statusText = "Waiting for permission"
+        statusText = Self.waitingText(for: event.kind)
+    }
+
+    /// The "waiting on the user" copy for a blocking prompt, shared by the status
+    /// line and the composer placeholder so the two can't drift apart.
+    static func waitingText(for kind: UserPromptKind) -> String {
+        switch kind {
+        case .question: "Waiting for your answer"
+        case .secret: "Waiting for input"
+        case .permission: "Waiting for permission"
+        }
+    }
+
+    /// Placeholder shown in the disabled composer while a prompt blocks input —
+    /// matches the status line's per-kind copy (falls back to permission wording
+    /// when nothing is pending).
+    var blockedPlaceholder: String {
+        Self.waitingText(for: pendingPermission?.kind ?? .permission)
     }
 
     @discardableResult
