@@ -205,12 +205,23 @@ final class LocalChatViewModel {
             return
         }
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isSending, pendingPermission == nil else {
+        // A parked permission overlay blocks every send, idle or busy. Empty
+        // input is always a no-op.
+        guard !text.isEmpty, pendingPermission == nil else {
             return
         }
         guard let manager, let client = await manager.client(for: sessionId) else {
             hasError = true
             statusText = "Session is not active"
+            return
+        }
+
+        // While a turn is in flight we only accept the gateway's pending-input
+        // set: a slash in `SlashCommand.pendingInputCommands`, or plain text
+        // auto-wrapped as `/queue …`. Everything else is a no-op so a second
+        // normal turn can never race the live one.
+        if isSending {
+            await sendWhileBusy(text: text, client: client)
             return
         }
 
@@ -253,6 +264,93 @@ final class LocalChatViewModel {
         prompt = ""
         await runPrompt(text: text, client: client, echoUser: true)
     }
+
+    /// `UserDefaults` flag (per user, not per session/profile) gating the one-time
+    /// auto-queue explainer.
+    static let autoQueueTipShownKey = "chat.autoQueueTipShown"
+
+    /// Handles a send issued while a turn is already streaming. Accepts only the
+    /// gateway's pending-input commands: a slash in
+    /// ``SlashCommand/pendingInputCommands``, or plain text auto-wrapped as
+    /// `/queue …`. Crucially it does **not** touch the live turn's busy state
+    /// (`isSending`, `turnStartDate`, `statusText`, `markTurnStarted`) — the
+    /// running turn owns those — and surfaces feedback as an inline `.event`
+    /// line rather than a new user bubble, so the streaming transcript stays clean.
+    private func sendWhileBusy(text: String, client: any ChatBackend) async {
+        let name: String
+        let arg: String
+        let isAutoQueue: Bool
+        if text.hasPrefix("/") {
+            let parsed = SlashCommand(parsing: text)
+            guard parsed.isPendingInput else {
+                // A non-pending-input slash (/help, /model, …) while busy is a
+                // no-op: dispatching it would be inert at best and confusing at
+                // worst. Leave the composer text so the user can resend later.
+                return
+            }
+            name = parsed.name
+            arg = parsed.arg
+            isAutoQueue = false
+        } else {
+            // Plain text mid-turn → queue it for after the current turn, so the
+            // user doesn't have to know the `/queue` verb.
+            name = "queue"
+            arg = text
+            isAutoQueue = true
+        }
+
+        prompt = ""
+        if isAutoQueue {
+            appendAutoQueueFeedback()
+        } else if let marker = Self.busyDispatchMarker(name: name, arg: arg) {
+            append(kind: .event, text: marker)
+        }
+        // `whileBusy` keeps the dispatch from starting a second turn and skips the
+        // empty-output placeholder (our marker is the feedback). The live turn's
+        // busy lifecycle is untouched.
+        _ = await runHarnessSlash(name: name, arg: arg, client: client, whileBusy: true)
+    }
+
+    /// Immediate confirmation line for an explicit pending-input slash sent
+    /// mid-turn. Returns `nil` for the no-argument / non-confirmable forms
+    /// (`/queue` listing, `/retry`, `/undo`) so the gateway's own output is the
+    /// only line shown for those.
+    private static func busyDispatchMarker(name: String, arg: String) -> String? {
+        guard !arg.isEmpty else {
+            return nil
+        }
+        switch name.lowercased() {
+        case "queue", "q": return "Queued: \(arg)"
+        case "steer": return "Steering: \(arg)"
+        case "plan": return "Plan: \(arg)"
+        case "goal": return "Goal: \(arg)"
+        default: return nil
+        }
+    }
+
+    /// Appends the auto-queue feedback line: a one-time explainer the first time a
+    /// user auto-queues (then never again), and a terse "Queued." afterwards.
+    private func appendAutoQueueFeedback() {
+        let defaults = UserDefaults.standard
+        if defaults.bool(forKey: Self.autoQueueTipShownKey) {
+            append(kind: .event, text: "Queued.")
+        } else {
+            append(
+                kind: .event,
+                text: "Queued — Hermes will send this after the current turn. "
+                    + "Tip: prefix with /queue to be explicit, or /steer to inject guidance mid-turn."
+            )
+            defaults.set(true, forKey: Self.autoQueueTipShownKey)
+        }
+    }
+
+    #if DEBUG
+    /// Re-arms the one-time auto-queue tip so manual QA can see it again. Not
+    /// exposed in the UI.
+    static func resetAutoQueueTip() {
+        UserDefaults.standard.removeObject(forKey: autoQueueTipShownKey)
+    }
+    #endif
 
     /// Counts the real user turns from `id` (inclusive) back to the latest, so an
     /// "undo back to here" can dispatch a single `/undo <N>`: the latest user
@@ -409,13 +507,37 @@ final class LocalChatViewModel {
 
     /// Runs a command through the harness. Returns `true` only for the `.submit`
     /// case, where it delegates to ``runPrompt`` (which owns the busy lifecycle).
-    private func runHarnessSlash(name: String, arg: String, client: any ChatBackend) async -> Bool {
+    ///
+    /// `whileBusy` marks a pending-input dispatch sent over a live turn: it skips
+    /// the empty-output placeholder (the caller already appended a marker) and
+    /// refuses a `.submit` outcome — a pending-input command must never start a
+    /// second turn over the running one (defensive; Hermes returns `exec`/`output`
+    /// for the pending-input set, not `send`).
+    private func runHarnessSlash(name: String, arg: String, client: any ChatBackend, whileBusy: Bool = false) async -> Bool {
         let command = arg.isEmpty ? name : "\(name) \(arg)"
         do {
             switch try await client.slash(sessionId: sessionId, command: command) {
             case let .output(text):
-                append(kind: .event, text: text.isEmpty ? "(no output)" : text)
+                if text.isEmpty {
+                    if !whileBusy {
+                        append(kind: .event, text: "(no output)")
+                    }
+                } else {
+                    append(kind: .event, text: text)
+                }
             case let .prefill(message, notice):
+                if whileBusy {
+                    // The `/undo` rewind shape arrived mid-turn (undo is in the
+                    // pending-input set). Running the idle path below would
+                    // clobber the live turn — refilling the composer the busy
+                    // path just cleared and replacing the streaming transcript
+                    // mid-stream — violating `sendWhileBusy`'s invariant. Surface
+                    // only the harness's notice and leave prompt/transcript intact.
+                    if !notice.isEmpty {
+                        append(kind: .event, text: notice)
+                    }
+                    return false
+                }
                 prompt = message
                 // This is the `/undo` shape: the harness rewound the transcript
                 // server-side. Re-seed our local transcript from the dashboard's
@@ -429,6 +551,14 @@ final class LocalChatViewModel {
                     append(kind: .event, text: notice)
                 }
             case let .submit(message, notice):
+                if whileBusy {
+                    // A pending-input dispatch must never start a turn over the
+                    // live one. Hermes shouldn't return `send` for the
+                    // pending-input set, so treat it as an error rather than
+                    // silently launching a racing turn.
+                    append(kind: .event, text: "Couldn't send while the current turn is running.")
+                    return false
+                }
                 if let notice, !notice.isEmpty {
                     append(kind: .event, text: notice)
                 }

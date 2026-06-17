@@ -14,6 +14,11 @@ struct Composer: View {
     @State private var isSlashMenuDismissed = false
     @State private var slashMenuHeight: CGFloat = 0
     @State private var selectedCommandIndex = 0
+    /// First Esc over a live turn arms the cancel (a hint appears); the second
+    /// confirms. Guards against a stray Esc dropping a running turn or a
+    /// half-typed message. Cleared by typing, when the turn ends, or after a
+    /// short window so a much-later Esc doesn't act on a stale arm.
+    @State private var escapeArmedToCancel = false
 
     private var trimmedPrompt: String {
         prompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -25,7 +30,46 @@ struct Composer: View {
         }
 
         let query = String(prompt.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return rankedSlashCommands(availableCommands, matching: query)
+        let ranked = rankedSlashCommands(availableCommands, matching: query)
+        // While a turn is in flight only the gateway's pending-input commands can
+        // be dispatched, so the menu offers just those — matching what
+        // `LocalChatViewModel.sendWhileBusy` will actually accept.
+        guard isSending else {
+            return ranked
+        }
+        return ranked.filter { SlashCommand.pendingInputCommands.contains($0.name.lowercased()) }
+    }
+
+    /// Whether the current composer text can actually be dispatched over a live
+    /// turn: plain text (auto-queued) or a pending-input slash. A non-pending
+    /// slash (`/help`, `/model`, …) can't — the slash menu already hides those
+    /// while busy, and `LocalChatViewModel.sendWhileBusy` no-ops on them — so the
+    /// Send button is disabled to match rather than imply an action that never runs.
+    private var canSendWhileBusy: Bool {
+        let trimmed = trimmedPrompt
+        guard trimmed.hasPrefix("/") else {
+            return true
+        }
+        return SlashCommand(parsing: trimmed).isPendingInput
+    }
+
+    /// Help text for the Send button while a turn is in flight — adapts to what
+    /// the current composer text will do (queue / steer / generic send), and
+    /// explains the disabled state for a non-pending slash.
+    private var busySendHelp: String {
+        let trimmed = trimmedPrompt
+        guard trimmed.hasPrefix("/") else {
+            return "Queue this message"
+        }
+        let parsed = SlashCommand(parsing: trimmed)
+        switch parsed.name.lowercased() {
+        case "queue", "q": return "Queue this message"
+        case "steer": return "Steer the running turn"
+        default:
+            return parsed.isPendingInput
+                ? "Send while running"
+                : "This command can't be sent until the turn finishes"
+        }
     }
 
     private var visibleCommands: [AvailableCommand] {
@@ -56,6 +100,20 @@ struct Composer: View {
                     // Each keystroke re-filters the list; reset the highlight to
                     // the top (index 0 is always valid for a non-empty list).
                     selectedCommandIndex = 0
+                    // Editing the message disarms a pending Esc-cancel.
+                    escapeArmedToCancel = false
+                }
+                .onChange(of: isSending) { _, busy in
+                    // A turn ending (or being cancelled) disarms any pending Esc-cancel.
+                    if !busy { escapeArmedToCancel = false }
+                }
+                .task(id: escapeArmedToCancel) {
+                    // Auto-disarm after a short window so the cancel reads as a
+                    // double-tap, not a latent state a much-later Esc can trip.
+                    guard escapeArmedToCancel else { return }
+                    try? await Task.sleep(for: .seconds(3))
+                    guard !Task.isCancelled else { return }
+                    escapeArmedToCancel = false
                 }
                 .onKeyPress(.upArrow, phases: .down) { _ in
                     let count = visibleCommands.count
@@ -88,19 +146,52 @@ struct Composer: View {
                     return .handled
                 }
                 .onKeyPress(.escape, phases: .down) { _ in
-                    guard !visibleCommands.isEmpty else {
+                    // Esc dismisses the slash menu first; only when no menu is
+                    // open does it act on a live turn. Interrupting takes a
+                    // *double* Esc — the first press arms the cancel (and shows a
+                    // hint), the second confirms — so a stray Esc never drops a
+                    // running turn or a half-typed message. ⌘. still cancels in
+                    // one chord.
+                    if !visibleCommands.isEmpty {
+                        isSlashMenuDismissed = true
+                        return .handled
+                    }
+                    guard isSending else {
                         return .ignored
                     }
-                    isSlashMenuDismissed = true
+                    if escapeArmedToCancel {
+                        escapeArmedToCancel = false
+                        cancel()
+                    } else {
+                        escapeArmedToCancel = true
+                    }
+                    return .handled
+                }
+                .onKeyPress(KeyEquivalent("."), phases: .down) { press in
+                    // ⌘. interrupts the running turn without leaving the text
+                    // field — the macOS-conventional cancel chord.
+                    guard isSending, press.modifiers.contains(.command) else {
+                        return .ignored
+                    }
+                    cancel()
                     return .handled
                 }
 
             if isSending {
+                // Both controls while busy: Cancel always interrupts; Send
+                // queues/steers the running turn when there's text to dispatch.
                 Button(action: cancel) {
                     Image(systemName: "stop.fill")
                 }
-                .help("Cancel")
+                .help("Interrupt the current turn (⌘. or Esc Esc)")
                 .accessibilityLabel("Cancel")
+
+                Button(action: send) {
+                    Image(systemName: "paperplane.fill")
+                }
+                .help(busySendHelp)
+                .accessibilityLabel("Send")
+                .disabled(trimmedPrompt.isEmpty || isBlocked || !canSendWhileBusy)
             } else {
                 Button(action: send) {
                     Image(systemName: "paperplane.fill")
@@ -138,6 +229,22 @@ struct Composer: View {
                 }
                 .offset(y: -slashMenuHeight)
                 .opacity(slashMenuHeight > 0 ? 1 : 0)
+            }
+        }
+        // Float the double-Esc hint above the input row (like the slash menu) so
+        // it doesn't shift layout. Only shown while a turn is in flight, the
+        // cancel is armed, and no slash menu is competing for the same space.
+        .overlay(alignment: .topTrailing) {
+            if isSending, escapeArmedToCancel, visibleCommands.isEmpty {
+                Text("Press Esc again to interrupt")
+                    .font(.caption)
+                    // Dimmed `.primary`, not `.secondary`: the latter is invisible
+                    // over a material on some iOS devices.
+                    .foregroundStyle(.primary.opacity(0.7))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(.thinMaterial, in: Capsule())
+                    .offset(y: -34)
             }
         }
         .padding(12)
