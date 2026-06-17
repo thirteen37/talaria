@@ -32,6 +32,13 @@ enum UITestFlags {
         screenshotSurface == "chat"
     }
 
+    /// True when any UI-test/screenshot fixture is driving the app, so surfaces
+    /// that persist real user state (e.g. cold-relaunch restoration) stay inert
+    /// against synthetic data.
+    static var anyFixtureActive: Bool {
+        mockServer || screenshotFixture
+    }
+
     private static var arguments: [String] {
         ProcessInfo.processInfo.arguments
     }

@@ -130,7 +130,195 @@ struct ConnectionRecoveryTests {
         }
     }
 
+    // MARK: - deadLiveSessionIds
+
+    @Test
+    func deadLiveSessionIdsEmptyForHealthyTab() async throws {
+        let store = Self.makeStore(CountingBackendFactory(), Self.client(RecoveryStubHTTP()))
+        await store.openExisting(HermesSessionSummary(id: "live-1", title: "Live", source: "acp"))
+        // A freshly-resumed live tab has an open stream — nothing dead.
+        #expect(await store.deadLiveSessionIds().isEmpty)
+        await store.closeTab("live-1")
+    }
+
+    @Test
+    func deadLiveSessionIdsReportsTabAfterStreamEnds() async throws {
+        let store = Self.makeStore(CountingBackendFactory(), Self.client(RecoveryStubHTTP()))
+        await store.openExisting(HermesSessionSummary(id: "live-1", title: "Live", source: "acp"))
+        // Simulate the `/api/ws` socket dying: finish the backend's stream without
+        // tearing the session down, exactly the WS-death-after-passing-probe case.
+        await store.manager.client(for: "live-1")?.close()
+        try await pollUntil { !(await store.deadLiveSessionIds()).isEmpty }
+        #expect(await store.deadLiveSessionIds() == ["live-1"])
+        await store.closeTab("live-1")
+    }
+
+    @Test
+    func deadLiveSessionIdsEmptyForReadOnlyTab() async throws {
+        let store = Self.makeStore(CountingBackendFactory(), Self.client(RecoveryStubHTTP()))
+        await store.openExisting(HermesSessionSummary(id: "ext-1", title: "External", source: "telegram"))
+        #expect(store.viewModel(for: "ext-1")?.isReadOnly == true)
+        // Read-only tabs have no manager session, so nothing can be dead.
+        #expect(await store.deadLiveSessionIds().isEmpty)
+        await store.closeTab("ext-1")
+    }
+
+    // MARK: - openExisting(select:)
+
+    @Test
+    func openExistingWithSelectFalseOpensWithoutChangingSelection() async throws {
+        // Cold-relaunch restore re-opens tabs without churning the visible selection
+        // so it can set the recorded selection once at the end (and so a user tap is
+        // an unambiguous signal). Verify the opt-out leaves `selection` untouched.
+        let store = Self.makeStore(CountingBackendFactory(), Self.client(RecoveryStubHTTP()))
+        #expect(store.selection == nil)
+
+        await store.openExisting(HermesSessionSummary(id: "s1", title: "S1", source: "acp"), select: false)
+        #expect(store.openSessions.contains { $0.id == "s1" })
+        #expect(store.selection == nil)
+
+        // The default still selects.
+        await store.openExisting(HermesSessionSummary(id: "s2", title: "S2", source: "acp"))
+        #expect(store.selection == "s2")
+
+        await store.closeTab("s1")
+        await store.closeTab("s2")
+    }
+
+    // MARK: - reopenForRestore
+
+    @Test
+    func reopenForRestoreSkipsDeletedSessionWithoutError() async throws {
+        // A saved session that the server no longer has (404) must degrade silently
+        // on cold relaunch — no tab, and crucially no `lastError` (which would pop a
+        // red banner). An existing session opens (without selecting).
+        let store = Self.makeStore(
+            CountingBackendFactory(),
+            Self.client(RecoveryStubHTTP(missingDetailIds: ["gone"]))
+        )
+
+        let deletedOpened = await store.reopenForRestore(id: "gone")
+        #expect(deletedOpened == false)
+        #expect(store.openSessions.contains { $0.id == "gone" } == false)
+        #expect(store.lastError == nil)
+
+        let liveOpened = await store.reopenForRestore(id: "live-1")
+        #expect(liveOpened == true)
+        #expect(store.openSessions.contains { $0.id == "live-1" })
+        #expect(store.selection == nil)   // opened without selecting
+        #expect(store.lastError == nil)
+
+        await store.closeTab("live-1")
+    }
+
+    // MARK: - recoverConnectionIfNeeded: WS-death after a passing probe
+
+    @Test
+    func recoverConnectionReResumesDeadLiveSessionWithoutTeardown() async throws {
+        let factory = CountingBackendFactory()
+        let dashboard = Self.client(RecoveryStubHTTP())
+        let store = Self.makeStore(factory, dashboard)
+        let harness = ServerWindowHarness(
+            store: store,
+            profile: ServerProfile(name: "Server", kind: .ssh, host: "host")
+        )
+        harness.dashboardClient = dashboard
+        store.dashboardClient = dashboard
+        harness.dashboardStarted = true
+
+        await store.openExisting(HermesSessionSummary(id: "live-1", title: "Live", source: "acp"))
+        let bootedAfterOpen = await factory.count
+        #expect(bootedAfterOpen == 1)
+
+        // WS death while HTTP stays healthy.
+        await store.manager.client(for: "live-1")?.close()
+        try await pollUntil { !(await store.deadLiveSessionIds()).isEmpty }
+
+        harness.recoverConnectionIfNeeded()
+        await harness.recoveryTask?.value
+
+        // The probe passed (HTTP alive), so the dead chat re-resumed over the same
+        // tunnel — one more backend booted — and no full recovery ran: the dashboard
+        // client is still present and unchanged, with no acquisition error.
+        #expect(await factory.count == bootedAfterOpen + 1)
+        #expect(harness.dashboardClient != nil)
+        #expect(harness.dashboardError == nil)
+        #expect(harness.isRecovering == false)
+
+        await store.closeTab("live-1")
+    }
+
+    @Test
+    func recoverConnectionReResumesOnlyTheDeadSessionNotHealthyOnes() async throws {
+        // Each live chat owns its own socket, so a single channel reset can kill one
+        // while the others stay healthy and mid-stream. Recovery must re-resume only
+        // the dead one — tearing down a healthy chat would drop its in-flight turn.
+        let factory = CountingBackendFactory()
+        let dashboard = Self.client(RecoveryStubHTTP())
+        let store = Self.makeStore(factory, dashboard)
+        let harness = ServerWindowHarness(
+            store: store,
+            profile: ServerProfile(name: "Server", kind: .ssh, host: "host")
+        )
+        harness.dashboardClient = dashboard
+        store.dashboardClient = dashboard
+        harness.dashboardStarted = true
+
+        await store.openExisting(HermesSessionSummary(id: "live-1", title: "Live 1", source: "acp"))
+        await store.openExisting(HermesSessionSummary(id: "live-2", title: "Live 2", source: "acp"))
+        #expect(await factory.count == 2)
+
+        // Kill only live-1's socket.
+        await store.manager.client(for: "live-1")?.close()
+        try await pollUntil { !(await store.deadLiveSessionIds()).isEmpty }
+        #expect(await store.deadLiveSessionIds() == ["live-1"])
+
+        harness.recoverConnectionIfNeeded()
+        await harness.recoveryTask?.value
+
+        // Exactly one re-resume (live-1), not two — the healthy live-2 is untouched.
+        #expect(await factory.count == 3)
+        #expect(await store.deadLiveSessionIds().isEmpty)
+
+        await store.closeTab("live-1")
+        await store.closeTab("live-2")
+    }
+
+    @Test
+    func recoverConnectionSkipsReResumeWhenNoDeadSession() async throws {
+        let factory = CountingBackendFactory()
+        let dashboard = Self.client(RecoveryStubHTTP())
+        let store = Self.makeStore(factory, dashboard)
+        let harness = ServerWindowHarness(
+            store: store,
+            profile: ServerProfile(name: "Server", kind: .ssh, host: "host")
+        )
+        harness.dashboardClient = dashboard
+        store.dashboardClient = dashboard
+        harness.dashboardStarted = true
+
+        await store.openExisting(HermesSessionSummary(id: "live-1", title: "Live", source: "acp"))
+        let bootedAfterOpen = await factory.count
+
+        harness.recoverConnectionIfNeeded()
+        await harness.recoveryTask?.value
+
+        // Probe alive + nothing dead → no re-resume, no extra backend.
+        #expect(await factory.count == bootedAfterOpen)
+        #expect(harness.dashboardError == nil)
+
+        await store.closeTab("live-1")
+    }
+
     // MARK: - Helpers
+
+    private static func makeStore(_ factory: CountingBackendFactory, _ dashboard: DashboardClient) -> SessionsStore {
+        SessionsStore(
+            manager: SessionManager(backendFactory: { await factory.makeBackend() }),
+            dashboardClient: dashboard,
+            defaultCwd: "/tmp"
+        )
+    }
 
     private static func client(_ http: RecoveryStubHTTP) -> DashboardClient {
         DashboardClient(
@@ -138,6 +326,19 @@ struct ConnectionRecoveryTests {
             token: { "tok" },
             http: http
         )
+    }
+}
+
+/// Polls `condition` until it holds (or a bounded number of attempts elapse), so
+/// a test can wait on the session manager's pump observing an out-of-band stream
+/// end without reaching into its private pump task.
+private func pollUntil(
+    attempts: Int = 200,
+    _ condition: @Sendable () async -> Bool
+) async throws {
+    for _ in 0..<attempts {
+        if await condition() { return }
+        try await Task.sleep(nanoseconds: 10_000_000)
     }
 }
 

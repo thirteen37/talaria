@@ -791,7 +791,14 @@ struct ProfilesView: View {
                 // `default` is the sync source, so it's never a target.
                 if let onShowSync, !isDefaultProfile(profile) {
                     Button("Sync") { onShowSync(profile.name) }
+                        // `.link` is macOS-only (unavailable on iOS); fall back to
+                        // a borderless button on iPad so the shared file compiles
+                        // for the iOS app target while macOS keeps its link style.
+                        #if os(macOS)
                         .buttonStyle(.link)
+                        #else
+                        .buttonStyle(.borderless)
+                        #endif
                         .help("Push default's skills, config and credentials to “\(profile.name)”")
                 } else {
                     Text("—")

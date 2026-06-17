@@ -12,6 +12,10 @@ struct PhoneServerWindow: View {
     @Environment(RecentServers.self) private var recents
     @Environment(SidebarLayout.self) private var sidebarLayout
     @Environment(NotificationSettings.self) private var notificationSettings
+    /// Cold-relaunch restoration store (injected on iOS). Reads the saved
+    /// navigation snapshot once the dashboard is live, and is written on
+    /// backgrounding + each navigation change.
+    @Environment(WindowRestorationStore.self) private var restoration: WindowRestorationStore?
     @State private var harness: ServerWindowHarness?
     /// Window-scoped navigation intent for `EntityLink` taps. Injected into the
     /// content and the Browse sheet; this window observes `pendingFocus` to open
@@ -30,6 +34,23 @@ struct PhoneServerWindow: View {
     /// Drives the chat push stack. Selecting/creating a session pushes its id;
     /// popping (back-swipe) clears the selection.
     @State private var chatPath: [SessionId] = []
+    /// The Browse sheet's nested stack, mirrored here so it can be captured for
+    /// restoration; `[]` while the sheet is closed or on its root list.
+    @State private var browseSubPath: [BrowseDestination] = []
+    /// Transient seed for the Browse sheet on a cold-relaunch restore — the saved
+    /// nested stack to re-open into. Cleared once the sheet is dismissed.
+    @State private var restoredBrowsePath: [BrowseDestination] = []
+    /// Cold-relaunch restore runs at most once per window lifetime. (Window-scoped
+    /// `@State`, so an in-window profile switch that rebuilds the harness does not
+    /// re-restore — v1 restores the launch profile only.)
+    @State private var didRestore = false
+    /// Latches when the user navigates before the restore runs, permanently
+    /// cancelling it so a disk value never clobbers a live intent.
+    @State private var userHasActed = false
+    /// True while a restore is applying (sync nav + async re-open), so the capture
+    /// hooks don't persist half-restored state and the latch ignores restore's own
+    /// writes.
+    @State private var isRestoring = false
     @State private var activeProfileId: UUID?
     /// Active Hermes profile (`hermes -p <name>`) the whole window is scoped to.
     /// Does not persist — resets to `default` on launch and on every server
@@ -78,6 +99,14 @@ struct PhoneServerWindow: View {
         .onChange(of: harness?.dashboardClient != nil) { _, hasClient in
             guard hasClient, let harness else { return }
             Task { await loadHermesProfiles(harness: harness) }
+            // Sessions resume over the dashboard, so a cold-launch restore can
+            // only run once it's live. Reuses this same dashboard-ready edge.
+            restoreIfNeeded(harness: harness)
+        }
+        // Last reliable hook before iOS may terminate the suspended app: persist
+        // the navigation + open chats so a cold relaunch lands back in place.
+        .onEnterBackground {
+            if let harness { captureRestoration(harness: harness) }
         }
         // Clear the loading placeholder if the dashboard fails to spawn: the
         // client stays nil so the success path never fires, leaving the spinner
@@ -239,6 +268,156 @@ struct PhoneServerWindow: View {
         }
     }
 
+    // MARK: - Cold-relaunch restoration
+
+    /// Nested stack the Browse sheet opens into: a deep link wins, otherwise the
+    /// restored sub-path (empty for a plain Browse tap → the root list).
+    private var browseInitialPath: [BrowseDestination] {
+        if let browseDeepLink { return [browseDeepLink] }
+        return restoredBrowsePath
+    }
+
+    /// The presented sheet for the snapshot's `sheet` field.
+    private var currentSheet: String? {
+        if showingSettings { return "settings" }
+        if showingBrowse { return "browse" }
+        if showingAllSessions { return "allSessions" }
+        return nil
+    }
+
+    /// Marks that the user navigated before the restore ran, permanently
+    /// cancelling it (a live intent must always beat the disk value). A no-op once
+    /// the restore has already run — restore's own writes must not trip it. Used for
+    /// the sheet hooks, which the restore only touches synchronously up front (never
+    /// during the async re-open), so `!didRestore` is the right gate there.
+    private func noteUserAction() {
+        if !didRestore { userHasActed = true }
+    }
+
+    /// Latches `userHasActed` for a user-driven selection change so a pending restore
+    /// can't overwrite it. Pre-restore, any selection is the user. During the
+    /// restore's async re-open, `reopenSessions` opens tabs *without* selecting
+    /// (`select: false`), so a non-nil selection can only be a live user tap — even
+    /// of a previously-open session. The restore's own final selection write happens
+    /// after `isRestoring` clears, so it never trips this.
+    private func noteSelectionChange(_ newValue: SessionId?) {
+        if (!didRestore || isRestoring), newValue != nil {
+            userHasActed = true
+        }
+    }
+
+    /// Persists the current navigation + open chats for this window's profile.
+    /// Best-effort and idempotent (the store skips equal snapshots); skipped while
+    /// a restore is applying so half-restored state isn't written, and inert under
+    /// UI-test fixtures.
+    ///
+    /// Gated on `didRestore`: nothing is captured until the restore has run (or was
+    /// definitively skipped — `restoreIfNeeded` sets `didRestore` whenever it
+    /// proceeds or finds no snapshot). Before that, the window holds the pre-restore
+    /// baseline (no chats can be open until the dashboard connects and restore
+    /// re-opens them), so persisting it would clobber the saved snapshot with empty
+    /// state — including the cases where the dashboard never connects (offline) or
+    /// the user navigates before it does (which cancels restore without setting
+    /// `didRestore`). The saved snapshot is preserved for the next launch instead.
+    @MainActor
+    private func captureRestoration(harness: ServerWindowHarness) {
+        guard let restoration, !UITestFlags.anyFixtureActive, !isRestoring, didRestore else { return }
+        let liveTabs = harness.store.openSessions.filter { session in
+            session.kind == .acp && harness.store.viewModel(for: session.id)?.isReadOnly == false
+        }
+        var openTitles: [SessionId: String] = [:]
+        for tab in liveTabs {
+            if let title = tab.title, !title.isEmpty { openTitles[tab.id] = title }
+        }
+        let snapshot = WindowRestorationSnapshot(
+            openSessionIds: liveTabs.map(\.id),
+            openTitles: openTitles,
+            selection: harness.store.selection,
+            // iPhone keeps chat as its root stack; Browse lives in the sheet, so
+            // its depth rides `browseSubPath`, not the `browse` field.
+            browse: nil,
+            browseSubPath: browseSubPath.map(\.rawValue),
+            sheet: currentSheet
+        )
+        restoration.record(snapshot, for: harness.profile.id)
+    }
+
+    /// Restores the saved navigation and re-opens the live chats after a cold
+    /// relaunch. Runs at most once per window, only when the dashboard is live
+    /// and no tabs are open (a warm reconnect keeps its tabs and is handled by
+    /// `recoverLiveSessions`), and never after the user has already navigated.
+    @MainActor
+    private func restoreIfNeeded(harness: ServerWindowHarness) {
+        guard let restoration,
+              !UITestFlags.anyFixtureActive,
+              !didRestore, !userHasActed,
+              harness.dashboardClient != nil,
+              harness.store.openSessions.isEmpty,
+              self.harness === harness,
+              harness.hostKeyCoordinator?.pending == nil,
+              directory.profile(id: harness.profile.id) != nil
+        else { return }
+        guard let snapshot = restoration.snapshot(for: harness.profile.id) else {
+            didRestore = true
+            return
+        }
+        didRestore = true
+        isRestoring = true
+
+        // Navigation first, synchronously, so the user lands in place immediately.
+        restoredBrowsePath = snapshot.browseSubPath.compactMap(BrowseDestination.init(rawValue:))
+        applySheet(snapshot.sheet)
+
+        // Then re-open the live chats over the dashboard, and apply the recorded
+        // selection once — after `isRestoring` clears, so the selection onChange
+        // doesn't mistake restore's own write for a user tap.
+        Task {
+            let reopened = await reopenSessions(harness: harness, snapshot: snapshot)
+            isRestoring = false
+            if let reopened, !userHasActed, self.harness === harness {
+                harness.store.selection = WindowRestoration.resolvedSelection(
+                    recorded: snapshot.selection,
+                    reopened: reopened
+                )
+            }
+            // Don't capture here: the restored state already equals the snapshot on
+            // disk (so a capture would be a skip-if-equal no-op), and capturing now
+            // could race the Browse sheet's `onPathChange` and momentarily persist an
+            // empty sub-path. Genuine navigation — including the sheet seeding its
+            // nested stack — re-captures from here on.
+        }
+    }
+
+    @MainActor
+    private func applySheet(_ sheet: String?) {
+        switch sheet {
+        case "browse": showingBrowse = true
+        case "allSessions": showingAllSessions = true
+        case "settings": showingSettings = true
+        default: break
+        }
+    }
+
+    /// Re-opens each recorded session via `reopenForRestore` (resolves cwd, seeds
+    /// history, **and skips a server-deleted / unpersisted id silently** — no error
+    /// banner) **without selecting** — the caller applies the recorded selection
+    /// once at the end. Returns the ids that re-opened, or `nil` if the restore was
+    /// abandoned (the user acted, via the `noteSelectionChange` latch, or the harness
+    /// was replaced). Because the selection stays still during the loop, a user tap
+    /// mid-re-open is detected and bails here rather than being silently overwritten.
+    @MainActor
+    private func reopenSessions(harness: ServerWindowHarness, snapshot: WindowRestorationSnapshot) async -> [SessionId]? {
+        var reopened: [SessionId] = []
+        for id in snapshot.openSessionIds {
+            guard !userHasActed, self.harness === harness else { return nil }
+            if await harness.store.reopenForRestore(id: id, title: snapshot.openTitles[id] ?? "") {
+                reopened.append(id)
+            }
+        }
+        guard !userHasActed, self.harness === harness else { return nil }
+        return reopened
+    }
+
     @ViewBuilder
     private func content(harness: ServerWindowHarness) -> some View {
         // Explicit push stack: the collapsed NavigationSplitView's programmatic
@@ -260,6 +439,8 @@ struct PhoneServerWindow: View {
         }
         .onChange(of: harness.store.selection) { _, newValue in
             chatPath = newValue.map { [$0] } ?? []
+            noteSelectionChange(newValue)
+            captureRestoration(harness: harness)
         }
         .onChange(of: chatPath) { _, path in
             // Back-swipe empties the path — clear the selection so re-tapping
@@ -267,6 +448,28 @@ struct PhoneServerWindow: View {
             if path.isEmpty, harness.store.selection != nil {
                 harness.store.selection = nil
             }
+        }
+        // Persist open-tab changes (a new chat, a closed tab) for restoration.
+        .onChange(of: harness.store.openSessions) { _, _ in
+            captureRestoration(harness: harness)
+        }
+        // Sheet visibility feeds the snapshot's `sheet` field; opening a sheet
+        // before the restore runs counts as a user action that cancels it. A
+        // closing Browse sheet drops its restored seed + nested path.
+        .onChange(of: showingBrowse) { _, isOpen in
+            if isOpen { noteUserAction() } else {
+                restoredBrowsePath = []
+                browseSubPath = []
+            }
+            captureRestoration(harness: harness)
+        }
+        .onChange(of: showingAllSessions) { _, isOpen in
+            if isOpen { noteUserAction() }
+            captureRestoration(harness: harness)
+        }
+        .onChange(of: showingSettings) { _, isOpen in
+            if isOpen { noteUserAction() }
+            captureRestoration(harness: harness)
         }
         .alert(
             "Trust this server?",
@@ -371,7 +574,11 @@ struct PhoneServerWindow: View {
                 hermesProfiles: hermesProfiles,
                 activeHermesProfile: activeHermesProfile,
                 onProfilesChanged: { reconcileHermesProfiles(harness: harness) },
-                initial: browseDeepLink,
+                initialPath: browseInitialPath,
+                onPathChange: { newPath in
+                    browseSubPath = newPath
+                    captureRestoration(harness: harness)
+                },
                 onOpenSettings: {
                     pendingSettings = true
                     showingBrowse = false

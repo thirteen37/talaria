@@ -98,6 +98,15 @@ extension View {
         background(BackgroundResumeReader(action: action))
     }
 
+    /// Fires `action` when the app enters the background (`scenePhase ==
+    /// .background`) — the last reliable hook before iOS may terminate the
+    /// suspended app, so it's where a window persists its cold-relaunch
+    /// restoration snapshot. macOS has a no-op mirror (desktop windows aren't
+    /// killed-and-restored), so the shared call site compiles `#if`-free.
+    func onEnterBackground(_ action: @escaping () -> Void) -> some View {
+        background(EnterBackgroundReader(action: action))
+    }
+
     /// Gear toolbar item that opens the profile editor (there's no `Settings`
     /// scene on iOS, so the desktop window surfaces editing itself on iPad).
     func platformSettingsToolbarItem(action: @escaping () -> Void) -> some View {
@@ -288,6 +297,20 @@ private struct BackgroundResumeReader: View {
         Color.clear
             .onChange(of: scenePhase) { _, phase in
                 if latch.note(phase) { action() }
+            }
+    }
+}
+
+/// Fires `action` each time the scene reaches `.background`. Implemented as a
+/// background `View` to mirror the other scene-phase readers in this seam.
+private struct EnterBackgroundReader: View {
+    @Environment(\.scenePhase) private var scenePhase
+    let action: () -> Void
+
+    var body: some View {
+        Color.clear
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .background { action() }
             }
     }
 }

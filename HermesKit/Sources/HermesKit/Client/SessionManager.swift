@@ -42,6 +42,14 @@ public actor SessionManager {
         let epoch: UUID
         var subscribers: [UUID: AsyncStream<HermesNotification>.Continuation] = [:]
         var pumpTask: Task<Void, Never>?
+        /// Set when this session's notification stream ends while it's still
+        /// registered — i.e. the underlying socket died but `close(id:)` was never
+        /// called to tear it down. The live-chat `/api/ws` channel can die (gateway
+        /// restart, channel reset) while the dashboard HTTP channel still answers,
+        /// so a passing HTTP probe alone can't tell a dead chat from a live one;
+        /// this flag does. Cleared implicitly by re-resume (close drops the session,
+        /// the fresh `openExisting` registers a new `ActiveSession` with this false).
+        var streamEnded = false
         /// Notifications that arrived while no subscriber was attached.
         /// Replayed in order to each new subscriber so resumed sessions
         /// actually surface their history — hermes streams the prior
@@ -132,6 +140,14 @@ public actor SessionManager {
         sessions.map { SessionState(id: $0.key, cwd: $0.value.cwd) }
     }
 
+    /// Ids of still-registered sessions whose notification stream ended without a
+    /// `close(id:)` — the live chat socket died while the session was meant to be
+    /// alive. The iOS background→foreground recovery consults this after a passing
+    /// HTTP probe to re-resume only the affected chats over the still-good tunnel.
+    public func deadSessionIds() -> [SessionId] {
+        sessions.compactMap { $0.value.streamEnded ? $0.key : nil }
+    }
+
     public func notifications(for id: SessionId) -> AsyncStream<HermesNotification> {
         let token = UUID()
         var capturedContinuation: AsyncStream<HermesNotification>.Continuation!
@@ -202,7 +218,20 @@ public actor SessionManager {
         } catch {
             // Notification stream ended — fall through to finish subscribers.
         }
+        // The stream ended. If this session is still registered (close() removes
+        // it), the socket died out from under a session that should be live —
+        // flag it so the store can re-resume just this chat. A close-driven exit
+        // fails the epoch guard (the session is gone or re-registered) and no-ops.
+        markStreamEnded(sessionId: sessionId, epoch: epoch)
         finishSubscribers(sessionId: sessionId, epoch: epoch)
+    }
+
+    private func markStreamEnded(sessionId: SessionId, epoch: UUID) {
+        guard var active = sessions[sessionId], active.epoch == epoch else {
+            return
+        }
+        active.streamEnded = true
+        sessions[sessionId] = active
     }
 
     private func fanOut(sessionId: SessionId, epoch: UUID, notification: HermesNotification) {
