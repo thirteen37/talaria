@@ -13,10 +13,13 @@ struct TalariaApp: App {
     // `ChatNotifier`), injected into the windows (and the iOS settings sheet,
     // which reads it from the environment).
     @State private var notificationSettings = ChatNotifier.shared.settings
+    // Persists each window's navigation + open-session state so a cold relaunch
+    // (iOS terminated the suspended app) restores where the user left off.
+    @State private var windowRestoration = WindowRestorationStore()
 
     var body: some Scene {
         WindowGroup(for: UUID.self) { $profileId in
-            RootWindowScene(profileId: profileId, directory: directory, recents: recents, sidebarLayout: sidebarLayout, notificationSettings: notificationSettings) {
+            RootWindowScene(profileId: profileId, directory: directory, recents: recents, sidebarLayout: sidebarLayout, notificationSettings: notificationSettings, windowRestoration: windowRestoration) {
                 ServerWindowRoot(profileId: profileId)
             }
         } defaultValue: {

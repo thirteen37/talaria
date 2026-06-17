@@ -12,6 +12,10 @@ struct RootWindowScene<Content: View>: View {
     let recents: RecentServers
     let sidebarLayout: SidebarLayout
     let notificationSettings: NotificationSettings
+    /// Cold-relaunch navigation restore store. Injected on iOS (where the app can
+    /// be killed-and-restored); nil on macOS, where the windows read it as the
+    /// optional `nil` form and the save/restore wiring stays inert.
+    var windowRestoration: WindowRestorationStore? = nil
     @ViewBuilder var content: () -> Content
 
     @Environment(\.openWindow) private var openWindow
@@ -23,6 +27,7 @@ struct RootWindowScene<Content: View>: View {
             .environment(recents)
             .environment(sidebarLayout)
             .environment(notificationSettings)
+            .environment(windowRestoration)
             .task {
                 await directory.reload()
                 recents.record(profileId)

@@ -209,8 +209,14 @@ final class ServerWindowHarness {
     /// open chat tabs dead.
     func reconnectDashboard() {
         guard !dashboardReleased, !isRecovering else { return }
+        // Claim the recovery slot synchronously, before the async hop, so two taps
+        // (or a tap racing a background→foreground probe) can't both pass the guard
+        // and spawn concurrent recoveries. The task clears it in a `defer`.
+        isRecovering = true
         recoveryTask = Task { [weak self] in
-            await self?.performRecovery()
+            guard let self else { return }
+            defer { self.isRecovering = false }
+            await self.performRecovery()
         }
     }
 
@@ -223,11 +229,50 @@ final class ServerWindowHarness {
     /// `onResumeFromBackground` seam is a no-op, so this only fires on iOS/iPad.
     func recoverConnectionIfNeeded() {
         guard dashboardStarted, !dashboardReleased, !isRecovering else { return }
+        // Claim the recovery slot synchronously (see `reconnectDashboard`): the probe
+        // + dead-set read below are suspension points, so without this two foreground
+        // events arriving close together could both pass the guard and run concurrent
+        // recoveries on the same just-resumed session.
+        isRecovering = true
         recoveryTask = Task { [weak self] in
             guard let self else { return }
-            if await self.isDashboardAlive() { return }
+            defer { self.isRecovering = false }
+            if await self.isDashboardAlive() {
+                // HTTP is healthy, but the live-chat `/api/ws` socket is a separate
+                // long-lived `direct-tcpip` channel on the same SSH connection — it
+                // can die (gateway restart, channel reset) while HTTP still answers.
+                // A passing probe would otherwise leave the open chats silently dead.
+                // Re-resume only the affected sessions over the still-good tunnel.
+                await self.recoverDeadLiveSessionsIfNeeded()
+                return
+            }
             await self.performRecovery()
         }
+    }
+
+    /// Re-resumes open live chats whose `/api/ws` stream died while the dashboard
+    /// HTTP channel stayed healthy — the WS-death-after-a-passing-probe case. Unlike
+    /// ``performRecovery()``, it does **not** tear the SSH tunnel down (it's still
+    /// good), and it re-resumes **only the dead sessions** over it — each chat owns
+    /// its own socket, so the healthy (possibly mid-stream) chats are left alone.
+    /// No-op when nothing is dead. The caller (``recoverConnectionIfNeeded()``) holds
+    /// the ``isRecovering`` claim for the duration.
+    ///
+    /// Best-effort by design: ``SessionsStore/deadLiveSessionIds()`` reads the
+    /// per-session stream-ended flag that each pump sets only once it *observes* its
+    /// socket end, which on resume can land after this read (the underlying SSH/WS
+    /// layer surfaces a reset asynchronously, and no amount of yielding here forces
+    /// it). A chat whose death hasn't surfaced yet is simply caught on the next
+    /// background→foreground cycle, or via manual Reconnect — the same fallback the
+    /// plan assigns to mid-session silent WS death (a proactive WS heartbeat is out
+    /// of scope for v1). The far more common trigger — the whole SSH tunnel dying on
+    /// suspend — fails the `/api/status` probe and routes to the full
+    /// ``performRecovery()`` instead, which re-resumes every tab regardless of flags.
+    func recoverDeadLiveSessionsIfNeeded() async {
+        guard dashboardClient != nil else { return }
+        let dead = await store.deadLiveSessionIds()
+        guard !dead.isEmpty else { return }
+        await store.recoverLiveSessions(limitedTo: dead)
     }
 
     /// Races a `GET /api/status` round-trip against a short deadline. A half-open
@@ -246,20 +291,19 @@ final class ServerWindowHarness {
         }
     }
 
-    /// Rebuilds the dashboard connection and re-resumes open live chats, behind
-    /// the shared ``isRecovering`` guard and a persistent "Reconnecting…" banner.
-    /// Force-tears the current supervisor down (so the dead/half-open SSH tunnel
-    /// is genuinely replaced), re-acquires (refilling `dashboardClient` and, on
-    /// iOS, `chatTunnelBox`), and — if the client came back —
-    /// ``SessionsStore/recoverLiveSessions()`` re-resumes the open tabs over the
-    /// fresh tunnel. On failure, `acquireDashboard()` has already set
-    /// `dashboardError`, which the banner bridge turns into the red error banner
-    /// with the manual Reconnect action — graceful degradation, no new failure UI.
-    /// Re-entrant-safe: a second call while one is in flight returns immediately.
+    /// Rebuilds the dashboard connection and re-resumes open live chats, behind a
+    /// persistent "Reconnecting…" banner. Force-tears the current supervisor down
+    /// (so the dead/half-open SSH tunnel is genuinely replaced), re-acquires
+    /// (refilling `dashboardClient` and, on iOS, `chatTunnelBox`), and — if the
+    /// client came back — ``SessionsStore/recoverLiveSessions()`` re-resumes the open
+    /// tabs over the fresh tunnel. On failure, `acquireDashboard()` has already set
+    /// `dashboardError`, which the banner bridge turns into the red error banner with
+    /// the manual Reconnect action — graceful degradation, no new failure UI.
+    ///
+    /// The caller (``reconnectDashboard()`` / ``recoverConnectionIfNeeded()``) holds
+    /// the ``isRecovering`` claim for the duration, so concurrent recoveries can't
+    /// interleave.
     func performRecovery() async {
-        guard !isRecovering else { return }
-        isRecovering = true
-        defer { isRecovering = false }
         banners.info("Reconnecting…", key: "reconnect", persist: true)
         defer { banners.dismiss(key: "reconnect") }
 

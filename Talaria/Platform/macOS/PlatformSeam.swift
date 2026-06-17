@@ -103,6 +103,11 @@ extension View {
     /// compiles `#if`-free.
     func onResumeFromBackground(_ action: @escaping () -> Void) -> some View { self }
 
+    /// No-op on macOS — desktop windows aren't suspended-and-terminated, so
+    /// there's no cold relaunch to persist a restoration snapshot for. Mirrors the
+    /// iOS seam so the shared window save path compiles `#if`-free.
+    func onEnterBackground(_ action: @escaping () -> Void) -> some View { self }
+
     /// Profile-editor sheet for the desktop window. No-op on macOS — the
     /// `Settings` scene presents the editor instead.
     func platformSettingsSheet<Editor: View>(

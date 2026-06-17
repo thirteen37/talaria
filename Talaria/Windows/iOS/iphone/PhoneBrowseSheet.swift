@@ -17,9 +17,13 @@ struct PhoneBrowseSheet: View {
     /// Invoked after a Profiles mutation so the window refreshes its switcher
     /// and reconciles the active profile if it was renamed/deleted.
     var onProfilesChanged: () -> Void = {}
-    /// Optional deep link (e.g. the bell → Notifications): seeds the stack so
-    /// the sheet opens directly on that surface.
-    var initial: BrowseDestination?
+    /// Initial nested stack to seed: a deep link (e.g. the bell → Notifications)
+    /// becomes `[destination]`; a cold-relaunch restore passes the full saved
+    /// sub-path. Empty lands on the Browse root list.
+    var initialPath: [BrowseDestination] = []
+    /// Reports the nested stack each time it changes so the host window can
+    /// persist it for cold-relaunch restoration.
+    var onPathChange: ([BrowseDestination]) -> Void = { _ in }
     /// Settings is iPhone-only and not a `BrowseDestination`. Tapping its row
     /// dismisses this sheet and hands off to the window's body-level Settings
     /// sheet — `ProfileEditorRoot` is built as its own `NavigationStack`, so it
@@ -80,9 +84,14 @@ struct PhoneBrowseSheet: View {
             }
         }
         .onAppear {
-            if let initial, path.isEmpty {
-                path = [initial]
+            if path.isEmpty, !initialPath.isEmpty {
+                path = initialPath
             }
+        }
+        // Surface every nested-stack change so the host window can persist the
+        // depth for cold-relaunch restoration.
+        .onChange(of: path) { _, newPath in
+            onPathChange(newPath)
         }
         // An EntityLink tapped inside a browse page (sheet already open) re-points
         // the stack at the target page; the page itself consumes the focus.

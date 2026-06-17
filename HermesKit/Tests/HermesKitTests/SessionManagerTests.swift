@@ -156,6 +156,64 @@ struct SessionManagerTests {
     }
 
     @Test
+    func deadSessionIdsFlagsAStreamThatEndedWithoutClose() async throws {
+        // WS-death after a passing HTTP probe: the live-chat socket dies, so the
+        // backend's notification stream finishes, but SessionsStore hasn't torn
+        // the session down (close was never called). The session stays registered
+        // and must surface as dead so the store can re-resume only it.
+        let scripter = BackendScripter()
+        let manager = SessionManager(backendFactory: { await scripter.next() })
+
+        _ = try await manager.openExisting(id: "sess", cwd: "/tmp")
+        let backend = try await scripter.waitForBackend(at: 0)
+        #expect(await manager.deadSessionIds().isEmpty)
+
+        // Finish the stream directly (the socket dying) — *not* via manager.close,
+        // which would deregister the session entirely.
+        await backend.close()
+        try await pollUntil { await manager.deadSessionIds() == ["sess"] }
+        #expect(await manager.deadSessionIds() == ["sess"])
+
+        await manager.close(id: "sess")
+    }
+
+    @Test
+    func closeDoesNotFlagSessionAsDead() async throws {
+        // A normal close removes the session from the manager entirely, so it must
+        // never surface as a dead session needing re-resume.
+        let scripter = BackendScripter()
+        let manager = SessionManager(backendFactory: { await scripter.next() })
+
+        _ = try await manager.openExisting(id: "sess", cwd: "/tmp")
+        _ = try await scripter.waitForBackend(at: 0)
+        await manager.close(id: "sess")
+        // Give any pump unwind a chance to run before asserting nothing flagged.
+        try await Task.sleep(nanoseconds: 30_000_000)
+        #expect(await manager.deadSessionIds().isEmpty)
+    }
+
+    @Test
+    func reResumeAfterStreamEndClearsTheDeadFlag() async throws {
+        // The re-resume path (close + openExisting over the fresh tunnel) registers
+        // a healthy session under the same id; the new registration must not inherit
+        // the previous one's dead flag.
+        let scripter = BackendScripter()
+        let manager = SessionManager(backendFactory: { await scripter.next() })
+
+        _ = try await manager.openExisting(id: "sess", cwd: "/tmp")
+        let first = try await scripter.waitForBackend(at: 0)
+        await first.close()
+        try await pollUntil { await manager.deadSessionIds() == ["sess"] }
+
+        await manager.close(id: "sess")
+        _ = try await manager.openExisting(id: "sess", cwd: "/tmp")
+        _ = try await scripter.waitForBackend(at: 1)
+        #expect(await manager.deadSessionIds().isEmpty)
+
+        await manager.close(id: "sess")
+    }
+
+    @Test
     func closeFinishesSubscribersAndDropsClient() async throws {
         let scripter = BackendScripter(newSessionId: "sess")
         let manager = SessionManager(backendFactory: { await scripter.next() })
@@ -171,6 +229,19 @@ struct SessionManagerTests {
         #expect(received == nil)
         let client = await manager.client(for: state.id)
         #expect(client == nil)
+    }
+}
+
+/// Polls `condition` until it holds (or a bounded number of attempts elapse),
+/// so a test can wait on the actor's pump observing an out-of-band stream end
+/// without reaching into its private task.
+private func pollUntil(
+    attempts: Int = 200,
+    _ condition: @Sendable () async -> Bool
+) async throws {
+    for _ in 0..<attempts {
+        if await condition() { return }
+        try await Task.sleep(nanoseconds: 10_000_000)
     }
 }
 

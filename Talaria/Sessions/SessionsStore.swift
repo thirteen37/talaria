@@ -320,7 +320,13 @@ final class SessionsStore {
         }
     }
 
-    func openExisting(_ summary: HermesSessionSummary) async {
+    /// `select` controls whether a successful open also focuses the tab. The
+    /// default (`true`) is what every interactive caller wants. Cold-relaunch
+    /// restore passes `false` so it can re-open several tabs *without* churning the
+    /// visible selection — it sets the recorded selection once at the end. Keeping
+    /// the selection still during a restore also lets the window treat any selection
+    /// change as an unambiguous live user tap (cancelling the restore).
+    func openExisting(_ summary: HermesSessionSummary, select: Bool = true) async {
         // One mode per session id: if this session is already open (or being
         // opened) as a TUI tab, focus it rather than spawning a second hermes
         // that resumes the same session concurrently. The synthetic `tui:<id>`
@@ -328,7 +334,7 @@ final class SessionsStore {
         // pending-set check closes the window before the tab is registered.
         let tuiId = tuiTabId(for: summary.id)
         if openSessions.contains(where: { $0.id == tuiId }) || pendingTUIOpens.contains(summary.id) {
-            selection = tuiId
+            if select { selection = tuiId }
             return
         }
         // Either already open or being opened concurrently — treat a second
@@ -336,7 +342,7 @@ final class SessionsStore {
         // racing through manager.openExisting and surfacing duplicateSession
         // as an error toast.
         if openSessions.contains(where: { $0.id == summary.id }) || pendingOpens.contains(summary.id) {
-            selection = summary.id
+            if select { selection = summary.id }
             return
         }
         pendingOpens.insert(summary.id)
@@ -355,7 +361,7 @@ final class SessionsStore {
             // must stay editable; only genuinely non-live sources (e.g. a
             // one-shot `"cli"` run) open read-only.
             if let source, !Self.liveResumableSources.contains(source.lowercased()) {
-                try await openReadOnly(summary, source: source)
+                try await openReadOnly(summary, source: source, select: select)
                 return
             }
 
@@ -365,7 +371,7 @@ final class SessionsStore {
             }
             cwdStore.record(id: state.id, cwd: state.cwd)
             insert(OpenSession(id: state.id, cwd: state.cwd, title: summary.title))
-            selection = state.id
+            if select { selection = state.id }
             attachStatus(id: state.id)
             // Seed the prior transcript so a resumed session shows its history
             // immediately (the live gateway doesn't replay it as updates).
@@ -373,7 +379,7 @@ final class SessionsStore {
             await ensureViewModel(id: state.id, cwd: state.cwd, seedMessages: history)
         } catch SessionManagerError.duplicateSession {
             // A concurrent caller registered first; just focus the session.
-            selection = summary.id
+            if select { selection = summary.id }
         } catch {
             AppLog.session.error("openExisting: failed: \(String(describing: error), privacy: .public)")
             lastError = Self.describe(error)
@@ -438,11 +444,19 @@ final class SessionsStore {
     /// re-subscribes the view model. Read-only `.acp` tabs (no manager) and
     /// `.tui` tabs are skipped; a tab the dashboard no longer has (an unpersisted
     /// new chat) is marked lost rather than re-resumed. No-op without a dashboard.
-    func recoverLiveSessions() async {
+    ///
+    /// Pass `limitedTo` to scope the re-resume to a specific set of ids — used by
+    /// the WS-death-after-a-passing-probe path, where only some chats' sockets died
+    /// (each chat owns its own `GatewayWebSocket`, so one channel reset can leave
+    /// the others healthy and mid-stream). `nil` re-resumes every live tab, the
+    /// full-reconnect case where the whole tunnel was torn down.
+    func recoverLiveSessions(limitedTo ids: Set<SessionId>? = nil) async {
         guard dashboardClient != nil else { return }
         // Snapshot up front: the loop awaits, and close/openExisting mutate
         // `openSessions` underneath us.
-        let liveTabs = openSessions.filter { $0.kind == .acp }
+        let liveTabs = openSessions.filter { tab in
+            tab.kind == .acp && (ids.map { $0.contains(tab.id) } ?? true)
+        }
         for tab in liveTabs {
             let id = tab.id
             guard let vm = viewModels[id], !vm.isReadOnly else { continue }
@@ -485,6 +499,25 @@ final class SessionsStore {
         }
     }
 
+    /// Ids of open, editable live chat tabs whose notification stream died — the
+    /// live-chat `/api/ws` socket died (gateway restart, channel reset) while the
+    /// dashboard HTTP channel stayed healthy, so a passing `/api/status` probe alone
+    /// would miss it. Each live chat owns its own socket, so this can be a strict
+    /// subset of the open tabs; the iOS background→foreground recovery re-resumes
+    /// exactly this set over the still-good tunnel, leaving healthy chats untouched.
+    /// Only `.acp` tabs have a manager session; read-only tabs (no live stream) and
+    /// `.tui` tabs are never included.
+    func deadLiveSessionIds() async -> Set<SessionId> {
+        let dead = Set(await manager.deadSessionIds())
+        guard !dead.isEmpty else { return [] }
+        return Set(openSessions.compactMap { tab -> SessionId? in
+            guard tab.kind == .acp,
+                  dead.contains(tab.id),
+                  viewModels[tab.id]?.isReadOnly == false else { return nil }
+            return tab.id
+        })
+    }
+
     /// Whether the dashboard still has a row for `id` — i.e. the session
     /// persisted server-side and can be re-resumed after a reconnect. A thrown
     /// error (404 for an unpersisted new chat, or any transient failure) counts
@@ -500,7 +533,22 @@ final class SessionsStore {
         }
     }
 
-    private func openReadOnly(_ summary: HermesSessionSummary, source: String) async throws {
+    /// Re-opens a saved session for cold-relaunch restore. Pre-checks that the
+    /// dashboard still has the session and **skips silently** otherwise, so a
+    /// server-deleted or never-persisted saved id degrades without the red error
+    /// banner a failed `openExisting` would raise via `lastError` — matching
+    /// ``recoverLiveSessions()``'s `dashboardHasSession` guard. Opens **without
+    /// selecting** (the window applies the recorded selection once at the end).
+    /// `title` is the persisted label so the re-opened tab shows its name straight
+    /// away (the dashboard detail carries no title). Returns whether the tab is
+    /// open afterward.
+    func reopenForRestore(id: SessionId, title: String = "") async -> Bool {
+        guard await dashboardHasSession(id) else { return false }
+        await openExisting(HermesSessionSummary(id: id, title: title), select: false)
+        return openSessions.contains { $0.id == id }
+    }
+
+    private func openReadOnly(_ summary: HermesSessionSummary, source: String, select: Bool = true) async throws {
         guard let dashboardClient else {
             lastError = "Dashboard not reachable"
             return
@@ -521,7 +569,7 @@ final class SessionsStore {
         viewModels[summary.id] = viewModel
         statuses[summary.id] = .idle
         insert(OpenSession(id: summary.id, cwd: workingDir, title: summary.title))
-        selection = summary.id
+        if select { selection = summary.id }
     }
 
     /// Opens a Hermes TUI tab — a new chat (`resume: nil`) or a resume of an

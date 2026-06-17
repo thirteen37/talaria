@@ -53,7 +53,14 @@ struct SystemDashboardProcessLauncherTests {
 /// produced by ``DashboardSpawnSpec/watchdogScript(running:)``). We drive a real
 /// long-lived grandchild (`sleep 600`) under the watchdog and own the heartbeat
 /// pipe directly so we can exercise each death path independently.
-@Suite
+///
+/// `.serialized`: each test spawns a watchdog + grandchild process pair. Run in
+/// parallel (the Swift Testing default) alongside the rest of the suite, the
+/// simultaneous spawns starve each child on a loaded CI runner — the grandchild
+/// doesn't get scheduled to record its PID within the setup window, so every test
+/// fails at the `readPID` `#require`. Serializing this suite caps it to one
+/// process pair at a time, removing the self-contention.
+@Suite(.serialized)
 struct DashboardWatchdogTests {
     /// Spawns `child` (a `/bin/sh -c` command) under the local watchdog, with the
     /// heartbeat pipe on the watchdog's stdin — exactly what
@@ -84,7 +91,11 @@ struct DashboardWatchdogTests {
         "trap '' TERM; echo $$ > '\(pidPath)'; while :; do sleep 1; done"
     }
 
-    private func readPID(atPath path: String, timeout: TimeInterval = 2.0) async -> pid_t? {
+    // Generous timeout: this only waits for the grandchild to *record its PID*
+    // (the test setup, not the assertion), and returns the instant the file
+    // appears — so a large bound never slows the happy path, it only tolerates a
+    // slow/loaded CI runner that takes seconds to schedule the spawned child.
+    private func readPID(atPath path: String, timeout: TimeInterval = 15.0) async -> pid_t? {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if let contents = try? String(contentsOfFile: path, encoding: .utf8) {
@@ -122,7 +133,7 @@ struct DashboardWatchdogTests {
         // heartbeat. The kernel does the same on quit, crash, or SIGKILL.
         try heartbeat.fileHandleForWriting.close()
 
-        #expect(await waitForProcessGone(pid: pid, timeout: 2.0))
+        #expect(await waitForProcessGone(pid: pid, timeout: 10.0))
         process.waitUntilExit()
     }
 
@@ -141,7 +152,7 @@ struct DashboardWatchdogTests {
         // `Process.terminate()` / `SystemDashboardProcess.terminate()` does).
         process.terminate()
 
-        #expect(await waitForProcessGone(pid: pid, timeout: 2.0))
+        #expect(await waitForProcessGone(pid: pid, timeout: 10.0))
         process.waitUntilExit()
     }
 
@@ -160,7 +171,7 @@ struct DashboardWatchdogTests {
         // escalate to SIGKILL after its grace window.
         try heartbeat.fileHandleForWriting.close()
 
-        #expect(await waitForProcessGone(pid: pid, timeout: 5.0))
+        #expect(await waitForProcessGone(pid: pid, timeout: 15.0))
         process.waitUntilExit()
     }
 
@@ -179,7 +190,7 @@ struct DashboardWatchdogTests {
         // EXIT trap must escalate the kill all the way to SIGKILL.
         process.terminate()
 
-        #expect(await waitForProcessGone(pid: pid, timeout: 5.0))
+        #expect(await waitForProcessGone(pid: pid, timeout: 15.0))
         process.waitUntilExit()
     }
 
