@@ -167,6 +167,36 @@ into the open tab + chat header. `/new` and `/reset` are pure native shims
 `/branch`, `/fork`) render an honest "not available in Talaria" line instead of
 hitting the harness.
 
+#### Sending while a turn is in flight (pending-input)
+
+A send is **not** blocked while a turn streams. `LocalChatViewModel.sendPrompt`
+routes a busy send to `sendWhileBusy`, which accepts exactly two shapes and
+no-ops on everything else (so a second normal turn can never race the live one):
+
+- a slash command in the pending-input set
+  (`SlashCommand.pendingInputCommands` = `{retry, queue, q, steer, plan, goal,
+  undo}`, the single source of truth mirroring `server.py:5931`), dispatched via
+  the same `command.dispatch` path above; and
+- plain text, auto-wrapped as `/queue <text>` so the user needn't know the verb
+  (with a one-time inline tip explaining `/queue` and `/steer`).
+
+The live turn's busy state (`isSending`, `turnStartDate`, `statusText`,
+`markTurnStarted`) is left untouched — the streaming turn owns it — and the
+dispatch's feedback is surfaced as an inline `.event` line, never a new user
+bubble. Because the dispatch shares the `command.dispatch` round-trip, the
+`whileBusy` path adds two guards over the idle mapping: a `send`/`.submit`
+payload is refused (it would start a racing turn), and the `prefill`/`/undo`
+shape does **not** refill the composer or re-seed the transcript mid-stream
+(that would clobber the live turn) — it surfaces only the harness notice.
+
+The composer mirrors this: while busy it shows **both** Send and Cancel, enables
+Send only when the text is dispatchable (plain text or a pending-input slash —
+non-pending slashes are disabled and the slash menu is filtered to the
+pending-input set), and binds `⌘.` (one chord) and a double-`Esc` (arm-then-
+confirm) to `session.interrupt`. As with any non-`.submit` slash RPC, Cancel is
+inert during the brief `command.dispatch` round-trip itself (the gateway has no
+slash-cancel RPC); these resolve in tens of ms.
+
 One more harness method exists for completeness — **`complete.slash`** (autocomplete
 for the slash menu) — but Talaria builds its menu from `commands.catalog` instead,
 so it isn't used.
