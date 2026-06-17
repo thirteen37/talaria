@@ -23,6 +23,7 @@ struct RootWindowScene<Content: View>: View {
 
     var body: some View {
         content()
+            .rememberWindowFrame(for: profileId)
             .environment(directory)
             .environment(recents)
             .environment(sidebarLayout)
