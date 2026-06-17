@@ -97,6 +97,20 @@ extension View {
         background(WindowForegroundReader(report: report))
     }
 
+    /// Remembers this window's size and position, keyed by the window's launch
+    /// profile id. Assigns the host NSWindow a stable frame-autosave name so
+    /// AppKit restores the last frame on open and persists changes automatically.
+    ///
+    /// The key is the `WindowGroup` launch value, not the window's *active*
+    /// profile: if the user switches servers in place via the sidebar, frame
+    /// changes keep saving under the launch id. This is deliberate — re-keying
+    /// mid-session would resize the window on every switch — so each server's
+    /// frame is remembered for the window opened *for* that server (the primary
+    /// flow, since opening a server spawns a window under its own id).
+    func rememberWindowFrame(for profileId: UUID) -> some View {
+        background(WindowFrameAutosaver(profileId: profileId))
+    }
+
     /// No-op on macOS — desktop SSH connections aren't suspended when the app
     /// backgrounds, so there's no background→foreground reconnect to trigger.
     /// Mirrors the iOS seam so the shared `chatNotificationRouting` call site
@@ -252,5 +266,30 @@ private struct WindowForegroundReader: View {
         Color.clear
             .onAppear { report(isForeground) }
             .onChange(of: controlActiveState) { _, _ in report(isForeground) }
+    }
+}
+
+/// Attaches a per-profile frame-autosave name to the host window the first time
+/// the backing view joins a window. Restores the saved frame, then enables
+/// AppKit's automatic save-on-move/resize.
+private struct WindowFrameAutosaver: NSViewRepresentable {
+    let profileId: UUID
+
+    func makeNSView(context: Context) -> NSView { FrameAutosaveView(profileId: profileId) }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class FrameAutosaveView: NSView {
+        let profileId: UUID
+        init(profileId: UUID) { self.profileId = profileId; super.init(frame: .zero) }
+        required init?(coder: NSCoder) { fatalError() }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            let name = "ServerWindow-\(profileId.uuidString)"
+            // Restore the saved frame (if any), then enable automatic persistence.
+            window.setFrameUsingName(NSWindow.FrameAutosaveName(name))
+            window.setFrameAutosaveName(NSWindow.FrameAutosaveName(name))
+        }
     }
 }

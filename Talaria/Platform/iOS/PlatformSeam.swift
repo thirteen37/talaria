@@ -88,6 +88,11 @@ extension View {
         background(WindowForegroundReader(report: report))
     }
 
+    /// No-op on iOS/iPadOS — window geometry is system-managed (Stage Manager,
+    /// full screen, split view), and iPhone is single-window. Mirrors the macOS
+    /// seam so the shared call site compiles `#if`-free.
+    func rememberWindowFrame(for profileId: UUID) -> some View { self }
+
     /// Fires `action` when the app returns from a real backgrounding (a
     /// `.background` → `.active` round-trip), so the window can probe and, if
     /// needed, rebuild its suspended SSH connection. A bare `.inactive` blip
