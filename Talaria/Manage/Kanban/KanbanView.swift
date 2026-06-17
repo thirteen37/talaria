@@ -112,8 +112,13 @@ struct KanbanView: View {
             ),
             secondaryTitle: secondaryTitle(harness)
         ) {
+            // Keep the board's minimum at/under `PlatformSplit`'s reserved
+            // primary width (320). A larger minimum (the board scrolls
+            // horizontally, so it doesn't need one) lets `HSplitView` push the
+            // secondary's trailing edge — and its close button — off the right
+            // of a non-maximized window, clipping the detail pane.
             KanbanBoardColumnsView(harness: harness)
-                .frame(minWidth: Idiom.isPhone ? nil : 420, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: Idiom.isPhone ? nil : 320, maxWidth: .infinity, maxHeight: .infinity)
         } secondary: {
             secondaryPane(harness: harness)
                 .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity)
@@ -144,12 +149,10 @@ struct KanbanView: View {
                 onSave: { draft in Task { await harness.createTask(draft) } },
                 onCancel: { harness.cancelCreate() }
             )
-            .padding()
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let card = harness.selectedCard {
             KanbanTaskDetailPane(harness: harness, card: card)
-                .padding()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
