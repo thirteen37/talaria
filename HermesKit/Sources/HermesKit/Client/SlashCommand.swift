@@ -21,4 +21,14 @@ public struct SlashCommand: Equatable, Sendable {
         self.name = String(trimmed[..<idx])
         self.arg = String(trimmed[trimmed.index(after: idx)...]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// Slash commands Hermes accepts while a turn is in flight — the gateway's
+    /// "pending-input set" (`command.dispatch`, `server.py:5931`). These are the
+    /// only commands (besides auto-queued plain text) the composer dispatches
+    /// over a live turn; everything else is gated until the turn finishes.
+    public static let pendingInputCommands: Set<String> = ["retry", "queue", "q", "steer", "plan", "goal", "undo"]
+
+    /// Whether this command may be dispatched mid-turn (see ``pendingInputCommands``).
+    /// Compared case-insensitively so `/QUEUE` classifies like `/queue`.
+    public var isPendingInput: Bool { Self.pendingInputCommands.contains(name.lowercased()) }
 }

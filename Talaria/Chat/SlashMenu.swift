@@ -179,6 +179,18 @@ struct SlashMenu: View {
             return "Inject guidance into the running turn"
         case "queue":
             return "Show queued work"
+        // Remaining pending-input commands the user can browse mid-turn but that
+        // `commands.catalog` may not describe (see `SlashCommand.pendingInputCommands`).
+        case "q":
+            return "Queue a message for after the current turn"
+        case "plan":
+            return "Set the plan for the running turn"
+        case "goal":
+            return "Set the goal for the running turn"
+        case "retry":
+            return "Retry the last turn"
+        case "undo":
+            return "Undo the last turn"
         default:
             return ""
         }
