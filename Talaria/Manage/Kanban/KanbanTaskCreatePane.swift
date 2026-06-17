@@ -14,43 +14,61 @@ struct KanbanTaskCreatePane: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                TextField("Title", text: $draft.title)
-                TextField("Body", text: $draft.body, axis: .vertical)
-                    .lineLimit(3...8)
-                assigneeField
-                Stepper(value: $draft.priority, in: 0...9) {
-                    LabeledContent("Priority", value: "\(draft.priority)")
-                }
-                TextField("Tenant (optional)", text: $draft.tenant)
-                Picker("Workspace", selection: $draft.workspaceKind) {
-                    ForEach(kanbanWorkspaceKinds, id: \.self) { kind in
-                        Text(kanbanStatusTitle(kind)).tag(kind)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                KanbanSection {
+                    KanbanFieldRow("Title") {
+                        TextField("", text: $draft.title)
                     }
+                    KanbanFieldRow("Body") {
+                        TextField("", text: $draft.body, axis: .vertical)
+                            .lineLimit(3...8)
+                    }
+                    assigneeField
+                    KanbanFieldRow("Priority") {
+                        Stepper("\(draft.priority)", value: $draft.priority, in: 0...9)
+                            .accessibilityValue("\(draft.priority)")
+                    }
+                    KanbanFieldRow("Tenant (optional)") {
+                        TextField("", text: $draft.tenant)
+                    }
+                    KanbanFieldRow("Workspace") {
+                        Picker("", selection: $draft.workspaceKind) {
+                            ForEach(kanbanWorkspaceKinds, id: \.self) { kind in
+                                Text(kanbanStatusTitle(kind)).tag(kind)
+                            }
+                        }
+                        .labelsHidden()
+                    }
+                    Toggle("Send to triage", isOn: $draft.triage)
                 }
-                Toggle("Send to triage", isOn: $draft.triage)
+                HStack {
+                    Button("Cancel", role: .cancel) { onCancel() }
+                    Spacer()
+                    Button("Add") { onSave(draft) }
+                        .keyboardShortcut(.return, modifiers: [.command])
+                        .disabled(!canSave)
+                }
             }
-            HStack {
-                Button("Cancel", role: .cancel) { onCancel() }
-                Spacer()
-                Button("Add") { onSave(draft) }
-                    .keyboardShortcut(.return, modifiers: [.command])
-                    .disabled(!canSave)
-            }
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .textFieldStyle(.roundedBorder)
         }
     }
 
     @ViewBuilder
     private var assigneeField: some View {
-        if assignees.isEmpty {
-            TextField("Assignee (optional)", text: $draft.assignee)
-        } else {
-            Picker("Assignee", selection: $draft.assignee) {
-                Text("Unassigned").tag("")
-                ForEach(assignees, id: \.self) { name in
-                    Text(name).tag(name)
+        KanbanFieldRow("Assignee (optional)") {
+            if assignees.isEmpty {
+                TextField("", text: $draft.assignee)
+            } else {
+                Picker("", selection: $draft.assignee) {
+                    Text("Unassigned").tag("")
+                    ForEach(assignees, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
                 }
+                .labelsHidden()
             }
         }
     }

@@ -79,17 +79,22 @@ struct KanbanTaskDetailPane: View {
     }
 
     var body: some View {
-        Form {
-            editorSection
-            if let warnings = card.warnings, let count = warnings.count, count > 0 {
-                warningsSection(warnings)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                editorSection
+                if let warnings = card.warnings, let count = warnings.count, count > 0 {
+                    warningsSection(warnings)
+                }
+                if let diagnostics = card.diagnostics, !diagnostics.isEmpty {
+                    diagnosticsSection(diagnostics)
+                }
+                commentsSection
+                linksSection
+                runsSection
             }
-            if let diagnostics = card.diagnostics, !diagnostics.isEmpty {
-                diagnosticsSection(diagnostics)
-            }
-            commentsSection
-            linksSection
-            runsSection
+            .padding()
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .textFieldStyle(.roundedBorder)
         }
         .onAppear { resetTransient(); applySeed() }
         .onChange(of: card.id) { _, _ in
@@ -179,20 +184,29 @@ struct KanbanTaskDetailPane: View {
 
     @ViewBuilder
     private var editorSection: some View {
-        Section {
-            LabeledContent("ID") {
+        KanbanSection {
+            KanbanFieldRow("ID") {
                 Text(card.id).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                    .accessibilityValue(card.id)
             }
-            TextField("Title", text: $title)
-            TextField("Body", text: $body_, axis: .vertical).lineLimit(3...10)
+            KanbanFieldRow("Title") {
+                TextField("", text: $title)
+            }
+            KanbanFieldRow("Body") {
+                TextField("", text: $body_, axis: .vertical).lineLimit(3...10)
+            }
             assigneeField
-            Stepper(value: $priority, in: 0...9) {
-                LabeledContent("Priority", value: "\(priority)")
+            KanbanFieldRow("Priority") {
+                Stepper("\(priority)", value: $priority, in: 0...9)
+                    .accessibilityValue("\(priority)")
             }
-            Picker("Status", selection: $status) {
-                ForEach(availableStatuses, id: \.self) { name in
-                    Text(kanbanStatusTitle(name)).tag(name)
+            KanbanFieldRow("Status") {
+                Picker("", selection: $status) {
+                    ForEach(availableStatuses, id: \.self) { name in
+                        Text(kanbanStatusTitle(name)).tag(name)
+                    }
                 }
+                .labelsHidden()
             }
             if !detailLoaded {
                 if detailFailed {
@@ -246,15 +260,18 @@ struct KanbanTaskDetailPane: View {
     @ViewBuilder
     private var assigneeField: some View {
         let assignees = harness.board?.assignees ?? []
-        if assignees.isEmpty {
-            TextField("Assignee", text: $assignee)
-        } else {
-            Picker("Assignee", selection: $assignee) {
-                Text("Unassigned").tag("")
-                ForEach(assignees, id: \.self) { name in Text(name).tag(name) }
-                if !assignee.isEmpty, !assignees.contains(assignee) {
-                    Text(assignee).tag(assignee)
+        KanbanFieldRow("Assignee") {
+            if assignees.isEmpty {
+                TextField("", text: $assignee)
+            } else {
+                Picker("", selection: $assignee) {
+                    Text("Unassigned").tag("")
+                    ForEach(assignees, id: \.self) { name in Text(name).tag(name) }
+                    if !assignee.isEmpty, !assignees.contains(assignee) {
+                        Text(assignee).tag(assignee)
+                    }
                 }
+                .labelsHidden()
             }
         }
     }
@@ -262,7 +279,7 @@ struct KanbanTaskDetailPane: View {
     // MARK: - Callouts
 
     private func warningsSection(_ warnings: KanbanWarnings) -> some View {
-        Section("Warnings") {
+        KanbanSection("Warnings") {
             ForEach(Array((warnings.kinds ?? [:]).sorted(by: { $0.key < $1.key })), id: \.key) { kind, count in
                 Label("\(kanbanStatusTitle(kind)): \(count)", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
@@ -272,7 +289,7 @@ struct KanbanTaskDetailPane: View {
     }
 
     private func diagnosticsSection(_ diagnostics: [KanbanDiagnostic]) -> some View {
-        Section("Diagnostics") {
+        KanbanSection("Diagnostics") {
             ForEach(Array(diagnostics.enumerated()), id: \.offset) { _, diag in
                 VStack(alignment: .leading, spacing: 2) {
                     Label(diag.message ?? diag.kind ?? "Diagnostic", systemImage: "stethoscope")
@@ -291,7 +308,7 @@ struct KanbanTaskDetailPane: View {
 
     @ViewBuilder
     private var commentsSection: some View {
-        Section("Comments") {
+        KanbanSection("Comments") {
             if let comments = detail?.comments, !comments.isEmpty {
                 ForEach(comments) { comment in
                     VStack(alignment: .leading, spacing: 2) {
@@ -327,7 +344,7 @@ struct KanbanTaskDetailPane: View {
 
     @ViewBuilder
     private var linksSection: some View {
-        Section("Dependencies") {
+        KanbanSection("Dependencies") {
             linkList(
                 title: "Parents",
                 singular: "parent",
@@ -379,7 +396,7 @@ struct KanbanTaskDetailPane: View {
         onRemove: @escaping (String) -> Void
     ) -> some View {
         if ids.isEmpty {
-            LabeledContent(title) { Text("None").foregroundStyle(.secondary) }
+            KanbanFieldRow(title) { Text("None").foregroundStyle(.secondary).accessibilityValue("None") }
         } else {
             ForEach(ids, id: \.self) { id in
                 HStack {
@@ -399,7 +416,7 @@ struct KanbanTaskDetailPane: View {
 
     @ViewBuilder
     private var runsSection: some View {
-        Section("Runs") {
+        KanbanSection("Runs") {
             if let runs = detail?.runs, !runs.isEmpty {
                 ForEach(runs) { run in
                     VStack(alignment: .leading, spacing: 2) {
