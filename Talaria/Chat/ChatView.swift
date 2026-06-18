@@ -21,6 +21,9 @@ struct ChatView: View {
                                 TranscriptRow(
                                     message: message,
                                     isLast: message.id == lastId,
+                                    // Only the last row is actively growing while a
+                                    // prompt is in flight — gate code highlighting on that.
+                                    isStreaming: viewModel.isSending && message.id == lastId,
                                     onUndo: (message.isUndoableUserTurn && !viewModel.isReadOnly && !viewModel.isSending)
                                         ? { Task { await viewModel.undo(throughUserMessageId: message.id) } }
                                         : nil

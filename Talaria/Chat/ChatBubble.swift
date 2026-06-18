@@ -4,6 +4,9 @@ struct ChatBubble: View {
     let message: ChatTranscriptMessage
     /// Non-nil only for user bubbles that can be rewound to; shows an Undo action.
     var onUndo: (() -> Void)?
+    /// True while this is the actively-streaming last message; defers code-block
+    /// syntax highlighting until the text settles.
+    var isStreaming: Bool = false
 
     #if os(macOS)
     @State private var isHovering = false
@@ -47,7 +50,7 @@ struct ChatBubble: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                MarkdownText(text: message.text)
+                MarkdownText(text: message.text, isStreaming: isStreaming)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }

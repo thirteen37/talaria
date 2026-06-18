@@ -3,10 +3,14 @@ import SwiftUI
 
 struct ToolCard: View {
     let message: ChatTranscriptMessage
+    /// True only while the turn is still in flight *and* this is the last block;
+    /// defers code-block syntax highlighting in the tool's text until it settles.
+    let isStreaming: Bool
     @State private var isExpanded: Bool
 
-    init(message: ChatTranscriptMessage) {
+    init(message: ChatTranscriptMessage, isStreaming: Bool) {
         self.message = message
+        self.isStreaming = isStreaming
         _isExpanded = State(initialValue: message.toolStatus.isActive)
     }
 
@@ -18,9 +22,7 @@ struct ToolCard: View {
                 }
 
                 if message.toolContent.isEmpty, !message.text.isEmpty {
-                    MarkdownText(text: message.text)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    MarkdownText(text: message.text, style: .calloutSecondary, isStreaming: isStreaming)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -65,8 +67,7 @@ private struct ToolContentView: View {
         switch content {
         case let .content(content):
             if let text = content.content.plainText {
-                MarkdownText(text: text)
-                    .font(.callout)
+                MarkdownText(text: text, style: .plain)
             }
         case let .diff(diff):
             DiffView(diff: diff)

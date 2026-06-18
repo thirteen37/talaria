@@ -130,8 +130,7 @@ private struct PermissionToolContent: View {
             DiffView(diff: diff)
         case let .content(content):
             if let text = content.content.plainText {
-                MarkdownText(text: text)
-                    .font(.callout)
+                MarkdownText(text: text, style: .plain)
             }
         case let .terminal(terminal):
             Label(terminal.terminalId, systemImage: "terminal")
