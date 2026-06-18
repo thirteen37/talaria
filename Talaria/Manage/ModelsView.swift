@@ -558,11 +558,7 @@ struct ModelsView: View {
     var body: some View {
         Group {
             if client == nil {
-                ContentUnavailableView(
-                    "Dashboard not ready",
-                    systemImage: "cpu",
-                    description: Text("Waiting for the Hermes dashboard to come online.")
-                )
+                DashboardNotReadyView(systemImage: "cpu")
             } else if let harness {
                 content(harness: harness)
             } else {

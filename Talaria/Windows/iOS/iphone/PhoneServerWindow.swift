@@ -509,6 +509,7 @@ struct PhoneServerWindow: View {
                 .id(session.id)
         } else {
             ContentUnavailableView("Session unavailable", systemImage: "bubble.left.and.bubble.right")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

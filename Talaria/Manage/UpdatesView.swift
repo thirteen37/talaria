@@ -118,10 +118,10 @@ struct UpdatesView: View {
                 // No shell/admin runner (e.g. a dashboard-only or mock
                 // profile): `hermes update --check` is a CLI path, so there's
                 // nothing to ask. Surface that rather than a false verdict.
-                ContentUnavailableView(
-                    "Admin runner unavailable",
+                CLIUnavailableView(
+                    title: "Admin runner unavailable",
                     systemImage: "arrow.triangle.2.circlepath",
-                    description: Text("Open a server with a Hermes binary to check for updates.")
+                    description: "Open a server with a Hermes binary to check for updates."
                 )
             }
         }

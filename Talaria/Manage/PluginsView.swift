@@ -200,11 +200,7 @@ struct PluginsView: View {
     var body: some View {
         Group {
             if client == nil {
-                ContentUnavailableView(
-                    "Dashboard not ready",
-                    systemImage: "puzzlepiece.extension",
-                    description: Text("Waiting for the Hermes dashboard to come online.")
-                )
+                DashboardNotReadyView(systemImage: "puzzlepiece.extension")
             } else if let harness {
                 content(harness: harness)
             } else {

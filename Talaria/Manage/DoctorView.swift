@@ -86,10 +86,10 @@ struct DoctorView: View {
             // where `runner` is always nil). Only show the hard "unavailable"
             // state when neither a runner nor a dashboard client is present.
             if doctor.runner == nil && client == nil {
-                ContentUnavailableView(
-                    "Doctor unavailable",
+                CLIUnavailableView(
+                    title: "Doctor unavailable",
                     systemImage: "stethoscope",
-                    description: Text("Open a server with a Hermes binary or a reachable dashboard to run diagnostics.")
+                    description: "Open a server with a Hermes binary or a reachable dashboard to run diagnostics."
                 )
             } else {
                 content
