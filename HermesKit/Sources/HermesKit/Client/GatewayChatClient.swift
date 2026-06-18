@@ -29,6 +29,11 @@ public actor GatewayChatClient: ChatBackend {
     public nonisolated let notifications: AsyncThrowingStream<HermesNotification, Error>
 
     private let ws: any GatewayWebSocket
+    /// The window's Hermes profile, sent as the `profile` param on `session.create`
+    /// / `session.resume` so the gateway resolves the right `HERMES_HOME` (it reads
+    /// `profile` from the JSON-RPC params, not the WS URL). `nil` for the default
+    /// profile, which the gateway treats as the launch home (a harmless no-op).
+    private let hermesProfileName: String?
     private let onClose: (@Sendable () async -> Void)?
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -52,11 +57,20 @@ public actor GatewayChatClient: ChatBackend {
     /// - Parameter onClose: invoked once when the client closes, so callers can
     ///   release a shared resource (e.g. the dashboard supervisor refcount that
     ///   keeps `hermes dashboard` alive for this session).
+    /// - Parameter hermesProfileName: the window's Hermes profile. Normalized to
+    ///   `nil` when empty or the default profile name, so the `profile` param is
+    ///   only emitted for a real non-default profile (mirrors `HermesProfiles.cliFlag`).
     public init(
         webSocket: any GatewayWebSocket,
+        hermesProfileName: String? = nil,
         onClose: (@Sendable () async -> Void)? = nil
     ) {
         self.ws = webSocket
+        if let name = hermesProfileName, !name.isEmpty, name != HermesProfiles.defaultProfileName {
+            self.hermesProfileName = name
+        } else {
+            self.hermesProfileName = nil
+        }
         self.onClose = onClose
         var captured: AsyncThrowingStream<HermesNotification, Error>.Continuation?
         self.notifications = AsyncThrowingStream { continuation in
@@ -73,7 +87,7 @@ public actor GatewayChatClient: ChatBackend {
     public func start(clientInfo: Implementation) async throws {}
 
     public func newSession(cwd: String, mcpServers: [McpServer] = []) async throws -> NewSessionResponse {
-        let result = try await call("session.create", CreateParams(cols: 96, cwd: cwd.isEmpty ? nil : cwd))
+        let result = try await call("session.create", CreateParams(cols: 96, cwd: cwd.isEmpty ? nil : cwd, profile: hermesProfileName))
         guard let sid = Self.string(Self.object(result)["session_id"]) else {
             throw GatewayChatError.sessionNotReady
         }
@@ -92,7 +106,7 @@ public actor GatewayChatClient: ChatBackend {
         cwd: String,
         mcpServers: [McpServer] = []
     ) async throws -> LoadSessionResponse {
-        let result = try await call("session.resume", ResumeParams(sessionId: sessionId, cols: 96))
+        let result = try await call("session.resume", ResumeParams(sessionId: sessionId, cols: 96, profile: hermesProfileName))
         // The gateway returns its own runtime id; keep emitting under the id the
         // UI already knows (the stored id passed in).
         runtimeSessionId = Self.string(Self.object(result)["session_id"]) ?? sessionId
@@ -603,14 +617,19 @@ public actor GatewayChatClient: ChatBackend {
     private struct CreateParams: Codable, Sendable {
         let cols: Int
         let cwd: String?
+        /// Omitted (nil) for the default profile — the gateway then uses its launch
+        /// home. `JSONEncoder` skips nil optionals, so no key is emitted.
+        let profile: String?
     }
 
     private struct ResumeParams: Codable, Sendable {
         let sessionId: String
         let cols: Int
+        let profile: String?
         enum CodingKeys: String, CodingKey {
             case sessionId = "session_id"
             case cols
+            case profile
         }
     }
 

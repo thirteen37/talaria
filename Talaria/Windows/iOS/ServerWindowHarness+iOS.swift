@@ -36,7 +36,10 @@ extension ServerWindowHarness {
         // connection (filled into the box by `acquireDashboard()`).
         let tunnelBox = GatewayChatTunnelBox()
         let manager = SessionManager(
-            backendFactory: GatewayChatBackend.makeFactory(tunnel: { tunnelBox.get() })
+            backendFactory: GatewayChatBackend.makeFactory(
+                tunnel: { tunnelBox.get() },
+                hermesProfileName: hermesProfileName
+            )
         )
         let snapshotTransfer = NIOSSHCatTransfer(
             profile: profile,

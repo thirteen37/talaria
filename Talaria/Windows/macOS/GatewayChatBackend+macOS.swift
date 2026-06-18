@@ -91,7 +91,7 @@ enum GatewayChatBackend {
                     dashboardBaseURL: acquired.baseURL,
                     credential: acquired.credential
                 )
-                return GatewayChatClient(webSocket: socket) {
+                return GatewayChatClient(webSocket: socket, hermesProfileName: hermesProfileName) {
                     await DashboardCoordinator.shared.release(acquired.supervisor)
                 }
             } catch {

@@ -12,7 +12,8 @@ enum GatewayChatBackend {
     /// is acquired on window open, so a session opened before then errors and the
     /// user retries).
     static func makeFactory(
-        tunnel: @escaping @Sendable () -> GatewayChatTunnel?
+        tunnel: @escaping @Sendable () -> GatewayChatTunnel?,
+        hermesProfileName: String
     ) -> SessionManager.ChatBackendFactory {
         {
             guard let tunnel = tunnel() else {
@@ -27,7 +28,7 @@ enum GatewayChatBackend {
                 remotePort: tunnel.remotePort,
                 credential: credential
             )
-            return GatewayChatClient(webSocket: socket)
+            return GatewayChatClient(webSocket: socket, hermesProfileName: hermesProfileName)
         }
     }
 
