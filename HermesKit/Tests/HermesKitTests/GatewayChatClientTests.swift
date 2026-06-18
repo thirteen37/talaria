@@ -27,6 +27,51 @@ struct GatewayChatClientTests {
     }
 
     @Test
+    func newSessionUnderNamedProfileSendsProfileParam() async throws {
+        let fake = FakeGatewayWebSocket()
+        let client = GatewayChatClient(webSocket: fake, hermesProfileName: "work")
+
+        let openTask = Task { try await client.newSession(cwd: "/work") }
+        let createFrame = try await fake.waitForSent(at: 0)
+        #expect(method(of: createFrame) == "session.create")
+        #expect(stringParam(createFrame, "profile") == "work")
+
+        fake.pushInbound(responseFrame(id: idOf(createFrame), result: ["session_id": .string("ab12cd34")]))
+        _ = try await openTask.value
+    }
+
+    @Test
+    func newSessionUnderDefaultProfileOmitsProfileParam() async throws {
+        // Both the explicit "default" name and a nil profile must omit the key —
+        // the gateway treats the default profile as the launch home (no-op).
+        for name: String? in ["default", nil] {
+            let fake = FakeGatewayWebSocket()
+            let client = GatewayChatClient(webSocket: fake, hermesProfileName: name)
+
+            let openTask = Task { try await client.newSession(cwd: "/work") }
+            let createFrame = try await fake.waitForSent(at: 0)
+            #expect(stringParam(createFrame, "profile") == nil)
+
+            fake.pushInbound(responseFrame(id: idOf(createFrame), result: ["session_id": .string("s")]))
+            _ = try await openTask.value
+        }
+    }
+
+    @Test
+    func resumeUnderNamedProfileSendsProfileParam() async throws {
+        let fake = FakeGatewayWebSocket()
+        let client = GatewayChatClient(webSocket: fake, hermesProfileName: "work")
+
+        let openTask = Task { try await client.loadSession(sessionId: "stored-1", cwd: "/work") }
+        let resumeFrame = try await fake.waitForSent(at: 0)
+        #expect(method(of: resumeFrame) == "session.resume")
+        #expect(stringParam(resumeFrame, "profile") == "work")
+
+        fake.pushInbound(responseFrame(id: idOf(resumeFrame), result: ["session_id": .string("rt-1")]))
+        _ = try await openTask.value
+    }
+
+    @Test
     func loadSessionEmitsUnderBoundIdNotRuntimeId() async throws {
         let (client, fake, _) = try await makeResumedSession(boundId: "stored-99", runtimeId: "rt-7")
 
