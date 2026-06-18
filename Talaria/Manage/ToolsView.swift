@@ -22,17 +22,13 @@ struct ToolsView: View {
     var body: some View {
         Group {
             if runner == nil {
-                ContentUnavailableView(
-                    "Admin runner unavailable",
+                CLIUnavailableView(
+                    title: "Admin runner unavailable",
                     systemImage: "hammer",
-                    description: Text("Open a server with a Hermes binary to manage tools.")
+                    description: "Open a server with a Hermes binary to manage tools."
                 )
             } else if client == nil {
-                ContentUnavailableView(
-                    "Dashboard not ready",
-                    systemImage: "wrench.and.screwdriver",
-                    description: Text("Waiting for the Hermes dashboard to come online.")
-                )
+                DashboardNotReadyView(systemImage: "wrench.and.screwdriver")
             } else if let harness {
                 content(harness: harness)
             } else {

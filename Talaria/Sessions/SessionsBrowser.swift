@@ -38,11 +38,7 @@ struct SessionsBrowser: View {
             if let client {
                 content(client: client)
             } else {
-                ContentUnavailableView(
-                    "Dashboard not ready",
-                    systemImage: "arrow.triangle.2.circlepath",
-                    description: Text("Waiting for the Hermes dashboard to come online.")
-                )
+                DashboardNotReadyView(systemImage: "arrow.triangle.2.circlepath")
             }
         }
         .navigationTitle("Sessions")

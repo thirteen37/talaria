@@ -164,11 +164,7 @@ struct LogsView: View {
     var body: some View {
         Group {
             if client == nil {
-                ContentUnavailableView(
-                    "Dashboard not ready",
-                    systemImage: "doc.text.magnifyingglass",
-                    description: Text("Waiting for the Hermes dashboard to come online.")
-                )
+                DashboardNotReadyView(systemImage: "doc.text.magnifyingglass")
             } else if let harness {
                 content(harness: harness)
             } else {

@@ -820,11 +820,7 @@ struct ProfileSyncView: View {
     var body: some View {
         Group {
             if windowClient() == nil {
-                ContentUnavailableView(
-                    "Dashboard not ready",
-                    systemImage: "arrow.triangle.2.circlepath",
-                    description: Text("Waiting for the Hermes dashboard to come online.")
-                )
+                DashboardNotReadyView(systemImage: "arrow.triangle.2.circlepath")
             } else if let harness {
                 content(harness)
             } else {

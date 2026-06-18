@@ -252,11 +252,7 @@ struct GatewayView: View {
     var body: some View {
         Group {
             if client == nil {
-                ContentUnavailableView(
-                    "Dashboard not ready",
-                    systemImage: "antenna.radiowaves.left.and.right",
-                    description: Text("Waiting for the Hermes dashboard to come online.")
-                )
+                DashboardNotReadyView(systemImage: "antenna.radiowaves.left.and.right")
             } else if let harness {
                 content(harness: harness)
             } else {
