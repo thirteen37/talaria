@@ -5,19 +5,21 @@ struct ReasoningPanel: View {
     /// True while this thought is the last (streaming) block. When it flips to
     /// false — i.e. the next block starts — the panel auto-collapses once.
     let isActive: Bool
+    /// True only while the turn is still in flight *and* this is the last block;
+    /// defers code-block syntax highlighting until the reasoning text settles.
+    let isStreaming: Bool
     @State private var isExpanded: Bool
 
-    init(message: ChatTranscriptMessage, isActive: Bool) {
+    init(message: ChatTranscriptMessage, isActive: Bool, isStreaming: Bool) {
         self.message = message
         self.isActive = isActive
+        self.isStreaming = isStreaming
         _isExpanded = State(initialValue: isActive)
     }
 
     var body: some View {
         DisclosureGroup(isExpanded: $isExpanded) {
-            MarkdownText(text: message.text)
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            MarkdownText(text: message.text, style: .calloutSecondary, isStreaming: isStreaming)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 6)
         } label: {

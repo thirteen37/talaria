@@ -21,6 +21,18 @@ packages:
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
     exactVersion: "1.11.2"
+  # Comprehensive markdown rendering for the chat surfaces (headings, tables,
+  # fenced code, lists, task lists, blockquotes, …). Both app targets compile
+  # the chat tree, so it's added to Talaria and TalariaIOS (not HermesKit,
+  # which stays UI-free). Repo is `swift-markdown-ui`; product is `MarkdownUI`.
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    from: "2.4.1"
+  # highlight.js (via JavaScriptCore) for multi-language code-block syntax
+  # highlighting behind MarkdownUI's synchronous CodeSyntaxHighlighter.
+  Highlightr:
+    url: https://github.com/raspu/Highlightr
+    from: "2.2.0"
 targets:
   Talaria:
     type: application
@@ -38,6 +50,8 @@ targets:
       - package: HermesKit
       - package: Sparkle
       - package: SwiftTerm
+      - package: MarkdownUI
+      - package: Highlightr
     scheme:
       testTargets:
         - TalariaTests
@@ -77,6 +91,8 @@ targets:
           - "**/macOS/**"
     dependencies:
       - package: HermesKit
+      - package: MarkdownUI
+      - package: Highlightr
     scheme:
       testTargets:
         - TalariaIOSUITests
