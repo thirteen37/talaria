@@ -6,6 +6,16 @@ struct ChatView: View {
     // survives view destruction — switching tabs no longer cancels the
     // in-flight prompt or loses the transcript.
     @Bindable var viewModel: LocalChatViewModel
+    /// The window's store, forwarded so the toolbar can rename/delete/export the
+    /// active session. Optional + defaulted so preview/test construction keeps
+    /// compiling; the toolbar is gated on it being present.
+    var store: SessionsStore? = nil
+
+    @State private var isRenaming = false
+    @State private var renameText = ""
+    @State private var confirmingDelete = false
+    @State private var isExporting = false
+    @State private var exportDocument: TranscriptDocument?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -86,6 +96,104 @@ struct ChatView: View {
                 }
             )
         }
+        // Per-session manage actions on the active chat's toolbar, plus their
+        // rename sheet, delete confirmation, and JSONL exporter. All gate on
+        // `store` internally, so the group is inert (toolbar empty) when no store
+        // is in scope (preview/test construction).
+        .toolbar { manageToolbarContent }
+        .sheet(isPresented: $isRenaming) { renameSheet }
+        .confirmationDialog(
+            "Delete this session?",
+            isPresented: $confirmingDelete,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                guard let store else { return }
+                Task { await store.deleteSession(viewModel.sessionId) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("“\(sessionLabel)” and its transcript will be permanently deleted.")
+        }
+        .fileExporter(
+            isPresented: $isExporting,
+            document: exportDocument,
+            contentType: TranscriptDocument.contentType,
+            defaultFilename: "session-\(SessionIdFormatter.short(viewModel.sessionId)).jsonl"
+        ) { _ in
+            exportDocument = nil
+        }
+    }
+
+    /// The session's display name for confirmation copy — its title, or a short
+    /// id when untitled.
+    private var sessionLabel: String {
+        let trimmed = viewModel.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? SessionIdFormatter.short(viewModel.sessionId) : trimmed
+    }
+
+    @ToolbarContentBuilder
+    private var manageToolbarContent: some ToolbarContent {
+        if let store {
+            ToolbarItemGroup(placement: .primaryAction) {
+                if store.supportsRename {
+                    Button {
+                        renameText = viewModel.title ?? ""
+                        isRenaming = true
+                    } label: {
+                        Label("Rename", systemImage: "pencil")
+                    }
+                    .help("Rename this session")
+                    .accessibilityLabel("Rename session")
+                }
+
+                Button {
+                    Task {
+                        guard let text = await store.transcriptJSONL(for: viewModel.sessionId) else {
+                            return
+                        }
+                        exportDocument = TranscriptDocument(text: text)
+                        isExporting = true
+                    }
+                } label: {
+                    Label("Export Transcript", systemImage: "square.and.arrow.up")
+                }
+                .help("Export this session's transcript as JSONL")
+                .accessibilityLabel("Export transcript")
+
+                Button(role: .destructive) {
+                    confirmingDelete = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .help("Delete this session")
+                .accessibilityLabel("Delete session")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var renameSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Rename session").font(.headline)
+            TextField("Title", text: $renameText)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Spacer()
+                Button("Cancel") { isRenaming = false }
+                Button("Save") {
+                    let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    isRenaming = false
+                    guard !trimmed.isEmpty, let store else {
+                        return
+                    }
+                    Task { await store.renameSession(viewModel.sessionId, to: trimmed) }
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 320)
     }
 }
 
@@ -132,7 +240,9 @@ final class LocalChatViewModel {
 
     private weak var manager: SessionManager?
     private weak var store: SessionsStore?
-    private let sessionId: SessionId
+    /// Exposed (not `private`) so the chat toolbar's manage actions and export
+    /// filename can read it.
+    let sessionId: SessionId
     private let cwd: String
     private var notificationTask: Task<Void, Never>?
     private var promptTask: Task<Void, Never>?

@@ -558,7 +558,7 @@ struct DesktopServerWindow: View {
         } else if let selection = harness.store.selection,
                   let session = harness.store.openSessions.first(where: { $0.id == selection }),
                   let viewModel = harness.store.viewModel(for: session.id) {
-            ChatView(viewModel: viewModel)
+            ChatView(viewModel: viewModel, store: harness.store)
                 .id(session.id)
                 .background { closeTabShortcut(harness: harness) }
         } else {

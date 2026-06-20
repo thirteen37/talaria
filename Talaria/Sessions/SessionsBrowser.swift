@@ -23,8 +23,53 @@ struct SessionsBrowser: View {
         }
     }
 
+    /// Coarse last-activity windows for the Filter menu, applied over
+    /// `summary.displayTime`.
+    enum DateRange: String, CaseIterable, Identifiable {
+        case any
+        case today
+        case last7
+        case last30
+
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .any: return "Any time"
+            case .today: return "Today"
+            case .last7: return "Last 7 days"
+            case .last30: return "Last 30 days"
+            }
+        }
+
+        /// The earliest `displayTime` that passes this window, or nil for `.any`.
+        var cutoff: Date? {
+            let calendar = Calendar.current
+            let now = Date()
+            switch self {
+            case .any: return nil
+            case .today: return calendar.startOfDay(for: now)
+            case .last7: return calendar.date(byAdding: .day, value: -7, to: now)
+            case .last30: return calendar.date(byAdding: .day, value: -30, to: now)
+            }
+        }
+    }
+
+    /// The set of browse-list filters. Defaults are all-inclusive, so
+    /// `isActive` is false until the user narrows something.
+    struct Filter: Equatable {
+        var source: String?
+        var model: String?
+        var dateRange: DateRange = .any
+        var activeOnly = false
+
+        var isActive: Bool {
+            source != nil || model != nil || dateRange != .any || activeOnly
+        }
+    }
+
     @State private var query: String = ""
     @State private var sort: SortOrder = .recent
+    @State private var filter = Filter()
     @State private var sessions: [HermesSessionSummary] = []
     @State private var errorMessage: String?
     @State private var isLoading = false
@@ -32,6 +77,14 @@ struct SessionsBrowser: View {
     /// shown in the header. Nil while searching (search has no total) or when an
     /// older server omits it.
     @State private var total: Int?
+
+    // Manage-action state (one set, retargeted per acted-on session).
+    @State private var renameTarget: HermesSessionSummary?
+    @State private var renameText: String = ""
+    @State private var deleteTarget: HermesSessionSummary?
+    @State private var isExporting = false
+    @State private var exportDocument: TranscriptDocument?
+    @State private var exportFilename = "session.jsonl"
 
     var body: some View {
         Group {
@@ -44,17 +97,63 @@ struct SessionsBrowser: View {
         .navigationTitle("Sessions")
     }
 
+    /// True when a search query is in effect. The search path returns lean
+    /// summaries (no source/model/lastActive), so filters and the filtered count
+    /// apply to the browse list only.
+    private var isSearching: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// The browse list narrowed by the active filters. Passthrough while
+    /// searching (the lean search summaries lack the fields filters key on, and
+    /// the Filter menu is disabled then).
+    private var filteredSessions: [HermesSessionSummary] {
+        guard !isSearching else { return sessions }
+        let cutoff = filter.dateRange.cutoff
+        return sessions.filter { summary in
+            if let source = filter.source, summary.source != source { return false }
+            if let model = filter.model, summary.model != model { return false }
+            if filter.activeOnly, !summary.isActive { return false }
+            if let cutoff {
+                guard let time = summary.displayTime, time >= cutoff else { return false }
+            }
+            return true
+        }
+    }
+
+    /// Distinct `source` values across the fetched rows, for the Filter menu.
+    private var sourceOptions: [String] {
+        Set(sessions.compactMap { $0.source }.filter { !$0.isEmpty }).sorted()
+    }
+
+    /// Distinct `model` values across the fetched rows, for the Filter menu.
+    private var modelOptions: [String] {
+        Set(sessions.compactMap { $0.model }.filter { !$0.isEmpty }).sorted()
+    }
+
+    /// Header count copy: the filtered count when a filter narrows the browse
+    /// list, else the server total. Nil while searching or before a total lands.
+    private var headerCountText: LocalizedStringKey? {
+        if !isSearching, filter.isActive {
+            return "^[\(filteredSessions.count) session](inflect: true)"
+        }
+        if let total {
+            return "^[\(total) session](inflect: true)"
+        }
+        return nil
+    }
+
     @ViewBuilder
     private func content(client: DashboardClient) -> some View {
         Group {
-            if sessions.isEmpty && !isLoading {
+            if filteredSessions.isEmpty && !isLoading {
                 ContentUnavailableView(
-                    query.isEmpty ? "No Sessions" : "No matches",
+                    (query.isEmpty && !filter.isActive) ? "No Sessions" : "No matches",
                     systemImage: "clock.arrow.circlepath"
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(sessions) { summary in
+                List(filteredSessions) { summary in
                     SessionRow(
                         summary: summary,
                         open: {
@@ -70,7 +169,19 @@ struct SessionsBrowser: View {
                             Task { await store.openTUI(resume: summary) }
                             onOpen?()
                         } : nil,
-                        tuiDisabled: store.isOpenInline(summary.id)
+                        tuiDisabled: store.isOpenInline(summary.id),
+                        // Rename is CLI-only (no dashboard route), so hide it
+                        // where the admin runner is absent (iOS). Also hidden
+                        // while searching: the lean search summaries carry a
+                        // message snippet as `title`, not the real title, so
+                        // seeding the rename field from it would let a save
+                        // rewrite the session name to an excerpt.
+                        onRename: (store.supportsRename && !isSearching) ? {
+                            renameText = summary.title
+                            renameTarget = summary
+                        } : nil,
+                        onExport: { exportTranscript(for: summary) },
+                        onDelete: { deleteTarget = summary }
                     )
                 }
             }
@@ -85,8 +196,8 @@ struct SessionsBrowser: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(.bar)
                 }
-                if let total {
-                    Text("^[\(total) session](inflect: true)")
+                if let headerCountText {
+                    Text(headerCountText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 12)
@@ -104,10 +215,113 @@ struct SessionsBrowser: View {
                 }
                 .pickerStyle(.segmented)
             }
+            ToolbarItem(placement: .primaryAction) {
+                filterMenu
+            }
+        }
+        .sheet(item: $renameTarget) { target in
+            renameSheet(for: target)
+        }
+        .confirmationDialog(
+            "Delete this session?",
+            isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } }),
+            titleVisibility: .visible,
+            presenting: deleteTarget
+        ) { target in
+            Button("Delete", role: .destructive) {
+                Task { await store.deleteSession(target.id) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { target in
+            Text("“\(sessionLabel(target))” and its transcript will be permanently deleted.")
+        }
+        .fileExporter(
+            isPresented: $isExporting,
+            document: exportDocument,
+            contentType: TranscriptDocument.contentType,
+            defaultFilename: exportFilename
+        ) { _ in
+            exportDocument = nil
         }
         .task(id: TaskKey(query: query, sort: sort, refresh: store.browserRefreshToken)) {
             await reload(client: client)
         }
+    }
+
+    /// The Filter menu in the toolbar. Disabled while searching, since the lean
+    /// search summaries don't carry the fields filters key on. Badged when any
+    /// filter is non-default.
+    private var filterMenu: some View {
+        Menu {
+            Picker("Source", selection: $filter.source) {
+                Text("Any").tag(String?.none)
+                ForEach(sourceOptions, id: \.self) { Text($0).tag(String?.some($0)) }
+            }
+            Picker("Model", selection: $filter.model) {
+                Text("Any").tag(String?.none)
+                ForEach(modelOptions, id: \.self) { Text($0).tag(String?.some($0)) }
+            }
+            Picker("Last activity", selection: $filter.dateRange) {
+                ForEach(DateRange.allCases) { Text($0.label).tag($0) }
+            }
+            Toggle("Active only", isOn: $filter.activeOnly)
+            Divider()
+            Button("Clear filters") { filter = Filter() }
+                .disabled(!filter.isActive)
+        } label: {
+            Label(
+                "Filter",
+                systemImage: filter.isActive
+                    ? "line.3.horizontal.decrease.circle.fill"
+                    : "line.3.horizontal.decrease.circle"
+            )
+        }
+        .disabled(isSearching)
+        .help("Filter sessions by source, model, last activity, or active state")
+        .accessibilityLabel("Filter sessions")
+    }
+
+    /// Fetches the transcript and arms the file exporter for `summary`. Bails
+    /// (leaving the exporter closed) when the fetch fails — `store` surfaces the
+    /// error.
+    private func exportTranscript(for summary: HermesSessionSummary) {
+        Task {
+            guard let text = await store.transcriptJSONL(for: summary.id) else {
+                return
+            }
+            exportDocument = TranscriptDocument(text: text)
+            exportFilename = "session-\(SessionIdFormatter.short(summary.id)).jsonl"
+            isExporting = true
+        }
+    }
+
+    /// Display name for confirmation copy — the title, or a short id when untitled.
+    private func sessionLabel(_ summary: HermesSessionSummary) -> String {
+        summary.title.isEmpty ? SessionIdFormatter.short(summary.id) : summary.title
+    }
+
+    private func renameSheet(for target: HermesSessionSummary) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Rename session").font(.headline)
+            TextField("Title", text: $renameText)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Spacer()
+                Button("Cancel") { renameTarget = nil }
+                Button("Save") {
+                    let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let id = target.id
+                    renameTarget = nil
+                    guard !trimmed.isEmpty else {
+                        return
+                    }
+                    Task { await store.renameSession(id, to: trimmed) }
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 320)
     }
 
     private func reload(client: DashboardClient) async {
@@ -178,6 +392,11 @@ private struct SessionRow: View {
     let open: () -> Void
     var openTUI: (() -> Void)?
     var tuiDisabled: Bool = false
+    /// Manage actions, mirroring `open`/`openTUI`. `onRename` is nil where rename
+    /// isn't supported (iOS, no CLI admin runner), which hides its button.
+    var onRename: (() -> Void)?
+    var onExport: () -> Void = {}
+    var onDelete: () -> Void = {}
 
     @State private var isHovering = false
 
@@ -210,22 +429,61 @@ private struct SessionRow: View {
             .buttonStyle(.plain)
 
             if let openTUI {
-                Button(action: openTUI) {
-                    Image(systemName: "terminal")
-                }
-                .buttonStyle(.borderless)
+                rowButton(
+                    systemImage: "terminal",
+                    help: tuiDisabled
+                        ? "Already open inline — close it to open as a terminal session"
+                        : "Open as a terminal (TUI) session",
+                    accessibility: "Open as TUI",
+                    action: openTUI
+                )
                 .disabled(tuiDisabled)
-                .help(tuiDisabled
-                    ? "Already open inline — close it to open as a terminal session"
-                    : "Open as a terminal (TUI) session")
-                .accessibilityLabel("Open as TUI")
-                #if os(macOS)
-                .opacity(isHovering ? 1 : 0)   // hover-reveal on macOS
-                #endif
             }
+            if let onRename {
+                rowButton(
+                    systemImage: "pencil",
+                    help: "Rename this session",
+                    accessibility: "Rename session",
+                    action: onRename
+                )
+            }
+            rowButton(
+                systemImage: "square.and.arrow.up",
+                help: "Export this session's transcript as JSONL",
+                accessibility: "Export transcript",
+                action: onExport
+            )
+            rowButton(
+                systemImage: "trash",
+                help: "Delete this session",
+                accessibility: "Delete session",
+                role: .destructive,
+                action: onDelete
+            )
         }
         #if os(macOS)
         .onHover { isHovering = $0 }
+        #endif
+    }
+
+    /// A trailing-edge row action button. Always visible on iOS; hover-revealed
+    /// on macOS so the row stays clean until pointed at.
+    @ViewBuilder
+    private func rowButton(
+        systemImage: String,
+        help: String,
+        accessibility: String,
+        role: ButtonRole? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role, action: action) {
+            Image(systemName: systemImage)
+        }
+        .buttonStyle(.borderless)
+        .help(help)
+        .accessibilityLabel(accessibility)
+        #if os(macOS)
+        .opacity(isHovering ? 1 : 0)
         #endif
     }
 
