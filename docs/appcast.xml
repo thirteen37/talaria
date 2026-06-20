@@ -3,19 +3,28 @@
     <channel>
         <title>Talaria</title>
         <item>
+            <title>1.2</title>
+            <pubDate>Sat, 20 Jun 2026 09:32:35 +0000</pubDate>
+            <sparkle:version>20260620.0925</sparkle:version>
+            <sparkle:shortVersionString>1.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/thirteen37/talaria/releases/download/v1.2/Talaria-1.2.dmg" length="14988314" type="application/octet-stream" sparkle:edSignature="vIEbDGzwxCUPuL8VNatphrLX3zXC3F+u1FyPkAHEtM/tj5EfAs+hF07aE8G1wvtl94zox2sTeeR2FCyOXc/hBQ=="/>
+            <sparkle:deltas>
+                <enclosure url="https://thirteen37.github.io/talaria/Talaria20260620.0925-20260608.1556.delta" sparkle:deltaFrom="20260608.1556" length="4404522" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="980464" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="eYFKtcnwMSsS0yAkL3zBYiIUZ7cZaqB9+YwtZsuRlRVYrkc90MS0OAZoFtHiWLfKkks81sesXPDldre2wyW1CA=="/>
+                <enclosure url="https://thirteen37.github.io/talaria/Talaria20260620.0925-20260605.0331.delta" sparkle:deltaFrom="20260605.0331" length="5632322" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="980464" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="oWyDGV4/BQVwXBn8B3dJe0M6xp98Xun/tgP8jXLcdIpA3BzY0XniE29QR1tNX6FQcB4HwEnQCrnk6VmsFwA3Dw=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
             <title>1.1</title>
-            <pubDate>Mon, 08 Jun 2026 16:05:18 +0000</pubDate>
+            <pubDate>Sat, 20 Jun 2026 09:32:34 +0000</pubDate>
             <sparkle:version>20260608.1556</sparkle:version>
             <sparkle:shortVersionString>1.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <enclosure url="https://github.com/thirteen37/talaria/releases/download/v1.1/Talaria-1.1.dmg" length="12606925" type="application/octet-stream" sparkle:edSignature="e7xmSSYXTolBDFk/i/T/wIobAuflP40X2HQMJ+ydW+/X4axfZd6L0Y1IvvgC/8a5ZwpO+/kGzS1nQUINIS4HDg=="/>
-            <sparkle:deltas>
-                <enclosure url="https://thirteen37.github.io/talaria/Talaria20260608.1556-20260605.0331.delta" sparkle:deltaFrom="20260605.0331" length="3298466" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="980464" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="hMO+eKxgQ69T7L8d4deZPx8NkTrt9JNU3r+4jk0IExdaN/4f8UcJwPSdwLA81UovGa6iLqir6R6GEsNjKi6gAw=="/>
-            </sparkle:deltas>
         </item>
         <item>
             <title>1.0</title>
-            <pubDate>Mon, 08 Jun 2026 16:05:18 +0000</pubDate>
+            <pubDate>Sat, 20 Jun 2026 09:32:35 +0000</pubDate>
             <sparkle:version>20260605.0331</sparkle:version>
             <sparkle:shortVersionString>1.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
