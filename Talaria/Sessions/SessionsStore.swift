@@ -714,6 +714,35 @@ final class SessionsStore {
         await manager.close(id: id)
     }
 
+    /// Whether session rename is available. Rename has no dashboard route, so it
+    /// falls back to `hermes sessions rename` via the CLI admin runner — which is
+    /// absent on iOS. The chat toolbar and browser rows gate their Rename button
+    /// on this; Delete/Export work everywhere (both go through the dashboard).
+    var supportsRename: Bool { adminRunner != nil }
+
+    /// Fetches a session's transcript from the dashboard and serializes it to
+    /// JSONL for export. Returns nil (and sets `lastError`) when the dashboard is
+    /// unreachable, the fetch fails, or the session has no messages — so the
+    /// caller can skip presenting a file exporter for an empty/failed export.
+    func transcriptJSONL(for id: SessionId) async -> String? {
+        guard let dashboardClient else {
+            lastError = "Dashboard not reachable"
+            return nil
+        }
+        do {
+            let payload = try await dashboardClient.sessionMessages(id: id)
+            let jsonl = SessionTranscriptExporter.jsonl(from: payload.messages)
+            guard !jsonl.isEmpty else {
+                lastError = "This session has no messages to export."
+                return nil
+            }
+            return jsonl
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
     func renameSession(_ id: SessionId, to title: String) async {
         guard let adminRunner else {
             lastError = "Hermes admin not configured"

@@ -505,7 +505,7 @@ struct PhoneServerWindow: View {
     private func chatDestination(harness: ServerWindowHarness, id: SessionId) -> some View {
         if let session = harness.store.openSessions.first(where: { $0.id == id }),
            let viewModel = harness.store.viewModel(for: session.id) {
-            ChatView(viewModel: viewModel)
+            ChatView(viewModel: viewModel, store: harness.store)
                 .id(session.id)
         } else {
             ContentUnavailableView("Session unavailable", systemImage: "bubble.left.and.bubble.right")
