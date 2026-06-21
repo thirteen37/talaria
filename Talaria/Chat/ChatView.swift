@@ -45,9 +45,32 @@ struct ChatView: View {
                     .padding(16)
                 }
                 // Open at the bottom so a resumed session's seeded history shows
-                // its most recent messages first (the `onChange` below only fires
-                // on later changes, not the initial seed).
-                .defaultScrollAnchor(.bottom)
+                // its most recent messages first. Done with an explicit one-shot
+                // scroll (not `.defaultScrollAnchor(.bottom)`, which re-anchors on
+                // *any* content-size change — including the last row's reflow at
+                // turn end — and momentarily blanks the LazyVStack viewport). The
+                // `onChange` below handles auto-scroll on later message changes.
+                .task(id: viewModel.sessionId) {
+                    // Re-assert the bottom scroll across a handful of frames. Under
+                    // LazyVStack a long resumed transcript may not have materialized
+                    // its last row within the first tick, so a lone scrollTo is a
+                    // no-op that leaves the session opened at the top (unlike
+                    // `.defaultScrollAnchor(.bottom)`, which positioned content
+                    // before first paint regardless of list length). Retrying is
+                    // cheap and idempotent — once the row exists the scroll lands,
+                    // and re-targeting the current last id also covers incremental
+                    // seeding. Bounded so it can't fight the user past initial open.
+                    for _ in 0 ..< 10 {
+                        if let last = viewModel.messages.last {
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
+                        do {
+                            try await Task.sleep(for: .milliseconds(16))
+                        } catch {
+                            return // cancelled — session switched away
+                        }
+                    }
+                }
                 .onChange(of: viewModel.messages) { _, messages in
                     guard let last = messages.last else {
                         return
