@@ -363,18 +363,16 @@ struct GatewayChatClientTests {
     }
 
     @Test
-    func slashUndoFallsBackToCommandDispatchPrefill() async throws {
-        // `/undo` is pending-input, so `slash.exec` errors (4018) and Talaria
-        // resolves it via `command.dispatch`, which returns a `prefill`.
+    func slashUndoDispatchesDirectlyToCommandDispatchPrefill() async throws {
+        // `/undo` is pending-input, so it goes straight to `command.dispatch`
+        // (NOT `slash.exec` first) — some Hermes versions return empty-output
+        // success from `slash.exec` for these, which would silently no-op the
+        // command. `command.dispatch` returns the `prefill` rewind shape.
         let (client, fake, sid) = try await makeReadySession()
         let sentBefore = fake.sent.count
 
         let task = Task { try await client.slash(sessionId: sid, command: "/undo") }
-        let execFrame = try await fake.waitForSent(at: sentBefore)
-        #expect(method(of: execFrame) == "slash.exec")
-        fake.pushInbound(errorFrame(id: idOf(execFrame), message: "command requires pending input"))
-
-        let dispatchFrame = try await fake.waitForSent(at: sentBefore + 1)
+        let dispatchFrame = try await fake.waitForSent(at: sentBefore)
         #expect(method(of: dispatchFrame) == "command.dispatch")
         #expect(stringParam(dispatchFrame, "name") == "undo")
         fake.pushInbound(responseFrame(id: idOf(dispatchFrame), result: [
@@ -388,15 +386,36 @@ struct GatewayChatClientTests {
     }
 
     @Test
+    func slashRetryDispatchesDirectlyToCommandDispatch() async throws {
+        // `/retry` is pending-input: it must reach `command.dispatch` directly so
+        // it actually retries, rather than going through `slash.exec` (which a
+        // Hermes version may answer with empty output, rendering "(no output)"
+        // and never retrying). Hermes resolves `/retry` as a `send` (resubmit).
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let task = Task { try await client.slash(sessionId: sid, command: "/retry") }
+        let dispatchFrame = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: dispatchFrame) == "command.dispatch")
+        #expect(stringParam(dispatchFrame, "name") == "retry")
+        fake.pushInbound(responseFrame(id: idOf(dispatchFrame), result: [
+            "type": .string("send"),
+            "message": .string("the previous prompt")
+        ]))
+
+        let outcome = try await task.value
+        #expect(outcome == .submit(message: "the previous prompt", notice: nil))
+    }
+
+    @Test
     func commandDispatchSendResolvesToSubmit() async throws {
+        // `/q` is pending-input → dispatched directly (no `slash.exec` first).
         let (client, fake, sid) = try await makeReadySession()
         let sentBefore = fake.sent.count
 
         let task = Task { try await client.slash(sessionId: sid, command: "/q hello there") }
-        let execFrame = try await fake.waitForSent(at: sentBefore)
-        fake.pushInbound(errorFrame(id: idOf(execFrame), message: "needs dispatch"))
-
-        let dispatchFrame = try await fake.waitForSent(at: sentBefore + 1)
+        let dispatchFrame = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: dispatchFrame) == "command.dispatch")
         #expect(stringParam(dispatchFrame, "name") == "q")
         #expect(stringParam(dispatchFrame, "arg") == "hello there")
         fake.pushInbound(responseFrame(id: idOf(dispatchFrame), result: [
