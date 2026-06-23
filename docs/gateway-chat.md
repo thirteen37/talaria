@@ -139,16 +139,22 @@ native app action). Talaria intercepts it on send and never calls `prompt.submit
 for it. The harness exposes two RPCs (neither was documented above before this
 section), mirroring the desktop's `executeSlashCommand`
 (`use-prompt-actions.ts:388`): try `slash.exec` first, fall through to
-`command.dispatch` on any error.
+`command.dispatch` on any error — **except** the pending-input commands
+(`{retry, queue, q, steer, plan, goal, undo}`), which are routed straight to
+`command.dispatch`. Those must never go through `slash.exec`: it's *meant* to
+reject them so the fallback fires, but some Hermes versions answer them with an
+empty-output success instead, which silently no-ops the command (e.g. `/retry`
+rendering "(no output)" and never retrying). Dispatching them directly is robust
+regardless of which behavior the connected Hermes exhibits.
 
 - **`slash.exec`** `{ session_id, command }` — `command` has the leading `/`
   stripped. Runs the harness slash worker; handles most commands (`/help`,
   `/status`, `/model …`, `/compress`, …) and returns `{ output, warning? }`
   (`server.py:7173`).
-- **`command.dispatch`** `{ session_id, name, arg }` — the fallback for the
-  commands `slash.exec` rejects: the pending-input set
-  `{retry, queue, q, steer, plan, goal, undo}` (`server.py:5931`) and skill
-  commands (`server.py:6120`). It returns a **typed** payload keyed by `type`
+- **`command.dispatch`** `{ session_id, name, arg }` — the path for the
+  pending-input set `{retry, queue, q, steer, plan, goal, undo}`
+  (`server.py:5931`, routed directly) and skill commands (`server.py:6120`, the
+  `slash.exec` fallback). It returns a **typed** payload keyed by `type`
   (`chat-runtime.ts:190` `parseCommandDispatch`):
 
   | `type` | payload | Talaria behavior |

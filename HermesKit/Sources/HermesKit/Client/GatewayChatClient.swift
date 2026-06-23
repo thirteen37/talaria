@@ -169,15 +169,26 @@ public actor GatewayChatClient: ChatBackend {
     /// nothing to reply to. No-op.
     public func respond(id: JSONRPCID, error: JSONRPCError) async throws {}
 
-    /// Run a slash command through the harness. Tries `slash.exec` (the harness
-    /// slash worker — `/help`, `/status`, `/model …`, `/compress`, …); on any
-    /// error falls back to `command.dispatch`, the typed path for pending-input
-    /// commands (`/undo`, `/retry`, …) and skills. Uses the request/response
-    /// ``call(_:_:)`` helper, so it's independent of the turn lifecycle and never
-    /// touches `turnContinuation`.
+    /// Run a slash command through the harness. The typed path for pending-input
+    /// commands (`/undo`, `/retry`, `/queue`, …) is `command.dispatch`, so those
+    /// are routed there directly; everything else tries `slash.exec` (the harness
+    /// slash worker — `/help`, `/status`, `/model …`, `/compress`, …) and falls
+    /// back to `command.dispatch` on any error (aliases, skills). Uses the
+    /// request/response ``call(_:_:)`` helper, so it's independent of the turn
+    /// lifecycle and never touches `turnContinuation`.
+    ///
+    /// Pending-input commands are dispatched directly rather than relying on
+    /// `slash.exec` to *reject* them: some Hermes versions don't reject them, they
+    /// return a success with empty `output`, which would silently no-op the command
+    /// (e.g. `/retry` rendering "(no output)" and never retrying) because the
+    /// `command.dispatch` fallback never fires.
     public func slash(sessionId: SessionId, command: String) async throws -> SlashOutcome {
         let runtime = runtimeSessionId ?? sessionId
         let bare = Self.stripLeadingSlashes(command)
+        let parsed = SlashCommand(parsing: bare)
+        if parsed.isPendingInput {
+            return try await dispatchCommand(name: parsed.name, arg: parsed.arg, runtime: runtime)
+        }
         do {
             let result = try await call("slash.exec", SlashExecParams(sessionId: runtime, command: bare))
             let p = Self.object(result)
@@ -188,10 +199,14 @@ public actor GatewayChatClient: ChatBackend {
             }
             return .output(output)
         } catch {
-            let parsed = SlashCommand(parsing: bare)
-            let result = try await call("command.dispatch", CommandDispatchParams(sessionId: runtime, name: parsed.name, arg: parsed.arg))
-            return try await mapDispatch(result, runtime: runtime, arg: parsed.arg)
+            return try await dispatchCommand(name: parsed.name, arg: parsed.arg, runtime: runtime)
         }
+    }
+
+    /// Run a command through `command.dispatch` and map its typed payload.
+    private func dispatchCommand(name: String, arg: String, runtime: String) async throws -> SlashOutcome {
+        let result = try await call("command.dispatch", CommandDispatchParams(sessionId: runtime, name: name, arg: arg))
+        return try await mapDispatch(result, runtime: runtime, arg: arg)
     }
 
     /// Map a `command.dispatch` payload onto a ``SlashOutcome``. `alias` recurses
