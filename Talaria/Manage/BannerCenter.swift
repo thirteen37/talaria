@@ -205,7 +205,14 @@ private struct BannerRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
-        .background(color.opacity(0.12))
+        .background {
+            // Opaque neutral base so a translucent macOS title bar samples the
+            // window background — not the saturated banner color — when the
+            // strip sits flush beneath it. The visible tint is unchanged.
+            Rectangle()
+                .fill(.background)
+                .overlay(color.opacity(0.12))
+        }
     }
 
     private var color: Color {
