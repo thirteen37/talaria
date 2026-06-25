@@ -146,14 +146,16 @@ struct SessionsSidebar: View {
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        // Pin the dot to the title's cap-height center rather than
-                        // the line-box center (which reads low against the
-                        // cap-height digits in session IDs). The baseline guide
-                        // floats the dot just above the baseline so its center
-                        // lands on the glyphs' optical middle.
-                        Circle()
-                            .fill(statusColor(for: session.id))
-                            .frame(width: 9, height: 9)
+                        // Pin the status glyph to the title's cap-height center
+                        // rather than the line-box center (which reads low
+                        // against the cap-height digits in session IDs). The
+                        // baseline guide floats it just above the baseline so its
+                        // center lands on the glyphs' optical middle. The column
+                        // is a fixed width (a touch wider than the old dot to fit
+                        // the spinner/symbols); glyphs may overflow the 9pt height
+                        // but stay centered on the dot's old optical point.
+                        statusGlyph(for: session.id)
+                            .frame(width: Self.statusGlyphWidth, height: 9)
                             .alignmentGuide(.firstTextBaseline) { $0.height + 2 }
                         Text(rowTitle(for: session))
                             .lineLimit(1)
@@ -171,8 +173,8 @@ struct SessionsSidebar: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        // Indent under the title (dot width + HStack spacing).
-                        .padding(.leading, 17)
+                        // Indent under the title (glyph column width + HStack spacing).
+                        .padding(.leading, Self.statusGlyphWidth + 8)
                 }
                 // Let the title/cwd column claim all available width so the
                 // title truncates only at the row's edge. A bare Spacer() here
@@ -232,11 +234,46 @@ struct SessionsSidebar: View {
         #endif
     }
 
-    private func statusColor(for id: SessionId) -> Color {
+    /// Width of the fixed status-glyph column. Wider than the old 9pt dot so the
+    /// `.working` mini spinner and the SF Symbols fit without clipping; the cwd
+    /// row indents by this plus the HStack spacing to line up under the title.
+    private static let statusGlyphWidth: CGFloat = 16
+
+    /// Per-status glyph for a session row. Distinguished by **shape, not color**
+    /// (monochrome, per user): `.primary`/`.secondary` only carry emphasis, not
+    /// semantics. The icon is otherwise unlabeled, so each state restores the
+    /// meaning the colored dot used to imply via `.help`/`.accessibilityLabel`.
+    /// TUI tabs have no gateway status stream, so they read `.idle` → the quiet
+    /// circle (the terminal glyph elsewhere in the row marks them as terminals).
+    @ViewBuilder
+    private func statusGlyph(for id: SessionId) -> some View {
         switch store.statuses[id] ?? .idle {
-        case .idle: return .secondary
-        case .working: return .green
-        case .error: return .red
+        case .idle:
+            Image(systemName: "circle")
+                .imageScale(.small)
+                .foregroundStyle(.secondary)
+                .help("Idle")
+                .accessibilityLabel("Idle")
+        case .working:
+            // Animated spinner reads as "busy"; matches the "Connecting…" idiom.
+            ProgressView()
+                .controlSize(.mini)
+                .help("Working")
+                .accessibilityLabel("Working")
+        case .awaitingInput:
+            Image(systemName: "bell.badge.fill")
+                .imageScale(.small)
+                .foregroundStyle(.primary)
+                .help("Waiting for your input")
+                .accessibilityLabel("Waiting for your input")
+        case let .error(message):
+            // Surface the actual error in the tooltip/hint when we have one
+            // (the associated string), falling back to the generic label.
+            Image(systemName: "exclamationmark.triangle.fill")
+                .imageScale(.small)
+                .foregroundStyle(.primary)
+                .help(message.isEmpty ? "Error" : message)
+                .accessibilityLabel("Error")
         }
     }
 

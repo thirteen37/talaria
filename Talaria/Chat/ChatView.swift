@@ -739,6 +739,11 @@ final class LocalChatViewModel {
         }
 
         pendingPermission = nil
+        // Single choke point for every prompt resolution (allow/deny, and
+        // cancel() which routes through `.cancelled`): move the session out of
+        // `.awaitingInput` so the sidebar/window badge clears as the turn
+        // resumes. `markTurnFinished` still handles the turn-ending cases.
+        store?.markPermissionResolved(id: sessionId)
         applyLocalToolStatus(for: outcome, permission: permission)
         await permission.respond(outcome)
         statusText = "Permission response sent"
