@@ -524,7 +524,10 @@ struct PhoneServerWindow: View {
                 hermesProfiles: hermesProfiles,
                 activeHermesProfile: activeHermesProfile,
                 onSwitchHermesProfile: switchHermesProfile,
-                isLoadingHermesProfiles: hermesProfilesLoading
+                isLoadingHermesProfiles: hermesProfilesLoading,
+                // The iPhone navigation list has no glass backing — keep the
+                // opaque grouped white card so rows don't expose grey.
+                translucentRows: false
             )
 
             // Connection / session errors and the "Building web UI…" progress

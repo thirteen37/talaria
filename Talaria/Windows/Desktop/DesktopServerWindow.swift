@@ -509,7 +509,11 @@ struct DesktopServerWindow: View {
                 hermesProfiles: hermesProfiles,
                 activeHermesProfile: activeHermesProfile,
                 onSwitchHermesProfile: switchHermesProfile,
-                isLoadingHermesProfiles: hermesProfilesLoading
+                isLoadingHermesProfiles: hermesProfilesLoading,
+                // The split-view sidebar is translucent (glass on iPad, sidebar
+                // material on macOS) and hides its grouped backdrop below, so
+                // rows render `.clear` to show it through.
+                translucentRows: true
             )
                 .onChange(of: harness.store.selection) { _, newValue in
                     if newValue != nil {
@@ -528,6 +532,11 @@ struct DesktopServerWindow: View {
                 }
             }
         }
+        #if os(iOS)
+        // Drop the grouped List's opaque scroll/section backdrop so the glass
+        // sidebar shows through; pairs with the `.clear` row backgrounds below.
+        .scrollContentBackground(.hidden)
+        #endif
         // iPad surfaces a gear to open the editor (no Settings scene there);
         // no-op on macOS.
         .platformSettingsToolbarItem { showingSettings = true }
