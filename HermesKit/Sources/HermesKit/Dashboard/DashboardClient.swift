@@ -792,10 +792,15 @@ public struct DashboardClient: Sendable {
         return response.ticket
     }
 
-    public func listSessions(limit: Int? = nil, offset: Int? = nil) async throws -> DashboardSessionsResponse {
+    /// Lists sessions. `minMessages` maps to Hermes's `min_messages=N` query
+    /// param, which filters both the returned list and the `total` count;
+    /// callers pass `1` to hide empty (zero-message) sessions. Older Hermes
+    /// ignores the param, so passing it is backward-safe.
+    public func listSessions(limit: Int? = nil, offset: Int? = nil, minMessages: Int? = nil) async throws -> DashboardSessionsResponse {
         var items: [URLQueryItem] = []
         if let limit { items.append(URLQueryItem(name: "limit", value: String(limit))) }
         if let offset { items.append(URLQueryItem(name: "offset", value: String(offset))) }
+        if let minMessages { items.append(URLQueryItem(name: "min_messages", value: String(minMessages))) }
         return try await get(path: "/api/sessions", queryItems: items)
     }
 
