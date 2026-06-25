@@ -14,6 +14,13 @@ struct SessionsSidebar: View {
     /// Whether the Hermes-profile list is still loading. Drives a placeholder
     /// row in the selector slot so it resolves in place rather than popping in.
     let isLoadingHermesProfiles: Bool
+    /// When true, unselected rows render `.clear` so a translucent/glass host —
+    /// the iPad & macOS split-view sidebar, whose `List` hides its grouped
+    /// backdrop via `.scrollContentBackground(.hidden)` — shows through. When
+    /// false (the iPhone navigation `List`, which has no glass backing) rows
+    /// keep the opaque grouped white card so they don't expose the grey grouped
+    /// section background. macOS always resolves to `.clear` regardless.
+    let translucentRows: Bool
 
     @State private var renameTarget: SessionsStore.OpenSession?
     @State private var renameText: String = ""
@@ -27,7 +34,8 @@ struct SessionsSidebar: View {
         hermesProfiles: [HermesProfileInfo] = [],
         activeHermesProfile: String = HermesProfiles.defaultProfileName,
         onSwitchHermesProfile: @escaping (String) -> Void = { _ in },
-        isLoadingHermesProfiles: Bool = false
+        isLoadingHermesProfiles: Bool = false,
+        translucentRows: Bool = true
     ) {
         self.store = store
         self.profile = profile
@@ -37,6 +45,7 @@ struct SessionsSidebar: View {
         self.activeHermesProfile = activeHermesProfile
         self.onSwitchHermesProfile = onSwitchHermesProfile
         self.isLoadingHermesProfiles = isLoadingHermesProfiles
+        self.translucentRows = translucentRows
     }
 
     var body: some View {
@@ -48,6 +57,7 @@ struct SessionsSidebar: View {
                     onSelect: onSwitchProfile
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .listRowBackground(auxRowBackground)
 
                 // Second stacked menu: the window's active Hermes profile.
                 // While the list is loading, hold the slot with a placeholder
@@ -62,6 +72,7 @@ struct SessionsSidebar: View {
                 if isLoadingHermesProfiles {
                     HermesProfileLoadingRow()
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .listRowBackground(auxRowBackground)
                 } else if !hermesProfiles.isEmpty {
                     HermesProfileHeader(
                         active: activeHermesProfile,
@@ -69,6 +80,7 @@ struct SessionsSidebar: View {
                         onSelect: onSwitchHermesProfile
                     )
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .listRowBackground(auxRowBackground)
                 }
             }
 
@@ -116,6 +128,9 @@ struct SessionsSidebar: View {
                         .accessibilityLabel("New terminal session")
                     }
                 }
+                // Match the session rows: clear over a glass host so it shows
+                // through, the grouped white card on the iPhone list.
+                .listRowBackground(auxRowBackground)
             }
         }
         .sheet(item: $renameTarget) { target in
@@ -193,18 +208,25 @@ struct SessionsSidebar: View {
         }
     }
 
-    /// Unselected row background. iOS wraps this sidebar in a grouped `List`
-    /// whose section background is grey; `Color.clear` would let that grey show
-    /// through, leaving session rows grey while the unstyled "New session" row
-    /// stays white. Match the grouped white cell color on iOS so the Chat list
-    /// reads as one consistent white card. macOS uses a sidebar list style where
-    /// `.clear` correctly shows the sidebar material.
+    /// Unselected row background. Clear over a translucent host (iPad/macOS
+    /// split-view sidebar) so the glass shows through; the opaque grouped white
+    /// card over the iPhone navigation `List`, which has no glass backing.
+    /// See `translucentRows` and `auxRowBackground`.
     private func rowBackground(for session: SessionsStore.OpenSession) -> Color {
         if store.selection == session.id {
             return Color.accentColor.opacity(0.15)
         }
+        return auxRowBackground
+    }
+
+    /// Background for the non-selectable helper rows (profile headers, the
+    /// loading placeholder, the "New session" row). Mirrors the unselected
+    /// branch of `rowBackground` so every row resolves consistently: `.clear`
+    /// over a glass host, the grouped white card on the iPhone list, always
+    /// `.clear` on macOS (where `secondarySystemGroupedBackground` is absent).
+    private var auxRowBackground: Color {
         #if os(iOS)
-        return Color(uiColor: .secondarySystemGroupedBackground)
+        return translucentRows ? Color.clear : Color(uiColor: .secondarySystemGroupedBackground)
         #else
         return Color.clear
         #endif
