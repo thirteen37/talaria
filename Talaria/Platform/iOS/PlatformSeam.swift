@@ -44,6 +44,11 @@ enum Platform {
     /// sandbox. iOS is remote-only, so `"~"` lets the remote shell expand it to
     /// whichever home the SSH login lands in.
     static func defaultHomeDirectory() -> String { "~" }
+
+    /// iOS devices may have no hardware keyboard, so a `⌥N` key-hint badge would
+    /// advertise a shortcut the user can't press. Hide the hint; the shortcut
+    /// itself stays wired (a no-op without a keyboard, usable with one).
+    static var showsKeyboardShortcutHints: Bool { false }
 }
 
 extension View {
@@ -55,16 +60,6 @@ extension View {
 
     /// No window subtitle concept on iOS.
     func platformWindowSubtitle(_ subtitle: String) -> some View { self }
-
-    /// Permission-prompt sizing: on iPhone the fixed 460pt minimum overflows
-    /// the screen and clips the prompt. Fill the sheet width and scroll
-    /// vertically so a tall payload stays reachable.
-    func permissionPromptLayout() -> some View {
-        ScrollView {
-            padding(20)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
 
     /// Identity-file picker: iOS presents a `.fileImporter`. SSH keys are
     /// usually extensionless, so accept any data/item.

@@ -21,15 +21,11 @@ enum PromptShotRenderer {
             Text(caption)
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
+            // `PermissionPrompt` now draws its own card chrome (fill + kind-tinted
+            // border). Adding a second background/overlay here would stack a gray
+            // separator border over the tint, hiding the very thing this shot
+            // showcases — so just let the card render itself.
             PermissionPrompt(state: sampleState(kind), select: { _ in }, cancel: {})
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color(nsColor: .windowBackgroundColor))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(Color(nsColor: .separatorColor))
-                )
         }
     }
 
@@ -52,6 +48,11 @@ enum PromptShotRenderer {
         write(AnyView(gallery), to: dir.appendingPathComponent("prompts-gallery.png"))
         for (kind, name) in [(UserPromptKind.permission, "permission"), (.question, "question"), (.secret, "secret")] {
             let view = PermissionPrompt(state: sampleState(kind), select: { _ in }, cancel: {})
+                // The inline card is `maxWidth: .infinity`; with no enclosing
+                // width here (unlike `gallery`, which frames its cards at 660pt)
+                // it would collapse to intrinsic width. Pin a comfortable width to
+                // restore the sizing the old `permissionPromptLayout()` gave.
+                .frame(width: 560)
                 .padding(24)
                 .background(Color(nsColor: .underPageBackgroundColor))
             write(AnyView(view), to: dir.appendingPathComponent("prompt-\(name).png"))
