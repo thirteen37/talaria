@@ -535,6 +535,28 @@ struct DesktopServerWindow: View {
         // forward, crashed/restarted remote) while still reporting "connected",
         // and the error-banner Retry only shows on a *failed* acquire.
         .toolbar {
+            // Aggregate "needs you" badge: visible from any screen in the window
+            // (even with the sidebar collapsed or a non-chat surface open) so a
+            // background session blocked on a prompt doesn't go unnoticed. Tapping
+            // jumps to the first waiting session.
+            let awaiting = harness.store.sessionsAwaitingInput
+            if let firstAwaiting = awaiting.first {
+                ToolbarItem {
+                    let count = awaiting.count
+                    Button { harness.store.selection = firstAwaiting } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "bell.badge.fill")
+                            if count > 1 { Text("\(count)") }
+                        }
+                    }
+                    .accessibilityLabel(
+                        count > 1
+                            ? "\(count) sessions waiting for your input"
+                            : "A session is waiting for your input"
+                    )
+                    .help("A session is waiting for your input")
+                }
+            }
             ToolbarItem {
                 Button { harness.reconnectDashboard() } label: {
                     Label("Reconnect Dashboard", systemImage: "arrow.clockwise")

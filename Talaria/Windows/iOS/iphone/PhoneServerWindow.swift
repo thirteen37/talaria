@@ -542,6 +542,27 @@ struct PhoneServerWindow: View {
                 .accessibilityLabel("Browse")
                 .help("Browse servers and settings")
             }
+            // Aggregate "needs you" badge: visible even when you're off the chat
+            // (Browse, All sessions, etc.) so a background session blocked on a
+            // prompt doesn't go unnoticed. Tapping jumps to the first waiting one.
+            let awaiting = harness.store.sessionsAwaitingInput
+            if let firstAwaiting = awaiting.first {
+                ToolbarItem(placement: .topBarTrailing) {
+                    let count = awaiting.count
+                    Button { harness.store.selection = firstAwaiting } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "bell.badge.fill")
+                            if count > 1 { Text("\(count)") }
+                        }
+                    }
+                    .accessibilityLabel(
+                        count > 1
+                            ? "\(count) sessions waiting for your input"
+                            : "A session is waiting for your input"
+                    )
+                    .help("A session is waiting for your input")
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showingAllSessions = true

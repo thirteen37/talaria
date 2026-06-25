@@ -138,6 +138,10 @@ final class SessionsStore {
     enum Status: Equatable {
         case idle
         case working
+        /// The turn is paused waiting on the user (permission / question /
+        /// secret prompt). Distinct from `.working` so "needs you" reads
+        /// differently from "busy" in the sidebar and the window badge.
+        case awaitingInput
         case error(String)
     }
 
@@ -838,9 +842,38 @@ final class SessionsStore {
     }
 
     func markTurnFinished(id: SessionId) {
-        if case .working = statuses[id] {
+        resetActiveStatus(id: id)
+    }
+
+    /// Clears an active turn state (`.working` or `.awaitingInput`) back to
+    /// `.idle`. Shared by the turn-finished signal and the stream-close cleanup
+    /// (`markIdle`) so both twin paths handle a session parked on a prompt
+    /// identically — a reject/cancel that ends the turn, *and* a stream that
+    /// dies while awaiting input, must both drop "needs you" rather than pin it.
+    private func resetActiveStatus(id: SessionId) {
+        switch statuses[id] {
+        case .working, .awaitingInput:
             statuses[id] = .idle
+        default:
+            break
         }
+    }
+
+    /// The user answered the pending prompt; the turn resumes, so move
+    /// `.awaitingInput` back to `.working`. A no-op for any other state.
+    func markPermissionResolved(id: SessionId) {
+        if case .awaitingInput = statuses[id] {
+            statuses[id] = .working
+        }
+    }
+
+    /// Session ids currently blocked on user input — drives the window-level
+    /// aggregate badge so a background session that needs you is visible from
+    /// any screen, even when its sidebar row isn't.
+    var sessionsAwaitingInput: [SessionId] {
+        openSessions
+            .map(\.id)
+            .filter { statuses[$0] == .awaitingInput }
     }
 
     // MARK: - Notifications
@@ -902,9 +935,11 @@ final class SessionsStore {
     private func observe(id: SessionId, notification: HermesNotification) {
         switch notification {
         case let .permissionRequest(event):
-            // Permission requests pause the turn waiting on the user; still
-            // active in spirit, so keep showing working.
-            statuses[id] = .working
+            // Permission requests pause the turn waiting on the user — a
+            // distinct "needs you" state, not the same green-dot `.working`
+            // as ordinary agent work. Cleared by `markPermissionResolved`
+            // when the user answers (or `markTurnFinished` on cancel).
+            statuses[id] = .awaitingInput
             notifyToolApproval(id: id, kind: event.kind, detail: event.request.toolCall.title)
         case let .clientRequestError(_, _, message):
             statuses[id] = .error(message)
@@ -1047,8 +1082,6 @@ final class SessionsStore {
     private static let mutatingToolKinds: Set<ToolKind> = [.edit, .delete, .move]
 
     private func markIdle(id: SessionId) {
-        if case .working = statuses[id] {
-            statuses[id] = .idle
-        }
+        resetActiveStatus(id: id)
     }
 }
