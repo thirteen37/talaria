@@ -117,6 +117,49 @@ struct DashboardSessionTests {
         #expect(first.inputTokens == 180751)
     }
 
+    @Test
+    func listSessionsForwardsMinMessages() async throws {
+        let http = StubHTTP(responses: [
+            .init(
+                path: "/api/sessions",
+                body: try loadFixtureData("sessions-list.json")
+            )
+        ])
+        let session = DashboardSession(
+            baseURL: URL(string: "http://127.0.0.1:9119")!,
+            http: http
+        )
+        let client = session.client()
+
+        _ = try await client.listSessions(limit: 200, minMessages: 1)
+
+        let request = try #require(http.recordedRequests.first)
+        let query = try #require(request.url?.absoluteString)
+        #expect(query.contains("min_messages=1"))
+        #expect(query.contains("limit=200"))
+    }
+
+    @Test
+    func listSessionsOmitsMinMessagesWhenNil() async throws {
+        let http = StubHTTP(responses: [
+            .init(
+                path: "/api/sessions",
+                body: try loadFixtureData("sessions-list.json")
+            )
+        ])
+        let session = DashboardSession(
+            baseURL: URL(string: "http://127.0.0.1:9119")!,
+            http: http
+        )
+        let client = session.client()
+
+        _ = try await client.listSessions(limit: 200)
+
+        let request = try #require(http.recordedRequests.first)
+        let query = try #require(request.url?.absoluteString)
+        #expect(!query.contains("min_messages"))
+    }
+
     // MARK: - Helpers
 
     private func loadFixtureString(_ name: String) throws -> String {

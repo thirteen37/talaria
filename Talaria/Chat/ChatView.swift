@@ -16,6 +16,13 @@ struct ChatView: View {
     @State private var confirmingDelete = false
     @State private var isExporting = false
     @State private var exportDocument: TranscriptDocument?
+    /// Drives the inline permission card's focus ring + steals key input from the
+    /// disabled composer when a prompt first appears.
+    @FocusState private var promptFocused: Bool
+
+    /// Scroll anchor for the inline permission card. A fixed string id (the card is
+    /// a singleton tail element) so the on-show scroll can target it.
+    private static let permissionAnchorID = "permission-prompt-anchor"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,6 +59,25 @@ struct ChatView: View {
                                     .id(message.id)
                                 }
                             }
+
+                            // The blocking prompt renders inline as the transcript's
+                            // tail element (not a modal sheet), so history stays
+                            // scrollable while it's pending. It scrolls with the list;
+                            // the persistent `permissionShortcuts` layer keeps ⌥N/Esc
+                            // working even after it scrolls off-screen.
+                            if let permission = viewModel.pendingPermission {
+                                PermissionPrompt(
+                                    state: permission,
+                                    isFocused: $promptFocused,
+                                    select: { option in
+                                        Task { await viewModel.resolvePermission(.selected(SelectedPermissionOutcome(optionId: option.optionId))) }
+                                    },
+                                    cancel: {
+                                        Task { await viewModel.resolvePermission(.cancelled) }
+                                    }
+                                )
+                                .id(Self.permissionAnchorID)
+                            }
                         }
                         .padding(16)
                     }
@@ -71,8 +97,21 @@ struct ChatView: View {
                     // cheap and idempotent — once the row exists the scroll lands,
                     // and re-targeting the current last id also covers incremental
                     // seeding. Bounded so it can't fight the user past initial open.
+                    //
+                    // A session can be reselected while a prompt is already pending
+                    // (view models outlive their views), so `pendingPermission` may
+                    // already be non-nil on appear — a case the `onChange` below
+                    // never sees (it only fires on a transition). Reveal and focus
+                    // the inline card here instead, reusing the same retry loop.
+                    var focusedPrompt = false
                     for _ in 0 ..< 10 {
-                        if let last = viewModel.messages.last {
+                        if viewModel.pendingPermission != nil {
+                            proxy.scrollTo(Self.permissionAnchorID, anchor: .bottom)
+                            if !focusedPrompt {
+                                promptFocused = true
+                                focusedPrompt = true
+                            }
+                        } else if let last = viewModel.messages.last {
                             proxy.scrollTo(last.id, anchor: .bottom)
                         }
                         do {
@@ -87,6 +126,21 @@ struct ChatView: View {
                         return
                     }
                     proxy.scrollTo(last.id, anchor: .bottom)
+                }
+                // When a prompt first appears, focus its inline card and scroll it
+                // into view. Runs after the `messages` onChange (the permission's
+                // tool row also lands there), so it wins the final scroll position.
+                // The one-frame sleep lets the lazy card materialize before the
+                // scrollTo targets it (mirrors the open-at-bottom retry above).
+                .onChange(of: viewModel.pendingPermission?.id) { _, id in
+                    guard id != nil else {
+                        return
+                    }
+                    promptFocused = true
+                    Task {
+                        try? await Task.sleep(for: .milliseconds(16))
+                        proxy.scrollTo(Self.permissionAnchorID, anchor: .bottom)
+                    }
                 }
                 }
             }
@@ -120,17 +174,9 @@ struct ChatView: View {
         // Inline title (iOS) keeps the chat's vertical space for the transcript
         // instead of the tall large-title header; no-op on macOS.
         .inlineNavigationTitle()
-        .sheet(item: $viewModel.pendingPermission) { permission in
-            PermissionPrompt(
-                state: permission,
-                select: { option in
-                    Task { await viewModel.resolvePermission(.selected(SelectedPermissionOutcome(optionId: option.optionId))) }
-                },
-                cancel: {
-                    Task { await viewModel.resolvePermission(.cancelled) }
-                }
-            )
-        }
+        // Always-mounted, zero-size shortcut layer so ⌥N/Esc keep working even
+        // after the inline card scrolls out of the recycling `LazyVStack`.
+        .background { permissionShortcuts }
         // Per-session manage actions on the active chat's toolbar, plus their
         // rename sheet, delete confirmation, and JSONL exporter. All gate on
         // `store` internally, so the group is inert (toolbar empty) when no store
@@ -166,6 +212,41 @@ struct ChatView: View {
     /// layout) never produces a negative frame.
     private func rowWidth(for containerWidth: CGFloat) -> CGFloat {
         max(containerWidth - 32, 1)
+    }
+
+    /// Hidden, always-mounted buttons that register the prompt's keyboard
+    /// shortcuts window-wide: ⌥1…⌥9 select the corresponding option, Esc cancels.
+    /// Mounted at the `VStack` level (not inside the card) so the shortcuts survive
+    /// the card scrolling off-screen in the recycling `LazyVStack`. The composer is
+    /// already disabled while a prompt is pending, so its `TextField` won't swallow
+    /// the keys.
+    @ViewBuilder
+    private var permissionShortcuts: some View {
+        if let permission = viewModel.pendingPermission {
+            ZStack {
+                Button("Cancel prompt") {
+                    Task { await viewModel.resolvePermission(.cancelled) }
+                }
+                .keyboardShortcut(.cancelAction)
+
+                // `.secret` has no selectable options (see `PermissionPrompt`), so
+                // only Cancel is wired for it.
+                if permission.kind != .secret {
+                    ForEach(
+                        Array(permission.request.options.prefix(PermissionPrompt.maxShortcutOptions).enumerated()),
+                        id: \.element.optionId
+                    ) { index, option in
+                        Button("Select option \(index + 1)") {
+                            Task { await viewModel.resolvePermission(.selected(SelectedPermissionOutcome(optionId: option.optionId))) }
+                        }
+                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .option)
+                    }
+                }
+            }
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+        }
     }
 
     /// The session's display name for confirmation copy — its title, or a short

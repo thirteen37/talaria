@@ -44,6 +44,12 @@ enum Platform {
     static func defaultHomeDirectory() -> String {
         FileManager.default.homeDirectoryForCurrentUser.path
     }
+
+    /// macOS always has a hardware keyboard, so `⌥N` key-hint badges always point
+    /// at a usable shortcut. (The shortcuts themselves stay wired on both
+    /// platforms — they're just no-ops without a keyboard — so an iPad with one
+    /// attached can still use them even though the hint is hidden.)
+    static var showsKeyboardShortcutHints: Bool { true }
 }
 
 extension View {
@@ -53,12 +59,6 @@ extension View {
     /// macOS window subtitle (shown next to the title in the titlebar).
     func platformWindowSubtitle(_ subtitle: String) -> some View {
         navigationSubtitle(subtitle)
-    }
-
-    /// Permission-prompt sizing: macOS uses a fixed, comfortably-wide frame.
-    func permissionPromptLayout() -> some View {
-        padding(20)
-            .frame(minWidth: 460, idealWidth: 560, maxWidth: 680)
     }
 
     /// Identity-file picker: macOS opens an `NSOpenPanel` (modal) when
