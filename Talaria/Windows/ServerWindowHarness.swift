@@ -138,6 +138,13 @@ final class ServerWindowHarness {
         self.baseAdminRunner = baseAdminRunner
         self.doctor = DoctorHarness(runner: store.adminRunner)
         self.updates = UpdatesHarness(runner: store.adminRunner)
+        // When a live chat's WebSocket dies silently (the macOS case — no
+        // background→foreground hook), the chat VM routes the stream end to the
+        // store, which calls back here to probe + re-resume the dead sessions. The
+        // store's recovery driver also reads `isRecovering` so it doesn't count an
+        // in-flight pass as a failed attempt (and give up early).
+        store.requestRecovery = { [weak self] in self?.recoverConnectionIfNeeded() }
+        store.recoveryInFlight = { [weak self] in self?.isRecovering ?? false }
         wireBackgroundUpdateChecks()
     }
 
@@ -274,13 +281,19 @@ final class ServerWindowHarness {
         }
     }
 
-    /// iOS / iPad background→foreground hook: probe the dashboard, and rebuild
-    /// the connection **only if the probe fails** (the single SSH tunnel died or
-    /// went half-open while the app was suspended). A live connection is left
-    /// untouched, so a brief app-switch costs one cheap `/api/status` round-trip
-    /// and never tears the session down. No-op before the dashboard has started,
-    /// after it's released, or while a recovery is already running. The macOS
-    /// `onResumeFromBackground` seam is a no-op, so this only fires on iOS/iPad.
+    /// Probe the dashboard, and rebuild the connection **only if the probe fails**
+    /// (the single SSH tunnel died or went half-open). A live connection is left
+    /// untouched, so the check costs one cheap `/api/status` round-trip and never
+    /// tears the session down; if HTTP is healthy but some chats' `/api/ws` sockets
+    /// died, only those are re-resumed. No-op before the dashboard has started,
+    /// after it's released, or while a recovery is already running.
+    ///
+    /// Fires from two triggers: the iOS/iPad background→foreground hook (the macOS
+    /// `onResumeFromBackground` seam is a no-op), **and** — on every platform,
+    /// macOS included — a live chat's notification stream dying silently, routed
+    /// here via ``SessionsStore/handleLiveSessionDied(id:)`` → ``requestRecovery``.
+    /// The latter is the macOS recovery path the keepalive ping can't prevent
+    /// (a genuinely dead socket, not just an idle one).
     func recoverConnectionIfNeeded() {
         guard dashboardStarted, !dashboardReleased, !isRecovering else { return }
         // Claim the recovery slot synchronously (see `reconnectDashboard`): the probe
