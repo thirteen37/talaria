@@ -54,6 +54,106 @@ struct SessionsBrowser: View {
         }
     }
 
+    /// Minimum message-count buckets for the Filter menu, applied over
+    /// `summary.messageCount`. Preset (not free-text) so it lives cleanly inside
+    /// the toolbar `Menu`, mirroring `DateRange`.
+    enum MessageFloor: String, CaseIterable, Identifiable {
+        case any
+        case atLeast5
+        case atLeast20
+        case atLeast50
+
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .any: return "Any"
+            case .atLeast5: return "≥ 5 messages"
+            case .atLeast20: return "≥ 20 messages"
+            case .atLeast50: return "≥ 50 messages"
+            }
+        }
+
+        /// The inclusive floor, or nil for `.any`.
+        var cutoff: Int? {
+            switch self {
+            case .any: return nil
+            case .atLeast5: return 5
+            case .atLeast20: return 20
+            case .atLeast50: return 50
+            }
+        }
+
+        /// Whether `count` clears this floor. A nil count is treated as 0, so an
+        /// unknown value never satisfies a set floor.
+        func passes(_ count: Int?) -> Bool {
+            guard let cutoff else { return true }
+            return (count ?? 0) >= cutoff
+        }
+    }
+
+    /// Minimum total-token buckets for the Filter menu, over `summary.tokenTotal`.
+    enum TokenFloor: String, CaseIterable, Identifiable {
+        case any
+        case atLeast10K
+        case atLeast100K
+        case atLeast1M
+
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .any: return "Any"
+            case .atLeast10K: return "≥ 10K tokens"
+            case .atLeast100K: return "≥ 100K tokens"
+            case .atLeast1M: return "≥ 1M tokens"
+            }
+        }
+
+        var cutoff: Int? {
+            switch self {
+            case .any: return nil
+            case .atLeast10K: return 10_000
+            case .atLeast100K: return 100_000
+            case .atLeast1M: return 1_000_000
+            }
+        }
+
+        func passes(_ tokens: Int?) -> Bool {
+            guard let cutoff else { return true }
+            return (tokens ?? 0) >= cutoff
+        }
+    }
+
+    /// Minimum cost buckets for the Filter menu, over `summary.costUsd`. `>$0`
+    /// means "spent anything"; the rest are inclusive dollar floors.
+    enum CostFloor: String, CaseIterable, Identifiable {
+        case any
+        case aboveZero
+        case atLeast1
+        case atLeast10
+
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .any: return "Any"
+            case .aboveZero: return "> $0"
+            case .atLeast1: return "≥ $1"
+            case .atLeast10: return "≥ $10"
+            }
+        }
+
+        /// Whether `cost` clears this floor. A nil cost is treated as 0, so a
+        /// session with no reported cost never satisfies a set floor.
+        func passes(_ cost: Double?) -> Bool {
+            let value = cost ?? 0
+            switch self {
+            case .any: return true
+            case .aboveZero: return value > 0
+            case .atLeast1: return value >= 1
+            case .atLeast10: return value >= 10
+            }
+        }
+    }
+
     /// The set of browse-list filters. Defaults are all-inclusive, so
     /// `isActive` is false until the user narrows something.
     struct Filter: Equatable {
@@ -61,9 +161,34 @@ struct SessionsBrowser: View {
         var model: String?
         var dateRange: DateRange = .any
         var activeOnly = false
+        var messageFloor: MessageFloor = .any
+        var tokenFloor: TokenFloor = .any
+        var costFloor: CostFloor = .any
+        var hasToolCalls = false
 
         var isActive: Bool {
             source != nil || model != nil || dateRange != .any || activeOnly
+                || messageFloor != .any || tokenFloor != .any || costFloor != .any
+                || hasToolCalls
+        }
+
+        /// Pure per-row predicate: true when `summary` survives every active
+        /// filter. Nil-field semantics exclude correctly — a lean search row
+        /// (source/model/counts nil) fails any set source/model filter or numeric
+        /// floor, which is how a search query and the filters compose. Extracted
+        /// (no view state) so it's unit-testable.
+        func matches(_ summary: HermesSessionSummary) -> Bool {
+            if let source, summary.source != source { return false }
+            if let model, summary.model != model { return false }
+            if activeOnly, !summary.isActive { return false }
+            if let cutoff = dateRange.cutoff {
+                guard let time = summary.displayTime, time >= cutoff else { return false }
+            }
+            if !messageFloor.passes(summary.messageCount) { return false }
+            if !tokenFloor.passes(summary.tokenTotal) { return false }
+            if !costFloor.passes(summary.costUsd) { return false }
+            if hasToolCalls, (summary.toolCallCount ?? 0) <= 0 { return false }
+            return true
         }
     }
 
@@ -104,21 +229,12 @@ struct SessionsBrowser: View {
         !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// The browse list narrowed by the active filters. Passthrough while
-    /// searching (the lean search summaries lack the fields filters key on, and
-    /// the Filter menu is disabled then).
+    /// The fetched rows narrowed by the active filters. Applies while searching
+    /// too: search hits are enriched with browse metadata in `reload`, and rows
+    /// outside that window stay lean — their nil fields fail any set filter, so
+    /// search + filter compose correctly.
     private var filteredSessions: [HermesSessionSummary] {
-        guard !isSearching else { return sessions }
-        let cutoff = filter.dateRange.cutoff
-        return sessions.filter { summary in
-            if let source = filter.source, summary.source != source { return false }
-            if let model = filter.model, summary.model != model { return false }
-            if filter.activeOnly, !summary.isActive { return false }
-            if let cutoff {
-                guard let time = summary.displayTime, time >= cutoff else { return false }
-            }
-            return true
-        }
+        sessions.filter(filter.matches)
     }
 
     /// Distinct `source` values across the fetched rows, for the Filter menu.
@@ -131,10 +247,11 @@ struct SessionsBrowser: View {
         Set(sessions.compactMap { $0.model }.filter { !$0.isEmpty }).sorted()
     }
 
-    /// Header count copy: the filtered count when a filter narrows the browse
-    /// list, else the server total. Nil while searching or before a total lands.
+    /// Header count copy: the filtered count whenever a filter narrows the rows
+    /// or a search is active (both operate on the fetched window), else the
+    /// server total for the plain browse list. Nil before a total lands.
     private var headerCountText: LocalizedStringKey? {
-        if !isSearching, filter.isActive {
+        if isSearching || filter.isActive {
             return "^[\(filteredSessions.count) session](inflect: true)"
         }
         if let total {
@@ -248,9 +365,9 @@ struct SessionsBrowser: View {
         }
     }
 
-    /// The Filter menu in the toolbar. Disabled while searching, since the lean
-    /// search summaries don't carry the fields filters key on. Badged when any
-    /// filter is non-default.
+    /// The Filter menu in the toolbar. Stays usable while searching — search
+    /// hits are enriched with browse metadata so the same fields filters key on
+    /// are present. Badged when any filter is non-default.
     private var filterMenu: some View {
         Menu {
             Picker("Source", selection: $filter.source) {
@@ -266,6 +383,17 @@ struct SessionsBrowser: View {
             }
             Toggle("Active only", isOn: $filter.activeOnly)
             Divider()
+            Picker("Messages", selection: $filter.messageFloor) {
+                ForEach(MessageFloor.allCases) { Text($0.label).tag($0) }
+            }
+            Picker("Tokens", selection: $filter.tokenFloor) {
+                ForEach(TokenFloor.allCases) { Text($0.label).tag($0) }
+            }
+            Picker("Cost", selection: $filter.costFloor) {
+                ForEach(CostFloor.allCases) { Text($0.label).tag($0) }
+            }
+            Toggle("Used tools", isOn: $filter.hasToolCalls)
+            Divider()
             Button("Clear filters") { filter = Filter() }
                 .disabled(!filter.isActive)
         } label: {
@@ -276,8 +404,7 @@ struct SessionsBrowser: View {
                     : "line.3.horizontal.decrease.circle"
             )
         }
-        .disabled(isSearching)
-        .help("Filter sessions by source, model, last activity, or active state")
+        .help("Filter sessions by source, model, activity, size, cost, or tool use")
         .accessibilityLabel("Filter sessions")
     }
 
@@ -342,17 +469,22 @@ struct SessionsBrowser: View {
         do {
             let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
             var results: [HermesSessionSummary]
+            // The browse list is the metadata universe. `minMessages: 1` asks
+            // Hermes to exclude empty (zero-message) sessions — e.g.
+            // gateway/Telegram rows that have nothing to display and would
+            // otherwise open a blank transcript. The filter applies to both the
+            // list and `total`, so the header count stays consistent. Older
+            // Hermes ignores it (no gate). It's also the join source that lets
+            // search hits carry source/model/counts/tokens/cost, so the Filter
+            // menu works while searching.
+            let browse = try await client.listSessions(limit: 200, minMessages: 1)
+            let browseRows = browse.sessions.map(HermesSessionSummary.init)
             if trimmed.isEmpty {
-                // `minMessages: 1` asks Hermes to exclude empty (zero-message)
-                // sessions — e.g. gateway/Telegram rows that have nothing to
-                // display and would otherwise open a blank transcript. The
-                // filter applies to both the list and `total`, so the header
-                // count stays consistent. Older Hermes ignores it (no gate).
-                let response = try await client.listSessions(limit: 200, minMessages: 1)
-                results = response.sessions.map(HermesSessionSummary.init)
-                total = response.total
+                results = browseRows
+                total = browse.total
             } else {
                 total = nil
+                let byId = Dictionary(browseRows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                 let response = try await client.searchSessions(query: trimmed, limit: 200)
                 // `/api/sessions/search` returns one hit per matching message, so
                 // a session matching in several messages appears multiple times.
@@ -360,9 +492,19 @@ struct SessionsBrowser: View {
                 var seen = Set<String>()
                 results = response.results.compactMap { hit in
                     guard seen.insert(hit.sessionId).inserted else { return nil }
+                    let snippet = hit.displaySnippet ?? ""
+                    // Enrich recent hits with the browse row (real title +
+                    // filterable fields), surfacing the search snippet as the
+                    // row preview. Hits outside the top-200 browse window stay
+                    // lean (snippet-as-title), preserving search reach — they
+                    // just can't satisfy field/threshold filters.
+                    if var enriched = byId[hit.sessionId] {
+                        if !snippet.isEmpty { enriched.preview = snippet }
+                        return enriched
+                    }
                     return HermesSessionSummary(
                         id: hit.sessionId,
-                        title: hit.displaySnippet ?? "",
+                        title: snippet,
                         updatedAt: hit.sessionStarted.map { Date(timeIntervalSince1970: $0) },
                         cwd: nil
                     )

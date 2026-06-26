@@ -27,6 +27,11 @@ struct HermesSessionSummary: Identifiable, Equatable {
     /// Pre-formatted cost chip text (e.g. `$0.12`, `~$0.34`), or nil when the
     /// server reports no meaningful cost. Computed once at the boundary.
     var costDisplay: String?
+    /// Numeric session cost in USD (actual when reported, else a meaningful
+    /// estimate), or nil when no meaningful cost is available — the same value
+    /// `costDisplay` renders. Used by the Filter menu's cost floor. Nil on the
+    /// lean search path.
+    var costUsd: Double?
 
     init(
         id: String,
@@ -41,7 +46,8 @@ struct HermesSessionSummary: Identifiable, Equatable {
         messageCount: Int? = nil,
         toolCallCount: Int? = nil,
         tokenTotal: Int? = nil,
-        costDisplay: String? = nil
+        costDisplay: String? = nil,
+        costUsd: Double? = nil
     ) {
         self.id = id
         self.title = title
@@ -56,6 +62,7 @@ struct HermesSessionSummary: Identifiable, Equatable {
         self.toolCallCount = toolCallCount
         self.tokenTotal = tokenTotal
         self.costDisplay = costDisplay
+        self.costUsd = costUsd
     }
 
     init(_ summary: DashboardSessionSummary) {
@@ -78,27 +85,37 @@ struct HermesSessionSummary: Identifiable, Equatable {
         self.toolCallCount = summary.toolCallCount
         let tokenParts = [summary.inputTokens, summary.outputTokens].compactMap { $0 }
         self.tokenTotal = tokenParts.isEmpty ? nil : tokenParts.reduce(0, +)
-        self.costDisplay = Self.costDisplay(
+        let resolvedCost = Self.resolvedCost(
             estimated: summary.estimatedCostUsd,
             actual: summary.actualCostUsd,
             status: summary.costStatus
         )
+        self.costUsd = resolvedCost?.value
+        self.costDisplay = resolvedCost.map {
+            $0.isEstimate ? String(format: "~$%.2f", $0.value) : String(format: "$%.2f", $0.value)
+        }
     }
 
     /// The time the row should display: real last activity when the server
     /// reports it, else the creation-derived `updatedAt`.
     var displayTime: Date? { lastActive ?? updatedAt }
 
-    /// Builds the cost chip text, or nil when no meaningful cost is available.
-    /// Many setups report `cost_status: "unknown"` with `0.0`, which stays
-    /// hidden. A real `actual_cost_usd` shows verbatim; an estimate is prefixed
-    /// with `~`.
-    private static func costDisplay(estimated: Double?, actual: Double?, status: String?) -> String? {
+    /// Resolves the single cost number both `costUsd` and `costDisplay` use, or
+    /// nil when no meaningful cost is available. Many setups report
+    /// `cost_status: "unknown"` with `0.0`, which stays hidden. A real
+    /// `actual_cost_usd` is used verbatim; an estimate is flagged so the chip can
+    /// prefix it with `~`. Factoring this keeps the string and the number
+    /// consistent.
+    private static func resolvedCost(
+        estimated: Double?,
+        actual: Double?,
+        status: String?
+    ) -> (value: Double, isEstimate: Bool)? {
         if let actual, actual > 0 {
-            return String(format: "$%.2f", actual)
+            return (actual, false)
         }
         if let estimated, estimated > 0, status?.lowercased() != "unknown" {
-            return String(format: "~$%.2f", estimated)
+            return (estimated, true)
         }
         return nil
     }
