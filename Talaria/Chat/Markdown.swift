@@ -108,21 +108,29 @@ extension Theme {
                     }
             }
             .codeBlock { configuration in
-                ScrollView(.horizontal) {
-                    configuration.label
-                        .fixedSize(horizontal: false, vertical: true)
-                        .relativeLineSpacing(.em(0.15))
-                        .markdownTextStyle {
-                            FontFamilyVariant(.monospaced)
-                            FontSize(.em(0.94))
-                        }
-                        .padding(10)
-                }
-                .background(
-                    Color.secondary.opacity(0.1),
-                    in: RoundedRectangle(cornerRadius: 6, style: .continuous)
-                )
-                .markdownMargin(top: .em(0.4), bottom: .em(0.8))
+                // Code blocks WRAP; they must not be wrapped in a horizontal
+                // `ScrollView`. A horizontal scroll view always proposes an
+                // *unbounded* width to its child, regardless of the definite
+                // width the outer vertical `ScrollView` hands down. That nil-width
+                // proposal forced MarkdownUI's deeply nested stacks into SwiftUI's
+                // exponential ideal-size layout pass, which never converged and
+                // permanently froze the app when scrolling back through a
+                // transcript (the LazyVStack re-measures earlier code rows as they
+                // materialize). Rendering the label directly keeps the definite
+                // width, so layout is a single linear pass. Long lines wrap.
+                configuration.label
+                    .relativeLineSpacing(.em(0.15))
+                    .markdownTextStyle {
+                        FontFamilyVariant(.monospaced)
+                        FontSize(.em(0.94))
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        Color.secondary.opacity(0.1),
+                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    )
+                    .markdownMargin(top: .em(0.4), bottom: .em(0.8))
             }
             .table { configuration in
                 configuration.label
