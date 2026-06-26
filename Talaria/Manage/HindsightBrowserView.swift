@@ -74,11 +74,15 @@ final class HindsightBrowserModel {
 
     /// Append the next page of list results (infinite scroll / "Load more").
     func loadMore() async {
-        guard canLoadMore, !isLoadingMore, let client, let bankID else { return }
+        guard canLoadMore, !isLoadingMore else { return }
         isLoadingMore = true
         defer { isLoadingMore = false }
         do {
-            let page = try await client.listMemories(bank: bankID, limit: pageSize, offset: offset)
+            // Re-resolve like load()/runSearch(): the tunnel/client may have been
+            // torn down while the tab was off-screen (a TabView fires .onDisappear
+            // on inner-tab switches), and the .task won't reload an existing model.
+            let (client, bank) = try await resolvedClient()
+            let page = try await client.listMemories(bank: bank, limit: pageSize, offset: offset)
             memories.append(contentsOf: page.items)
             total = page.total
             offset += page.items.count
