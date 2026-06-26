@@ -26,50 +26,61 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        if viewModel.messages.isEmpty {
-                            ContentUnavailableView("No Session", systemImage: "bubble.left.and.bubble.right")
-                                .frame(maxWidth: .infinity, minHeight: 360)
-                        } else {
-                            let lastId = viewModel.messages.last?.id
-                            ForEach(viewModel.messages) { message in
-                                TranscriptRow(
-                                    message: message,
-                                    isLast: message.id == lastId,
-                                    // Only the last row is actively growing while a
-                                    // prompt is in flight — gate code highlighting on that.
-                                    isStreaming: viewModel.isSending && message.id == lastId,
-                                    onUndo: (message.isUndoableUserTurn && !viewModel.isReadOnly && !viewModel.isSending)
-                                        ? { Task { await viewModel.undo(throughUserMessageId: message.id) } }
-                                        : nil
+            // A GeometryReader captures the chat pane's width so each transcript
+            // row can be given a *definite* width (see `rowWidth`). Without it,
+            // every row's markdown is flexible (`maxWidth: .infinity`), which puts
+            // SwiftUI's stack layout on its expensive general "probe children with
+            // many proposals" path. MarkdownUI nests stacks deeply (lists, inline
+            // runs, code), so that probing grows exponentially with depth and never
+            // converges when the LazyVStack re-measures earlier rows on scroll-up —
+            // permanently freezing the app. A rigid width collapses it to one
+            // linear pass.
+            GeometryReader { geo in
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            if viewModel.messages.isEmpty {
+                                ContentUnavailableView("No Session", systemImage: "bubble.left.and.bubble.right")
+                                    .frame(maxWidth: .infinity, minHeight: 360)
+                            } else {
+                                let lastId = viewModel.messages.last?.id
+                                ForEach(viewModel.messages) { message in
+                                    TranscriptRow(
+                                        message: message,
+                                        isLast: message.id == lastId,
+                                        // Only the last row is actively growing while a
+                                        // prompt is in flight — gate code highlighting on that.
+                                        isStreaming: viewModel.isSending && message.id == lastId,
+                                        onUndo: (message.isUndoableUserTurn && !viewModel.isReadOnly && !viewModel.isSending)
+                                            ? { Task { await viewModel.undo(throughUserMessageId: message.id) } }
+                                            : nil
+                                    )
+                                    .frame(width: rowWidth(for: geo.size.width), alignment: .leading)
+                                    .id(message.id)
+                                }
+                            }
+
+                            // The blocking prompt renders inline as the transcript's
+                            // tail element (not a modal sheet), so history stays
+                            // scrollable while it's pending. It scrolls with the list;
+                            // the persistent `permissionShortcuts` layer keeps ⌥N/Esc
+                            // working even after it scrolls off-screen.
+                            if let permission = viewModel.pendingPermission {
+                                PermissionPrompt(
+                                    state: permission,
+                                    isFocused: $promptFocused,
+                                    select: { option in
+                                        Task { await viewModel.resolvePermission(.selected(SelectedPermissionOutcome(optionId: option.optionId))) }
+                                    },
+                                    cancel: {
+                                        Task { await viewModel.resolvePermission(.cancelled) }
+                                    }
                                 )
-                                .id(message.id)
+                                .id(Self.permissionAnchorID)
                             }
                         }
-
-                        // The blocking prompt renders inline as the transcript's
-                        // tail element (not a modal sheet), so history stays
-                        // scrollable while it's pending. It scrolls with the list;
-                        // the persistent `permissionShortcuts` layer keeps ⌥N/Esc
-                        // working even after it scrolls off-screen.
-                        if let permission = viewModel.pendingPermission {
-                            PermissionPrompt(
-                                state: permission,
-                                isFocused: $promptFocused,
-                                select: { option in
-                                    Task { await viewModel.resolvePermission(.selected(SelectedPermissionOutcome(optionId: option.optionId))) }
-                                },
-                                cancel: {
-                                    Task { await viewModel.resolvePermission(.cancelled) }
-                                }
-                            )
-                            .id(Self.permissionAnchorID)
-                        }
+                        .padding(16)
                     }
-                    .padding(16)
-                }
                 // Open at the bottom so a resumed session's seeded history shows
                 // its most recent messages first. Done with an explicit one-shot
                 // scroll (not `.defaultScrollAnchor(.bottom)`, which re-anchors on
@@ -130,6 +141,7 @@ struct ChatView: View {
                         try? await Task.sleep(for: .milliseconds(16))
                         proxy.scrollTo(Self.permissionAnchorID, anchor: .bottom)
                     }
+                }
                 }
             }
 
@@ -192,6 +204,14 @@ struct ChatView: View {
         ) { _ in
             exportDocument = nil
         }
+    }
+
+    /// The definite width handed to each transcript row, derived from the scroll
+    /// pane's width minus the `LazyVStack`'s 16pt horizontal insets on each side.
+    /// Clamped to a small floor so a transient 0-width geometry pass (before first
+    /// layout) never produces a negative frame.
+    private func rowWidth(for containerWidth: CGFloat) -> CGFloat {
+        max(containerWidth - 32, 1)
     }
 
     /// Hidden, always-mounted buttons that register the prompt's keyboard
