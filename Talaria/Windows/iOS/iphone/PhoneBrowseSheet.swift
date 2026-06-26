@@ -43,7 +43,17 @@ struct PhoneBrowseSheet: View {
                 Section {
                     ForEach(sidebarLayout.visibleManageDestinations(), id: \.self) { destination in
                         NavigationLink(value: destination) {
-                            Label(destination.title, systemImage: destination.systemImage)
+                            HStack(spacing: 6) {
+                                Label(destination.title, systemImage: destination.systemImage)
+                                if destination == .system, harness.updates?.status?.available == true {
+                                    Spacer(minLength: 0)
+                                    Circle()
+                                        .fill(Color.accentColor)
+                                        .frame(width: 8, height: 8)
+                                        .accessibilityLabel("Hermes update available")
+                                        .help("Hermes update available")
+                                }
+                            }
                         }
                     }
                 }

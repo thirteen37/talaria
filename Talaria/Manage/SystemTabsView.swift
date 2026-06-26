@@ -15,6 +15,14 @@ struct SystemTabsView: View {
 
     var body: some View {
         TabbedDestinationView(tabs: [
+            DestinationTab(
+                id: "updates",
+                title: "Updates",
+                systemImage: "arrow.down.circle",
+                badge: harness.updates?.status?.available == true ? Text("1") : nil
+            ) {
+                UpdatesView(updates: harness.updates, hermesVersion: harness.effectiveHermesVersion)
+            },
             DestinationTab(id: "doctor", title: "Doctor", systemImage: "stethoscope") {
                 DoctorView(
                     doctor: harness.doctor,
@@ -22,9 +30,6 @@ struct SystemTabsView: View {
                     client: harness.dashboardClient,
                     hermesVersion: harness.effectiveHermesVersion
                 )
-            },
-            DestinationTab(id: "updates", title: "Updates", systemImage: "arrow.down.circle") {
-                UpdatesView(updates: harness.updates, hermesVersion: harness.effectiveHermesVersion)
             },
             DestinationTab(id: "logs", title: "Logs", systemImage: "doc.text") {
                 LogsView(client: harness.dashboardClient, hermesVersion: harness.effectiveHermesVersion)

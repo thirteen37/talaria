@@ -188,6 +188,7 @@ extension ServerWindowHarness {
             }
         }
         doctor.cancelRun()
+        updates?.stopBackgroundChecks()
         updates?.cancelApply()
         updates = nil
     }

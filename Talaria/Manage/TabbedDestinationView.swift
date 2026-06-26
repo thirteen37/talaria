@@ -5,12 +5,16 @@ struct DestinationTab: Identifiable {
     let id: String
     let title: String
     let systemImage: String
+    /// Optional badge on the tab item — e.g. a pending-update indicator. `nil`
+    /// shows no badge (the common case).
+    let badge: Text?
     let content: AnyView
 
-    init(id: String, title: String, systemImage: String, @ViewBuilder content: () -> some View) {
+    init(id: String, title: String, systemImage: String, badge: Text? = nil, @ViewBuilder content: () -> some View) {
         self.id = id
         self.title = title
         self.systemImage = systemImage
+        self.badge = badge
         self.content = AnyView(content())
     }
 }
@@ -49,6 +53,7 @@ struct TabbedDestinationView: View {
             ForEach(tabs) { tab in
                 tab.content
                     .tabItem { Label(tab.title, systemImage: tab.systemImage) }
+                    .badge(tab.badge)
                     .tag(tab.id)
             }
         }
