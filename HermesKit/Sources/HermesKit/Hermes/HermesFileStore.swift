@@ -38,6 +38,12 @@ public enum HermesFileLocation: Sendable {
     /// env-path`). Local: expanded for `~`. Remote: used verbatim (the SFTP /
     /// `cat` transports perform no shell expansion).
     case resolved(path: String)
+    /// Relative to the **login user's home** (not the Hermes home) — e.g.
+    /// `~/.hindsight/…`. Local: under `NSHomeDirectory()`. Remote: a bare
+    /// relative `tail`, which SFTP / `cat` resolve against the SSH session's
+    /// home (they can't expand `~`/`$HOME`), mirroring
+    /// ``HermesHomePaths/relativePath(hermesHome:tail:)``.
+    case homeRelative(tail: String)
 }
 
 /// One place that reads **and writes** the Hermes files with no dashboard route
@@ -118,6 +124,9 @@ public enum HermesFileStore {
             return home.appendingPathComponent(tail)
         case .resolved(let path):
             return URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        case .homeRelative(let tail):
+            return URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+                .appendingPathComponent(tail)
         }
     }
 
@@ -128,6 +137,10 @@ public enum HermesFileStore {
             return HermesHomePaths.relativePath(hermesHome: profile.hermesHome, tail: tail)
         case .resolved(let path):
             return path
+        case .homeRelative(let tail):
+            // Bare relative path: SFTP / `cat` resolve it against the SSH
+            // session's home (they don't expand `~`/`$HOME`).
+            return tail
         }
     }
 

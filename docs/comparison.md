@@ -11,7 +11,7 @@ truth, this file is the thing that's out of date.
 
 | Project | Form factor | Platforms | Talks to Hermes via | License |
 | --- | --- | --- | --- | --- |
-| **Talaria** | Native SwiftUI app | macOS (shared iOS target in progress) | Dashboard HTTP API + a few CLI fallbacks; **never** reads Hermes DB directly. Direct file I/O is limited to documented gaps: read-only `.env` enumeration and `MEMORY.md` / `USER.md` editing. | MIT |
+| **Talaria** | Native SwiftUI app | macOS (shared iOS target in progress) | Dashboard HTTP API + a few CLI fallbacks; **never** reads Hermes DB directly. Direct file I/O is limited to documented gaps: read-only `.env` enumeration, `MEMORY.md` / `USER.md` editing, and read-only Hindsight config reads. One surface also talks **outside** Hermes: a read-only **Hindsight** browser (list + semantic recall) that calls the provider's own REST API — localhost for the embedded daemon, or cloud — since Hermes exposes no route to browse the vector store. | MIT |
 | **[Hermes Desktop · Nous Research][hermes-desktop]** — *first-party / official flagship* | Cross-platform desktop app (Electron + React; Python backend that reuses the Hermes TUI/CLI) | macOS 12+, Windows 10/11, Linux | The **same agent core** as the CLI/gateway via standard gateway APIs — shared config, API keys, sessions, skills, and memory; history carries across surfaces | MIT |
 | **[Hermes Desktop · fathah][hermes-desktop-fathah]** — *third-party, unofficial* | Cross-platform desktop app (Electron 39 + React 19 + TypeScript) | macOS, Windows, Linux, Fedora (RPM), WSL | Gateway/CLI plus a bundled SQLite layer (`better-sqlite3`) | MIT |
 | **[Hermes built-in dashboard][hermes-dashboard]** (`hermes dashboard`) | Local web app (FastAPI + SPA) | Any browser | In-process — it *is* part of Hermes (`hermes_cli/web_server.py`) | Ships with Hermes |
@@ -52,10 +52,14 @@ Talaria's defining choice is its **integration boundary**, not its feature count
   does **not** open Hermes' `state.db`, parse `cron/jobs.json`, or write
   `config.yaml` behind Hermes' back. The documented direct-file exceptions are:
   reading `.env` read-only to *enumerate* user-named custom vars the API doesn't
-  list (all `.env` **writes** still go through the API), and editing
+  list (all `.env` **writes** still go through the API), editing
   `MEMORY.md` / `USER.md` because Hermes exposes only provider status over the
-  dashboard today. See
-  `docs/security.md` and `docs/dashboard-api.md`.
+  dashboard today, and — when **Hindsight** is the active provider — reading its
+  config read-only and calling **Hindsight's own REST API** (list + semantic
+  recall) to browse the vector store, since Hermes has no route for it (localhost
+  for the embedded daemon, with a reused SSH tunnel for remote profiles; cloud
+  needs no tunnel). All three stay read-only or route writes back through the
+  sanctioned path. See `docs/security.md` and `docs/integration-coverage.md`.
 
   This is the sharpest contrast with **Scarf**, which reads `state.db` directly
   (read-only SQLite, WAL mode), watches YAML/JSON/Markdown on disk, and writes
@@ -127,6 +131,7 @@ from a phone" and lose on native feel and offline integration.
 | Messaging-platform setup forms | ✅ 8 + auto | ✅ | ✅ 16 | 🟡 | ✅ 13 | 🟡 |
 | Soul / personality editor | ✅ both | 🟡 | ✅ SOUL.md | 🟡 | ✅ both | ⬜ |
 | Memory (`MEMORY.md`/`USER.md`) editor | ✅ | 🟡 | ✅ | 🟡 | ✅ | ✅ |
+| Hindsight memory browse / search | ✅ list + recall, local & cloud | ⬜ | ⬜ | ⬜ | ⬜ | ⬜ |
 | Config editor (schema-driven) | ✅ | ✅ | 🟡 | ✅ | ✅ 10-tab | ✅ |
 | Environment (`.env`) CRUD | ✅ | 🟡 | 🟡 | ✅ | ✅ | 🟡 |
 | Logs viewer (filter / tail) | ✅ | 🟡 | ✅ | ✅ | ✅ session pills | 🟡 |

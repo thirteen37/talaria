@@ -1025,17 +1025,25 @@ final class SessionsStore {
             ?? normalizedTitle(viewModels[id]?.title)
     }
 
-    /// Focuses the session a tapped notification points at: selects the tab if
-    /// it's already open, otherwise opens it via the dashboard summary so the
-    /// chat that prompted the notification comes to the front.
-    func focusSession(route: NotificationRoute) {
-        if openSessions.contains(where: { $0.id == route.sessionId }) {
-            selection = route.sessionId
+    /// Opens a session by id for a deep link (a notification tap, or an
+    /// ``EntityLink`` to `.session`): selects the tab if it's already open,
+    /// otherwise opens it via its dashboard summary so the chat comes to the
+    /// front (resolving source / read-only). `title` seeds the tab header when
+    /// known. Without this, setting `selection` to an *unopened* id just falls
+    /// back to the browse list.
+    func openSession(id: SessionId, title: String = "") {
+        if openSessions.contains(where: { $0.id == id }) {
+            selection = id
             return
         }
         Task {
-            await openExisting(HermesSessionSummary(id: route.sessionId, title: route.title ?? ""))
+            await openExisting(HermesSessionSummary(id: id, title: title))
         }
+    }
+
+    /// Focuses the session a tapped notification points at.
+    func focusSession(route: NotificationRoute) {
+        openSession(id: route.sessionId, title: route.title ?? "")
     }
 
     private func observe(id: SessionId, notification: HermesNotification) {

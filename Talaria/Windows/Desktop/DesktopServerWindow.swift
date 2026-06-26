@@ -276,7 +276,11 @@ struct DesktopServerWindow: View {
     private func routeFocus(_ ref: EntityRef?, harness: ServerWindowHarness) {
         guard let ref else { return }
         if let id = ref.sessionId {
-            harness.store.selection = id
+            // Open the session (not just select) so a deep link to a session that
+            // isn't an open tab — e.g. a historical session from a Hindsight
+            // `session:`/`parent:` tag — actually surfaces its chat instead of
+            // dropping to the sessions list.
+            harness.store.openSession(id: id)
             navigator.pendingFocus = nil
         } else {
             harness.store.selection = nil

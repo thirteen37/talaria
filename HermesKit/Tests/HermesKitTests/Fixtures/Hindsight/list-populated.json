@@ -1,0 +1,15 @@
+{
+  "items": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "text": "Alice works at Google on the AI team",
+      "date": "2024-01-15T10:30:00Z",
+      "context": "Work conversation",
+      "entities": "Alice (PERSON), Google (ORGANIZATION)",
+      "type": "world"
+    }
+  ],
+  "total": 150,
+  "limit": 100,
+  "offset": 0
+}

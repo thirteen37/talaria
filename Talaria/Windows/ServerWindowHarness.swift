@@ -93,6 +93,13 @@ final class ServerWindowHarness {
     /// for capability gating — see ``effectiveHermesVersion``.
     var liveHermesVersion: HermesVersion?
 
+    /// Active memory provider name from `GET /api/memory` (`""` = built-in),
+    /// resolved **once in the background** when the dashboard connects
+    /// (``refreshMemoryProvider()``). Lets the Soul/Personalities/Memory
+    /// destination gate its Hindsight tab on a cached value instead of paying
+    /// for the round-trip on every switch. `nil` until first resolved.
+    var activeMemoryProvider: String?
+
     /// iOS only: the live NIO-SSH dashboard tunnel the gateway chat factory rides
     /// for `/api/ws` (iOS has no loopback socket). Filled by `acquireDashboard()`
     /// once the dashboard connects; nil on macOS (which uses `DashboardCoordinator`)
@@ -406,6 +413,17 @@ final class ServerWindowHarness {
         guard let dashboardClient else { return }
         if let status = try? await dashboardClient.getStatus() {
             liveHermesVersion = HermesVersion(status.version)
+        }
+    }
+
+    /// Best-effort resolve of the active memory provider, cached so the
+    /// Soul/Personalities/Memory destination's Hindsight-tab gate reads it
+    /// synchronously. Called from the platform `acquireDashboard()` (background),
+    /// and as a fallback by the destination if still unresolved.
+    func refreshMemoryProvider() async {
+        guard let dashboardClient else { return }
+        if let status = try? await dashboardClient.getMemory() {
+            activeMemoryProvider = status.active
         }
     }
 
