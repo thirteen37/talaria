@@ -246,6 +246,9 @@ extension ServerWindowHarness {
             // Capture the live version now the dashboard is reachable, so
             // capability gating uses it over the profile's cached probe value.
             await refreshLiveVersion()
+            // Resolve the memory provider in the background so the Soul/Memory
+            // destination's Hindsight tab gate is instant (no per-switch fetch).
+            await refreshMemoryProvider()
         } catch {
             guard !Task.isCancelled, !dashboardReleased else { return }
             dashboardClient = nil

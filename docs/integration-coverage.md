@@ -13,6 +13,10 @@ Talaria talks to Hermes through four channels:
 - **Hermes CLI fallbacks** where the dashboard does not expose a route yet.
 - **Embedded TUI (PTY)** for rendering `hermes chat --tui` inline as an alternative to native gateway chat (macOS only).
 
+One surface also talks to a service *outside* Hermes:
+
+- **Hindsight REST API (direct)** — read-only memory browse/search when Hindsight is the active memory provider. Hermes exposes no route to browse Hindsight's vector store (`GET /api/memory` is status-only), so Talaria calls Hindsight's own `/v1/{tenant}/banks/{bank}/…` API directly — `http://127.0.0.1:<port>` for the local-embedded daemon (no auth), or the configured `api_url` + `HINDSIGHT_API_KEY` for cloud / local_external. See **Hindsight Browse**.
+
 Talaria does not read or write Hermes SQLite files directly.
 
 ## Capability Gates
@@ -81,7 +85,7 @@ window consumers, and tears the child down when the last consumer releases it.
 | Config editor | `GET /api/config/schema`, `GET /api/config`, `PUT /api/config` |
 | Soul & Personalities editor | Base `SOUL.md` via `GET`/`PUT /api/profiles/{profile}/soul` (profile-scoped; no top-level `/api/soul`); `agent.personalities` overlays via the config editor (`GET`/`PUT /api/config`) — both in one integrated split view |
 | Environment (.env) | `GET /api/env`, `PUT /api/env`, `DELETE /api/env`, `POST /api/env/reveal` (custom-var enumeration is a direct `.env` read — see **Direct File I/O**) |
-| Memory (provider status) | `GET /api/memory` — read-only active provider + sizes only. The `MEMORY.md` / `USER.md` **text** has no route; it is edited direct-disk (see **Direct File I/O**). The provider picker uses `PUT /api/memory/provider` (Plugins). |
+| Memory (provider status) | `GET /api/memory` — read-only active provider + sizes only. The `MEMORY.md` / `USER.md` **text** has no route; it is edited direct-disk (see **Direct File I/O**). When `active == "hindsight"`, a **Hindsight** browse tab appears that calls Hindsight's API directly (see **Hindsight Browse**). The provider picker uses `PUT /api/memory/provider` (Plugins). |
 | MCP servers | `GET`/`POST /api/mcp/servers`, `POST /api/mcp/servers/{name}/test`, `PUT /api/mcp/servers/{name}/enabled`, `DELETE /api/mcp/servers/{name}`, `GET /api/mcp/catalog`, `POST /api/mcp/catalog/install` (gated on `requiresMCPAPI` ≥ `0.15.1`) |
 
 The server window shares one dashboard per `ServerProfile`. Cross-profile reads
@@ -128,9 +132,63 @@ home-relative paths as the snapshot reader.
 | --- | --- | --- | --- |
 | Environment custom-var list | read | `.env` (path from `hermes config env-path`) | Enumerates user-named keys `GET /api/env` omits; redacted preview only. Mutations stay on the dashboard. |
 | Memory editor | read **and write** | `memories/MEMORY.md`, `memories/USER.md` (`profiles/<name>/…` for a named profile) | The one direct-**write** exception and the first non-dashboard remote write. Remote writes stream to a temp + atomic rename, reusing the read path's SSH auth + TOFU host-key trust (no new trust surface). `HermesMemoryStore` wraps `HermesFileStore`. The agent co-owns these files, so the editor re-reads before writing and confirms before overwriting an out-of-band change. |
+| Hindsight browse (endpoint resolution) | read | `hindsight/config.json` (`profiles/<name>/…` for a named profile; legacy fallback `~/.hindsight/config.json`), `~/.hindsight/profiles/metadata.json` | Read-only, to resolve the Hindsight REST endpoint (mode, `api_url`, `bank_id`/`bank_id_template`, embedded profile→port). No mutation. `HindsightEndpointResolver` wraps `HermesFileStore`. See **Hindsight Browse**. |
 
 These are the only direct-file paths; Talaria still never touches Hermes SQLite
 files directly.
+
+## Hindsight Browse
+
+When the active memory provider is **Hindsight**, the Memory destination grows a
+read-only **Hindsight** tab that browses and searches the provider's stored
+memories. Hermes has no route for this (the `hindsight-client` SDK it uses calls
+only `retain`/`recall`/`reflect`), so Talaria talks to Hindsight's REST API
+directly — the same FastAPI server (`hindsight-api`) backs Hindsight Cloud and
+the local-embedded daemon, exposing one shared `/v1/{tenant}/banks/{bank}/…`
+surface.
+
+| Operation | Route |
+| --- | --- |
+| List (newest-first, paginated, optional `q` full-text) | `GET /v1/default/banks/{bank}/memories/list?limit=&offset=&q=` |
+| Search (semantic / multi-strategy) | `POST /v1/default/banks/{bank}/memories/recall` |
+
+A memory's `tags` are classified by namespace (`HindsightTagRef`). Hermes tags
+retains with lineage refs `session:<id>` (the session it was retained in) and
+`parent:<id>` (the parent session it was resumed/forked from) — **both are Hermes
+session ids**, so each deep-links to its chat via the shared
+`EntityLink`/`EntityRef.session`. Other tags render inert.
+
+Endpoint resolution (`HindsightEndpointResolver` → `HindsightEndpoint`):
+
+- **local_embedded** (primary target): base URL `http://127.0.0.1:<port>`, **no
+  auth**. Port is `8888` for the literal `default` profile, else read from
+  `~/.hindsight/profiles/metadata.json` for the configured embedded profile
+  (default `hermes`).
+- **cloud / local_external**: base URL from `api_url` (cloud default
+  `https://api.hindsight.vectorize.io`); `Authorization: Bearer <HINDSIGHT_API_KEY>`.
+- **bank_id**: the static `bank_id`/`banks.hermes.bankId`, or a `bank_id_template`
+  resolved (placeholders sanitized/collapsed) mirroring Hermes.
+
+The client (`HindsightAPIClient`) is read-only — it never calls retain/delete.
+
+**Remote profiles** are supported by tunnelling to the remote daemon's loopback,
+reusing the dashboard's SSH forwarding (`HindsightRemoteTransport`):
+
+- **macOS** (`SSHForwardHindsightTransport`): a managed `ssh -L <ephemeral>:127.0.0.1:<remotePort> -N`
+  forward (`DashboardSpawnSpec.forward`, same auth/host-key trust as the dashboard);
+  the client talks to the local end over `URLSession`. The forward is torn down when
+  the surface leaves.
+- **iOS** (`NIOHindsightTransport`): a `direct-tcpip` channel on the window's existing
+  `NIOSSHDashboardConnection` straight to `127.0.0.1:<remotePort>` (via `NIOSSHDashboardHTTP`),
+  no forward process.
+
+The resolver returns a `HindsightResolution` whose `remoteEmbeddedPort` is non-nil for a
+remote `local_embedded` daemon (port read from the remote `metadata.json` over SSH); the
+view model then opens the platform transport. A remote **cloud** Hindsight needs no tunnel
+(config read over SSH; cloud API reachable directly). If no transport is available, the tab
+shows `HindsightBrowseError.remoteEmbeddedUnsupported` guidance. Decoding is deliberately
+tolerant of the external shape (`text`||`content`, `date`||`timestamp`||`mentioned_at`,
+`entities` as string or list).
 
 ## Terminal (TUI) Sessions
 

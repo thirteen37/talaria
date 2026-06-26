@@ -1,0 +1,36 @@
+{
+  "results": [
+    {
+      "id": "123e4567-e89b-12d3-a456-426614174000",
+      "text": "Alice works at Google on the AI team",
+      "type": "world",
+      "context": "work info",
+      "entities": ["Alice", "Google"],
+      "occurred_start": "2024-01-15T10:30:00Z",
+      "occurred_end": "2024-01-15T10:30:00Z",
+      "mentioned_at": "2024-01-15T10:30:00Z",
+      "document_id": "session_abc123",
+      "metadata": { "source": "slack" },
+      "chunk_id": "456e7890-e12b-34d5-a678-901234567890",
+      "tags": ["user_a", "user_b"]
+    }
+  ],
+  "trace": { "num_results": 1, "query": "What did Alice say about machine learning?", "time_seconds": 0.123 },
+  "entities": {
+    "Alice": {
+      "canonical_name": "Alice",
+      "entity_id": "123e4567-e89b-12d3-a456-426614174001",
+      "observations": [
+        { "mentioned_at": "2024-01-15T10:30:00Z", "text": "Alice works at Google on the AI team" }
+      ]
+    }
+  },
+  "chunks": {
+    "456e7890-e12b-34d5-a678-901234567890": {
+      "id": "456e7890-e12b-34d5-a678-901234567890",
+      "chunk_index": 0,
+      "text": "Alice works at Google on the AI team. She's been there for 3 years..."
+    }
+  },
+  "source_facts": null
+}

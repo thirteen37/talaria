@@ -260,7 +260,9 @@ struct PhoneServerWindow: View {
     private func routeFocus(_ ref: EntityRef?, harness: ServerWindowHarness) {
         guard let ref else { return }
         if let id = ref.sessionId {
-            harness.store.selection = id
+            // Open (not just select) so a deep link to a not-yet-open session —
+            // e.g. a historical session from a Hindsight tag — surfaces its chat.
+            harness.store.openSession(id: id)
             navigator.pendingFocus = nil
         } else if !showingBrowse {
             browseDeepLink = ref.destination

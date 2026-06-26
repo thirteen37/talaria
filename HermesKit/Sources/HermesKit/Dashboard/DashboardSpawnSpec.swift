@@ -175,6 +175,45 @@ public struct DashboardSpawnSpec: Sendable, Equatable {
         )
     }
 
+    /// Spec for a **pure loopback port-forward** to a remote SSH host — no remote
+    /// command, just `ssh -L <local>:127.0.0.1:<remote> -N`. Used to reach a
+    /// remote profile's Hindsight daemon (which binds the remote loopback) from
+    /// the local app. Reuses the exact SSH boilerplate as
+    /// ``remote(profile:localPort:remotePort:)`` (BatchMode, ConnectTimeout,
+    /// keepalives, identity file, custom port) so auth/host-key trust are
+    /// identical. No watchdog: there's no remote process to reap — the forward
+    /// just closes when the local `ssh` exits.
+    public static func forward(
+        profile: ServerProfile,
+        localPort: Int,
+        remotePort: Int
+    ) -> DashboardSpawnSpec {
+        var arguments: [String] = [
+            "-T",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=5",
+            "-o", "ServerAliveInterval=5",
+            "-o", "ServerAliveCountMax=3",
+            "-L", "\(localPort):127.0.0.1:\(remotePort)",
+            "-N",
+        ]
+        if let port = profile.port {
+            arguments += ["-p", String(port)]
+        }
+        if let identityFile = profile.identityFile, !identityFile.isEmpty {
+            arguments += ["-i", identityFile]
+        }
+        let host = profile.host ?? ""
+        let destination = profile.user.map { "\($0)@\(host)" } ?? host
+        arguments += ["--", destination]
+
+        return DashboardSpawnSpec(
+            executable: URL(fileURLWithPath: "/usr/bin/ssh"),
+            arguments: arguments,
+            environment: [:]
+        )
+    }
+
     /// Spec for spawning the dashboard on a remote SSH host over the pure-Swift
     /// NIO-SSH transport (iOS, where `/usr/bin/ssh` and `Process` don't exist).
     /// Unlike ``remote(profile:localPort:remotePort:)`` there's no `ssh -L`
