@@ -304,11 +304,32 @@ final class LocalChatViewModel {
         loadGitBranch()
 
         let stream = await manager.notifications(for: sessionId)
+        let id = sessionId
         notificationTask = Task { [weak self] in
             for await notification in stream {
                 await self?.handle(notification: notification)
             }
+            // The notification stream ended. Intentional teardown (`shutdown()` /
+            // `restart()`) cancels this task first, so a non-cancelled exit means
+            // the live WebSocket died out from under a session meant to be alive —
+            // the macOS silent-WS-death case (no background→foreground hook to
+            // recover it). Ask the store to recover the connection.
+            if !Task.isCancelled {
+                self?.store?.handleLiveSessionDied(id: id)
+            }
         }
+    }
+
+    /// Cancels the live notification subscription *without* the `restart()`
+    /// re-subscribe or `shutdown()` turn-state teardown. ``SessionsStore`` calls
+    /// this before it deliberately closes a still-live manager session during a
+    /// full ``SessionsStore/recoverLiveSessions(limitedTo:)`` re-resume, so the
+    /// resulting stream-end is observed as *cancelled* (intentional) and doesn't
+    /// spuriously trip ``SessionsStore/handleLiveSessionDied(id:)`` for a session
+    /// that's being recovered, not dying. A no-op once the task has exited.
+    func suspendNotifications() {
+        notificationTask?.cancel()
+        notificationTask = nil
     }
 
     /// Re-subscribes after a reconnect re-resumed this session on a fresh

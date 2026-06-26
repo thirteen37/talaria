@@ -26,6 +26,10 @@ public final class URLSessionGatewayWebSocket: NSObject, GatewayWebSocket, URLSe
     /// HTTP status the server returned on a rejected upgrade, captured by the
     /// delegate (`task.response`) so the stream error can name it.
     private var handshakeStatus: Int?
+    /// Repeating keepalive ping that keeps a healthy idle socket from tripping
+    /// URLSession's 60s receive timeout (see ``GatewayKeepalive``). Cancelled in
+    /// ``close()``.
+    private var keepalive: GatewayKeepalive?
 
     /// Build the `ws://…/api/ws?<credential>` URL from the dashboard's base
     /// (`http://127.0.0.1:<port>`) and the auth credential, then open the socket.
@@ -41,9 +45,13 @@ public final class URLSessionGatewayWebSocket: NSObject, GatewayWebSocket, URLSe
         self.init(url: url, session: session)
     }
 
-    /// - Parameter session: injected only by tests; production passes `nil` so we
-    ///   build a delegate-backed session (required to observe the handshake).
-    public init(url: URL, session: URLSession? = nil) {
+    /// - Parameters:
+    ///   - session: injected only by tests; production passes `nil` so we build a
+    ///     delegate-backed session (required to observe the handshake).
+    ///   - pingInterval: keepalive cadence. Default 20s — well under the 60s
+    ///     receive timeout — so a healthy idle socket draws a server PONG that
+    ///     resets the idle timer before it can fire. Injectable for tests.
+    public init(url: URL, session: URLSession? = nil, pingInterval: TimeInterval = 20) {
         self.redactedURL = Self.redact(url)
         self.ownsSession = (session == nil)
 
@@ -60,6 +68,32 @@ public final class URLSessionGatewayWebSocket: NSObject, GatewayWebSocket, URLSe
         HermesLog.gateway.info("connecting \(self.redactedURL, privacy: .public)")
         task.resume()
         startReceiveLoop()
+        startKeepalive(interval: pingInterval)
+    }
+
+    /// Starts the repeating keepalive ping on ``stateQueue`` (the same queue that
+    /// serializes `closed`). A failed ping means the socket is dead/half-open, so
+    /// it tears the stream down the same way ``receiveNext()``'s failure branch
+    /// does — detection of a dead connection isn't deferred to the next receive
+    /// timeout. The 60s receive timeout stays as a backstop for a hung socket.
+    private func startKeepalive(interval: TimeInterval) {
+        let keepalive = GatewayKeepalive(
+            interval: interval,
+            queue: stateQueue,
+            send: { [weak self] pong in self?.task.sendPing(pongReceiveHandler: pong) },
+            onFailure: { [weak self] error in self?.handlePingFailure(error) }
+        )
+        self.keepalive = keepalive
+        keepalive.start()
+    }
+
+    /// Invoked on ``stateQueue`` when a keepalive ping fails. Guards on `closed`
+    /// (a close races the in-flight ping) and finishes the stream with the error,
+    /// matching the `receiveNext` failure teardown.
+    private func handlePingFailure(_ error: Error) {
+        guard !closed else { return }
+        HermesLog.gateway.error("keepalive ping failed: \(error.localizedDescription, privacy: .public) (\((error as NSError).code, privacy: .public)) for \(self.redactedURL, privacy: .public)")
+        continuation.finish(throwing: error)
     }
 
     /// Maps an `http(s)://host:port` dashboard base to the matching
@@ -105,6 +139,7 @@ public final class URLSessionGatewayWebSocket: NSObject, GatewayWebSocket, URLSe
             return false
         }
         guard !alreadyClosed else { return }
+        keepalive?.stop()
         task.cancel(with: .goingAway, reason: nil)
         // Break the URLSession→delegate(self) retain so we deallocate.
         if ownsSession { urlSession.invalidateAndCancel() }
@@ -143,6 +178,11 @@ public final class URLSessionGatewayWebSocket: NSObject, GatewayWebSocket, URLSe
                     self.continuation.finish(throwing: nil)
                     return
                 }
+                // The socket is dead — stop the keepalive, symmetric with the
+                // ping-failure path (`GatewayKeepalive.fire()`), so a known-dead
+                // socket isn't pinged for up to one more interval before its next
+                // ping fails. Idempotent if the ping path already self-terminated.
+                self.keepalive?.stop()
                 // Prefer the HTTP status the delegate captured from the rejected
                 // upgrade; fall back to the task.response, then the raw error.
                 let status = self.stateQueue.sync { self.handshakeStatus }

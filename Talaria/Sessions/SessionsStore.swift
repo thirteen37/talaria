@@ -169,6 +169,37 @@ final class SessionsStore {
     var dashboardClient: DashboardClient?
     let defaultCwd: String
 
+    /// Wired by the window harness to its connection-recovery entry point
+    /// (``ServerWindowHarness/recoverConnectionIfNeeded()``). Invoked when a live
+    /// chat's notification stream dies unexpectedly — the macOS silent-WS-death
+    /// trigger. Every harness wires this (the designated init, incl. `makeMock()`);
+    /// nil only for unit-test stores constructed directly without a harness.
+    var requestRecovery: (@MainActor () -> Void)?
+
+    /// Reports whether the harness already has a recovery pass in flight. The
+    /// recovery driver consults it so it doesn't count a still-running pass (a
+    /// `performRecovery()` can block on a ~15s SSH connect timeout) as a failed
+    /// attempt and give up early. Wired alongside ``requestRecovery``; nil only for
+    /// unit-test stores built without a harness, where it reads as "not recovering".
+    var recoveryInFlight: (@MainActor () -> Bool)?
+
+    /// Coalesces silent-stream-death recovery into a single driver that keeps
+    /// re-asking the harness to recover until no live session's stream is dead.
+    /// Non-nil while draining; further deaths fold into it. See
+    /// ``handleLiveSessionDied(id:)``.
+    private var recoveryDriver: Task<Void, Never>?
+
+    /// Gap between recovery re-attempts while sessions remain dead — rate-limits a
+    /// flapping connection so it can't spin a tight re-resume loop. Injectable so
+    /// the retry cadence can be driven deterministically in tests.
+    private let recoveryDebounce: TimeInterval
+
+    /// How many *completed* recovery passes may fail to shrink the dead set before
+    /// the driver gives up. Past this, a persistently-unreachable dashboard stops
+    /// the loop and degrades to the manual-Reconnect error banner instead of an
+    /// unbounded full-reconnect loop. Progress (the set shrinking) resets the count.
+    private static let maxStalledRecoveryAttempts = 5
+
     /// This window's profile id, stamped onto every notification so a tapped
     /// banner can be routed back to the right window. Nil for the mock harness /
     /// tests, which never notify.
@@ -228,6 +259,7 @@ final class SessionsStore {
         tuiSpecFactory: TUISpecFactory? = nil,
         onCloseTUI: (@MainActor @Sendable (SessionId) -> Void)? = nil,
         tuiPollInterval: Duration = .seconds(5),
+        recoveryDebounce: TimeInterval = 5,
         profileId: UUID? = nil,
         notifier: ChatNotifier? = nil
     ) {
@@ -235,6 +267,7 @@ final class SessionsStore {
         self.adminRunner = adminRunner
         self.dashboardClient = dashboardClient
         self.defaultCwd = defaultCwd
+        self.recoveryDebounce = recoveryDebounce
         self.cwdStore = cwdStore
         self.isAwaitingUserInput = isAwaitingUserInput
         self.tuiSpecFactory = tuiSpecFactory
@@ -467,8 +500,12 @@ final class SessionsStore {
 
             // 1. Tear down the dead manager session (the step the manual
             //    reconnect used to skip, leaving the tab permanently dead).
+            //    Cancel the VM's notification loop *before* closing so the
+            //    stream-end reads as intentional (cancelled) — a still-live session
+            //    being recovered here must not trip `handleLiveSessionDied`.
             statusTasks[id]?.cancel()
             statusTasks[id] = nil
+            vm.suspendNotifications()
             await manager.close(id: id)
 
             // 2. Only sessions the gateway persisted are resumable. `openExisting`
@@ -520,6 +557,58 @@ final class SessionsStore {
                   viewModels[tab.id]?.isReadOnly == false else { return nil }
             return tab.id
         })
+    }
+
+    /// A live chat's notification stream died while the session was meant to be
+    /// alive — the macOS silent-WS-death case (a keepalive ping finally failed, or
+    /// the receive timeout fired). On iOS the background→foreground hook recovers
+    /// this; macOS has no such hook, so the chat VM routes the stream end here.
+    /// Asks the harness to recover (probe `/api/status`, then re-resume only the
+    /// dead sessions via ``recoverLiveSessions(limitedTo:)``).
+    ///
+    /// Coalesced into a single **driver** keyed off the dead-session set, not a
+    /// wall-clock debounce: it triggers a recovery immediately, then keeps
+    /// re-triggering for as long as any live session's stream is still dead
+    /// (``deadLiveSessionIds()``). Keying off the set (rather than a one-shot timer)
+    /// guarantees a session whose socket died *after* an in-flight recovery
+    /// snapshotted its set — or one whose recovery outlasts any fixed window — still
+    /// gets a pass, instead of stranding until a manual Reconnect.
+    ///
+    /// **Bounded.** Each loop waits a ``recoveryDebounce`` (rate-limiting a flapping
+    /// connection) and skips while a pass is still in flight (so a slow
+    /// `performRecovery` isn't miscounted). A *completed* pass that fails to shrink
+    /// the dead set counts as stalled; after ``maxStalledRecoveryAttempts`` stalls
+    /// the driver gives up — a fully-unreachable dashboard then degrades to the
+    /// existing manual-Reconnect error banner rather than an unbounded reconnect
+    /// loop. Forward progress (the set shrinking) resets the count, and an empty set
+    /// (every session re-resumed or marked lost) ends the driver cleanly.
+    func handleLiveSessionDied(id: SessionId) {
+        // No harness wired (mock/tests) → nothing to drive. A driver already
+        // running re-scans the whole dead set each pass, so this death is covered.
+        guard requestRecovery != nil, recoveryDriver == nil else { return }
+        requestRecovery?()   // immediate first attempt
+        recoveryDriver = Task { [weak self] in
+            guard let self else { return }
+            defer { self.recoveryDriver = nil }
+            var stalled = 0
+            var previousDeadCount = Int.max
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(self.recoveryDebounce * 1_000_000_000))
+                // Don't evaluate (or re-trigger) while the harness is mid-pass —
+                // a `performRecovery` can block on a slow SSH connect, and counting
+                // those waits as failures would give up before it even finished.
+                if self.recoveryInFlight?() ?? false { continue }
+                let deadCount = await self.deadLiveSessionIds().count
+                if deadCount == 0 { break }   // every dead session resolved → done
+                // A completed pass that didn't shrink the set is a stall; progress
+                // resets the counter. Give up once a persistently-down dashboard
+                // has stalled enough — the manual-Reconnect banner takes over.
+                stalled = deadCount < previousDeadCount ? 0 : stalled + 1
+                previousDeadCount = deadCount
+                if stalled >= Self.maxStalledRecoveryAttempts { break }
+                self.requestRecovery?()
+            }
+        }
     }
 
     /// Whether the dashboard still has a row for `id` — i.e. the session

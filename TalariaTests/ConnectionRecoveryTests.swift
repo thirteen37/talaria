@@ -130,6 +130,25 @@ struct ConnectionRecoveryTests {
         }
     }
 
+    @Test
+    func recoverLiveSessionsDoesNotSpuriouslyTriggerRecovery() async throws {
+        // A full recovery closes each still-live manager session in step 1 before
+        // re-resuming it. That deliberate close must not be mistaken for a silent
+        // socket death: the VM's notification loop is cancelled first, so its
+        // stream-end reads as intentional and never fires `handleLiveSessionDied`.
+        let store = Self.makeStore(CountingBackendFactory(), Self.client(RecoveryStubHTTP()))
+        var recoveryTriggers = 0
+        store.requestRecovery = { recoveryTriggers += 1 }
+        await store.openExisting(HermesSessionSummary(id: "live-1", title: "Live", source: "acp"))
+
+        await store.recoverLiveSessions()
+        // Give any racing old-notification-task unwind a chance to (wrongly) fire.
+        try await Task.sleep(nanoseconds: 80_000_000)
+        #expect(recoveryTriggers == 0)
+
+        await store.closeTab("live-1")
+    }
+
     // MARK: - deadLiveSessionIds
 
     @Test
@@ -161,6 +180,68 @@ struct ConnectionRecoveryTests {
         // Read-only tabs have no manager session, so nothing can be dead.
         #expect(await store.deadLiveSessionIds().isEmpty)
         await store.closeTab("ext-1")
+    }
+
+    // MARK: - handleLiveSessionDied (macOS silent-WS-death trigger)
+
+    @Test
+    func handleLiveSessionDiedFiresRecoveryClosure() async {
+        let store = Self.makeStore(CountingBackendFactory(), Self.client(RecoveryStubHTTP()))
+        var calls = 0
+        store.requestRecovery = { calls += 1 }
+        store.handleLiveSessionDied(id: "live-1")
+        #expect(calls == 1)
+    }
+
+    @Test
+    func handleLiveSessionDiedDebouncesRapidTriggers() async {
+        let store = Self.makeStore(CountingBackendFactory(), Self.client(RecoveryStubHTTP()))
+        var calls = 0
+        store.requestRecovery = { calls += 1 }
+        // Two stream deaths in quick succession (a flapping socket, or several
+        // chats' sockets dying together) collapse to a single recovery trigger —
+        // the debounce window hasn't elapsed between the synchronous calls.
+        store.handleLiveSessionDied(id: "live-1")
+        store.handleLiveSessionDied(id: "live-2")
+        #expect(calls == 1)
+    }
+
+    @Test
+    func handleLiveSessionDiedNoOpWithoutRecoveryClosure() async {
+        // No wired harness (mock/test) must not crash — the closure is optional.
+        let store = Self.makeStore(CountingBackendFactory(), Self.client(RecoveryStubHTTP()))
+        store.handleLiveSessionDied(id: "live-1")
+    }
+
+    @Test
+    func handleLiveSessionDiedRetriesThenGivesUpWhenRecoveryNeverSucceeds() async throws {
+        // A fully-unreachable dashboard: the stub "recovery" only counts (never
+        // re-resumes and never marks lost), so the session stays dead. The driver
+        // must (a) retry more than once — not strand after a single shot — and then
+        // (b) give up after a bounded number of stalled attempts, degrading to the
+        // manual-Reconnect banner instead of looping forever. Inject a tiny cadence.
+        let store = SessionsStore(
+            manager: SessionManager(backendFactory: { MockChatBackend() }),
+            dashboardClient: Self.client(RecoveryStubHTTP()),
+            defaultCwd: "/tmp",
+            recoveryDebounce: 0.02
+        )
+        var calls = 0
+        store.requestRecovery = { calls += 1 }
+        await store.openExisting(HermesSessionSummary(id: "live-1", title: "Live", source: "acp"))
+
+        // Kill the socket; the VM observes the dead stream and starts the driver.
+        await store.manager.client(for: "live-1")?.close()
+        try await Task.sleep(nanoseconds: 300_000_000)   // many cadence windows
+        let afterRetries = calls
+        #expect(afterRetries >= 2)   // retried, not a one-shot
+
+        // Bounded: the driver gave up rather than re-firing forever.
+        try await Task.sleep(nanoseconds: 300_000_000)
+        #expect(calls == afterRetries)   // no further attempts — loop terminated
+        #expect(calls <= 8)              // within the stall cap
+
+        await store.closeTab("live-1")
     }
 
     // MARK: - openExisting(select:)
