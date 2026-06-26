@@ -2,6 +2,34 @@ import Foundation
 import HermesKit
 import UserNotifications
 
+/// Per-profile de-dupe for Hermes "update available" notifications. Multiple
+/// windows can be open for one profile (they share a dashboard), each running
+/// its own background update check; without this each would post its own banner
+/// for the same update. Keyed by profile → the token last notified (the version
+/// string for semver builds, a sentinel for versionless source builds whose
+/// commit-count detail drifts between checks). Cleared when a check reports the
+/// server is up to date, so a genuinely new update notifies again. A value type
+/// with no `UNUserNotificationCenter` dependency, so the gate is unit-testable
+/// in isolation.
+struct HermesUpdateNotificationDeduper {
+    private var lastToken: [UUID: String] = [:]
+
+    /// Returns `true` (and records the token) if this update hasn't been
+    /// notified for `profileId` yet; `false` if a prior notification — from this
+    /// or another window — already covered it.
+    mutating func shouldNotify(profileId: UUID, token: String) -> Bool {
+        guard lastToken[profileId] != token else { return false }
+        lastToken[profileId] = token
+        return true
+    }
+
+    /// Clears the profile's recorded token so the next update notifies again
+    /// (e.g. after the user applies the current one).
+    mutating func clear(profileId: UUID) {
+        lastToken[profileId] = nil
+    }
+}
+
 /// App-wide bridge to `UNUserNotificationCenter`: requests authorization, posts
 /// the two chat notifications, and turns a tapped banner into a
 /// ``NotificationRoute`` the window scene observes. One shared instance
@@ -34,6 +62,11 @@ final class ChatNotifier: NSObject {
     }
 
     private var didRequestAuthorization = false
+
+    /// Cross-window de-dupe for update notifications (see
+    /// ``HermesUpdateNotificationDeduper``). Lives on the shared instance so
+    /// every window's background loop consults one per-profile record.
+    private var updateDeduper = HermesUpdateNotificationDeduper()
 
     private override init() {
         super.init()
@@ -89,6 +122,50 @@ final class ChatNotifier: NSObject {
             body: body,
             displayTitle: title
         )
+    }
+
+    /// Posts the "a Hermes update is available" banner for `profileId`'s server,
+    /// unless another window already notified for the same update. `token` is the
+    /// stable update identity used to de-dupe across windows — the version string
+    /// for semver builds, a constant sentinel for source builds whose `detail`
+    /// commit-count drifts between checks. `detail` is the human-readable
+    /// delta/phrase shown in the banner ("1.2.3 → 1.3.0" or "122 commits behind
+    /// origin/main").
+    ///
+    /// Unlike the chat banners this carries **no** session route — there's no
+    /// chat session — so `userInfo` omits the route keys and a tap simply
+    /// foregrounds the app (`route(from:)` returns nil). The per-profile
+    /// `threadIdentifier` only groups whatever banners *are* posted in
+    /// Notification Center; collapsing duplicate updates into a single banner is
+    /// the ``HermesUpdateNotificationDeduper`` gate's job, since each request
+    /// carries a unique `identifier` and so never replaces another.
+    func postHermesUpdateAvailable(profileId: UUID, serverName: String, token: String, detail: String?) {
+        guard updateDeduper.shouldNotify(profileId: profileId, token: token) else { return }
+        let trimmedName = serverName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let server = trimmedName.isEmpty ? "your server" : trimmedName
+        let content = UNMutableNotificationContent()
+        content.title = "Hermes update available"
+        if let detail, !detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            content.body = "\(server): \(detail)"
+        } else {
+            content.body = "An update is available for \(server)."
+        }
+        content.sound = .default
+        content.threadIdentifier = "hermes-update-\(profileId.uuidString)"
+        // No route keys: there's no session to focus.
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    /// Clears the per-profile update-notification de-dupe so the next update
+    /// notifies again. Called by a window's background loop when a check reports
+    /// the server is up to date (the previous update was applied, or withdrawn).
+    func clearHermesUpdateNotification(profileId: UUID) {
+        updateDeduper.clear(profileId: profileId)
     }
 
     // MARK: - Delivery
