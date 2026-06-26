@@ -145,6 +145,60 @@ final class ServerWindowHarness {
         // in-flight pass as a failed attempt (and give up early).
         store.requestRecovery = { [weak self] in self?.recoverConnectionIfNeeded() }
         store.recoveryInFlight = { [weak self] in self?.isRecovering ?? false }
+        wireBackgroundUpdateChecks()
+    }
+
+    /// Connects the window-owned ``UpdatesHarness`` background loop to the shared
+    /// ``NotificationSettings`` (the toggle + interval) and ``ChatNotifier`` (the
+    /// OS notification), then starts the loop. The harness stays decoupled — it
+    /// reads a settings snapshot and fires a closure, never touching `ChatNotifier`
+    /// directly. A runner-less harness (the mock) is left inert by its own guards.
+    private func wireBackgroundUpdateChecks() {
+        updates?.settingsSnapshot = {
+            let s = ChatNotifier.shared.settings
+            return (s.checkForUpdatesInBackground, s.updateCheckInterval.duration)
+        }
+        updates?.onUpdateAvailable = { [id = profile.id, name = profile.name] status in
+            ChatNotifier.shared.postHermesUpdateAvailable(
+                profileId: id,
+                serverName: name,
+                token: Self.updateToken(for: status),
+                detail: Self.updateNotificationDetail(for: status)
+            )
+        }
+        updates?.onUpdateCleared = { [id = profile.id] in
+            ChatNotifier.shared.clearHermesUpdateNotification(profileId: id)
+        }
+        // Cross-window check-vs-apply interlock: a background check skips while
+        // any window on this profile is applying the shared source-install repo.
+        updates?.isProfileApplying = { [id = profile.id] in
+            UpdateApplyCoordinator.shared.isApplying(profileId: id)
+        }
+        updates?.markApplying = { [id = profile.id] on in
+            UpdateApplyCoordinator.shared.setApplying(on, profileId: id)
+        }
+        updates?.startBackgroundChecks()
+        updates?.observeSettings()
+    }
+
+    /// The version delta ("1.2.3 → 1.3.0") when both versions are known, else the
+    /// source-install freshness phrase ("122 commits behind origin/main").
+    private static func updateNotificationDetail(for status: UpdateStatus) -> String? {
+        if let current = status.current, let latest = status.latest {
+            return "\(UpdatesHarness.formatVersion(current)) → \(UpdatesHarness.formatVersion(latest))"
+        }
+        return status.detail
+    }
+
+    /// Stable cross-window de-dupe key for an available update: the target
+    /// version for semver builds, a constant sentinel for versionless source
+    /// builds (whose commit-count `detail` drifts between checks, so it can't key
+    /// the de-dupe).
+    private static func updateToken(for status: UpdateStatus) -> String {
+        if let latest = status.latest {
+            return UpdatesHarness.formatVersion(latest)
+        }
+        return "source-available"
     }
 
     /// Builds a harness backed by an in-process ``MockACPTransport`` for UI

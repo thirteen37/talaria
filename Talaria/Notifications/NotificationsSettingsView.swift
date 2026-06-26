@@ -41,6 +41,34 @@ struct NotificationsSettingsView: View {
                     Text("Notify me when")
                 }
             }
+
+            // Independent of the master toggle above: a user may want update
+            // notices without chat notices (or vice versa).
+            Section {
+                Toggle("Check for Hermes updates in the background", isOn: Binding(
+                    get: { settings.checkForUpdatesInBackground },
+                    set: { isOn in
+                        settings.checkForUpdatesInBackground = isOn
+                        // The surfacing is an OS notification, so ask for
+                        // permission the first time the user opts in.
+                        if isOn {
+                            ChatNotifier.shared.requestAuthorizationIfNeeded()
+                        }
+                    }
+                ))
+                .help("Periodically run `hermes update --check` and notify you when an update is available")
+
+                if settings.checkForUpdatesInBackground {
+                    Picker("Check every", selection: $settings.updateCheckInterval) {
+                        ForEach(UpdateCheckInterval.allCases, id: \.self) { interval in
+                            Text(interval.label).tag(interval)
+                        }
+                    }
+                    .help("How often to check for Hermes updates")
+                }
+            } header: {
+                Text("Hermes updates")
+            }
         }
 
         #if os(iOS)

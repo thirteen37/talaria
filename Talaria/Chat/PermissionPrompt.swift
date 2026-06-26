@@ -3,13 +3,44 @@ import SwiftUI
 
 struct PermissionPrompt: View {
     let state: PermissionPromptState
+    /// Focus binding owned by `ChatView` so the card can take focus when it first
+    /// appears (focus ring + steals key input from the disabled composer). Optional
+    /// and defaulted so non-focusing call sites (e.g. `PromptShotRenderer`) keep
+    /// compiling.
+    var isFocused: FocusState<Bool>.Binding? = nil
     let select: (PermissionOption) -> Void
     let cancel: () -> Void
 
+    /// Number of options that get a `⌥N` key-hint badge (and a matching shortcut in
+    /// `ChatView`'s persistent layer). Realistically ≤4; capped at 9 because the
+    /// shortcut keys are the single digits 1–9.
+    static let maxShortcutOptions = 9
+
     var body: some View {
-        // macOS: fixed comfortably-wide frame. iOS: scrollable, fills the sheet
-        // width so a tall payload stays reachable on a phone-sized screen.
-        promptBody.permissionPromptLayout()
+        // An inline transcript card (full width, kind-tinted border) rather than a
+        // modal sheet — it scrolls with the message list so history stays reachable
+        // while the prompt is pending.
+        if let isFocused {
+            card
+                .focusable()
+                .focused(isFocused)
+        } else {
+            card
+        }
+    }
+
+    private var card: some View {
+        promptBody
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(.background.secondary)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(headerIconColor.opacity(0.55), lineWidth: 1)
+            )
     }
 
     private var promptBody: some View {
@@ -44,41 +75,61 @@ struct PermissionPrompt: View {
             // agent with an empty value.
             if state.kind != .secret {
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(state.request.options, id: \.optionId) { option in
-                        optionButton(option)
+                    ForEach(Array(state.request.options.enumerated()), id: \.element.optionId) { index, option in
+                        optionButton(option, index: index)
                     }
                 }
             }
 
             HStack {
                 Spacer()
+                // No `.keyboardShortcut(.cancelAction)` here — Esc is owned by
+                // `ChatView`'s persistent shortcut layer, which survives this card
+                // scrolling out of the `LazyVStack`. A second `.cancelAction` would
+                // conflict with it.
                 Button("Cancel", role: .cancel, action: cancel)
-                    .keyboardShortcut(.cancelAction)
             }
         }
     }
 
     @ViewBuilder
-    private func optionButton(_ option: PermissionOption) -> some View {
+    private func optionButton(_ option: PermissionOption, index: Int) -> some View {
         // A clarify question's choices are answers, not allow/deny — render them
         // as neutral bordered buttons with no allow/deny icon.
         if state.kind == .question {
             Button {
                 select(option)
             } label: {
-                Text(option.name)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                optionLabel(Text(option.name), index: index)
             }
             .buttonStyle(.bordered)
         } else {
             Button {
                 select(option)
             } label: {
-                Label(option.name, systemImage: iconName(for: option.kind))
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                optionLabel(Label(option.name, systemImage: iconName(for: option.kind)), index: index)
             }
             .buttonStyle(.borderedProminent)
             .tint(tint(for: option.kind))
+        }
+    }
+
+    /// Wraps an option's label with its `⌥N` key-hint badge on the trailing edge.
+    /// Only the first `maxShortcutOptions` options are badged (matching the
+    /// shortcuts wired up in `ChatView`), and only where a hardware keyboard is
+    /// guaranteed — otherwise the badge would advertise an unreachable shortcut.
+    @ViewBuilder
+    private func optionLabel(_ label: some View, index: Int) -> some View {
+        HStack(spacing: 8) {
+            label
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if Platform.showsKeyboardShortcutHints, index < Self.maxShortcutOptions {
+                Text("⌥\(index + 1)")
+                    .font(.caption.monospaced())
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.thinMaterial, in: Capsule())
+            }
         }
     }
 

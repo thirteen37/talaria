@@ -636,12 +636,29 @@ struct DesktopServerWindow: View {
             store.selection = nil
             browse = destination
         } label: {
-            Label(destination.title, systemImage: destination.systemImage)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+            HStack(spacing: 6) {
+                Label(destination.title, systemImage: destination.systemImage)
+                Spacer(minLength: 0)
+                if showsUpdateBadge(for: destination) {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 8, height: 8)
+                        .accessibilityLabel("Hermes update available")
+                        .help("Hermes update available")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .listRowBackground(browse == destination && store.selection == nil ? Color.accentColor.opacity(0.15) : Color.clear)
+    }
+
+    /// The System row carries a pending-Hermes-update indicator, driven live by
+    /// the window-scoped ``UpdatesHarness`` (`@Observable`, so background checks
+    /// landing flip the dot without a manual refresh).
+    private func showsUpdateBadge(for destination: BrowseDestination) -> Bool {
+        destination == .system && harness?.updates?.status?.available == true
     }
 }
 

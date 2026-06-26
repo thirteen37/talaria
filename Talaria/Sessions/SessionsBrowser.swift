@@ -343,7 +343,12 @@ struct SessionsBrowser: View {
             let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
             var results: [HermesSessionSummary]
             if trimmed.isEmpty {
-                let response = try await client.listSessions(limit: 200)
+                // `minMessages: 1` asks Hermes to exclude empty (zero-message)
+                // sessions — e.g. gateway/Telegram rows that have nothing to
+                // display and would otherwise open a blank transcript. The
+                // filter applies to both the list and `total`, so the header
+                // count stays consistent. Older Hermes ignores it (no gate).
+                let response = try await client.listSessions(limit: 200, minMessages: 1)
                 results = response.sessions.map(HermesSessionSummary.init)
                 total = response.total
             } else {
