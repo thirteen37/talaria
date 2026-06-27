@@ -38,6 +38,10 @@ struct DesktopServerWindow: View {
     /// content so chat + browse surfaces can route to an entity's page; this
     /// window observes `pendingFocus` to switch pages, the target page clears it.
     @State private var navigator = WindowNavigator()
+    /// Tracks ⌘/⌥ held state so the sidebar's ⌘-digit badges and the chat
+    /// permission ⌥N badges can reveal themselves only while the modifier is down.
+    /// Inert on iOS/iPad (the seam stub never updates). Injected into `content`.
+    @State private var modifiers = ModifierKeyMonitor()
     @State private var showingSettings = false
     /// Sidebar visibility, driven by our custom toggle. We manage it ourselves
     /// (rather than letting the system own the sidebar button) so the toggle can
@@ -365,6 +369,12 @@ struct DesktopServerWindow: View {
             activeHermesProfile: controller.activeHermesProfile,
             isLoadingHermesProfiles: controller.hermesProfilesLoading,
             switchHermes: { name in switchHermesProfile(to: name) }))
+        // Arm the ⌘/⌥ held-state monitor for this window's lifetime and expose it
+        // to the sidebar + chat surfaces so their key-hint badges can reveal on
+        // hold. No-op on iOS/iPad (the seam stub does nothing).
+        .environment(modifiers)
+        .onAppear { modifiers.start() }
+        .onDisappear { modifiers.stop() }
     }
 
     @ViewBuilder
@@ -395,9 +405,12 @@ struct DesktopServerWindow: View {
             // top-of-window strip (see `bridgeWindowBanners` in `content`).
 
             Section("Browse") {
-                browseRow(.sessions, store: harness.store)
-                ForEach(sidebarLayout.visibleManageDestinations(), id: \.self) { destination in
-                    browseRow(destination, store: harness.store)
+                // Index drives the ⌘-digit hint badge and must match the View
+                // menu's section order (`[.sessions] + visibleManageDestinations()`,
+                // see `SectionMenu`): Sessions is 0, manage destinations follow.
+                browseRow(.sessions, index: 0, store: harness.store)
+                ForEach(Array(sidebarLayout.visibleManageDestinations().enumerated()), id: \.element) { offset, destination in
+                    browseRow(destination, index: offset + 1, store: harness.store)
                 }
             }
         }
@@ -500,7 +513,7 @@ struct DesktopServerWindow: View {
         return "\(user)\(host)\(port)"
     }
 
-    private func browseRow(_ destination: BrowseDestination, store: SessionsStore) -> some View {
+    private func browseRow(_ destination: BrowseDestination, index: Int, store: SessionsStore) -> some View {
         Button {
             store.selection = nil
             browse = destination
@@ -514,6 +527,20 @@ struct DesktopServerWindow: View {
                         .frame(width: 8, height: 8)
                         .accessibilityLabel("Hermes update available")
                         .help("Hermes update available")
+                }
+                // While ⌘ is held, reveal the section's ⌘-digit shortcut (the same
+                // one the View menu wires via `SectionShortcut`, so the badge and
+                // the menu shortcut can't drift). Past the tenth row there's no
+                // digit, so no badge. macOS-only (`showsKeyboardShortcutHints`).
+                if Platform.showsKeyboardShortcutHints,
+                   modifiers.command,
+                   let key = SectionShortcut.keyEquivalent(forIndex: index) {
+                    Text("⌘\(String(key.character))")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.ultraThinMaterial, in: Capsule())
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
