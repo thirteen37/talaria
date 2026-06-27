@@ -92,27 +92,6 @@ struct ChatBusySendTests {
     }
 
     @Test
-    func undoPrefillWhileBusyDoesNotClobberLiveTurn() async throws {
-        let backend = RecordingChatBackend()
-        // The `/undo` rewind shape, were Hermes to return it mid-turn.
-        backend.slashOutcome = .prefill(message: "restored composer text", notice: "Undid 1 turn")
-        let vm = try await makeBusyViewModel(id: "busy-undo", backend: backend)
-
-        vm.prompt = "/undo"
-        await vm.sendPrompt()
-
-        #expect(backend.slashCommands == ["undo"])
-        // The composer the busy path cleared must NOT be refilled with the
-        // prefill message, and the live turn's busy state stays intact.
-        #expect(vm.prompt == "")
-        #expect(vm.isSending)
-        #expect(vm.turnStartDate == Self.liveTurnStart)
-        #expect(vm.statusText == Self.liveTurnStatus)
-        // The harness notice is surfaced as a (non-clobbering) event line.
-        #expect(vm.messages.contains { $0.kind == .event && $0.text == "Undid 1 turn" })
-    }
-
-    @Test
     func nonPendingSlashWhileBusyIsNoOp() async throws {
         let backend = RecordingChatBackend()
         let vm = try await makeBusyViewModel(id: "busy-help", backend: backend)

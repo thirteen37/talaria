@@ -21,7 +21,7 @@ struct DesktopServerWindow: View {
     /// terminated while suspended); nil on macOS — the optional form keeps the
     /// shared save/restore wiring inert there (desktop windows aren't killed).
     @Environment(WindowRestorationStore.self) private var restoration: WindowRestorationStore?
-    @State private var harness: ServerWindowHarness?
+    @State private var controller = ServerWindowController()
     @State private var browse: BrowseDestination? = UITestFlags.screenshotBrowseDestination ?? .sessions
     /// Cold-relaunch restore runs at most once per window lifetime. (Window-scoped
     /// `@State`, so an in-window profile switch that rebuilds the harness does not
@@ -38,39 +38,24 @@ struct DesktopServerWindow: View {
     /// content so chat + browse surfaces can route to an entity's page; this
     /// window observes `pendingFocus` to switch pages, the target page clears it.
     @State private var navigator = WindowNavigator()
+    /// Tracks ⌘/⌥ held state so the sidebar's ⌘-digit badges and the chat
+    /// permission ⌥N badges can reveal themselves only while the modifier is down.
+    /// Inert on iOS/iPad (the seam stub never updates). Injected into `content`.
+    @State private var modifiers = ModifierKeyMonitor()
     @State private var showingSettings = false
     /// Sidebar visibility, driven by our custom toggle. We manage it ourselves
     /// (rather than letting the system own the sidebar button) so the toggle can
     /// carry a notification badge that stays visible when the sidebar collapses.
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    /// Live profile shown in this window. Diverges from `profileId` (the
-    /// `WindowGroup` launch value) once the user picks a different profile from
-    /// the sidebar switcher; the harness rebuild keys off this.
-    @State private var activeProfileId: UUID?
-    /// Active Hermes profile (`hermes -p <name>`) the whole window is scoped to.
-    /// Does not persist — resets to `default` on launch and on every server
-    /// switch. The harness rebuild keys off this alongside the server id.
-    @State private var activeHermesProfile = HermesProfiles.defaultProfileName
-    /// Hermes profiles available on the active server, enumerated after the
-    /// dashboard comes online. Drives the sidebar switcher; never fed into
-    /// `.task(id:)` (that would loop the rebuild).
-    @State private var hermesProfiles: [HermesProfileInfo] = []
-    /// True while the Hermes-profile list is loading, so the sidebar shows a
-    /// placeholder in the selector slot instead of popping the menu in. Cleared
-    /// once the dashboard produces an authoritative answer (success or error).
-    @State private var hermesProfilesLoading = true
-
-    private var currentProfileId: UUID { activeProfileId ?? profileId }
+    private var currentProfileId: UUID { controller.currentProfileId(default: profileId) }
 
     /// Combined rebuild identity: a change to either the server or the Hermes
     /// profile tears the harness down and rebuilds it.
-    private var harnessKey: HarnessKey {
-        HarnessKey(server: currentProfileId, hermes: activeHermesProfile)
-    }
+    private var harnessKey: ServerWindowHarnessKey { controller.harnessKey(default: profileId) }
 
     var body: some View {
         Group {
-            if let harness {
+            if let harness = controller.harness {
                 content(harness: harness)
             } else if directory.profiles.isEmpty && !Platform.supportsLocalProfile {
                 // iPad with no servers configured: offer the editor. macOS
@@ -81,18 +66,18 @@ struct DesktopServerWindow: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .navigationTitle(harness?.profile.name ?? directory.profile(id: currentProfileId)?.name ?? "Hermes")
-        .platformWindowSubtitle(subtitle(for: harness?.profile ?? directory.profile(id: currentProfileId)))
+        .navigationTitle(controller.harness?.profile.name ?? directory.profile(id: currentProfileId)?.name ?? "Hermes")
+        .platformWindowSubtitle(subtitle(for: controller.harness?.profile ?? directory.profile(id: currentProfileId)))
         .task(id: harnessKey) {
-            await rebuildHarness()
+            await controller.rebuild(defaultProfileId: profileId, directory: directory)
         }
         // The dashboard comes online async, after `rebuildHarness` already ran
         // its first (client-less) profile load. Re-run once it lands so the
         // switcher upgrades from default-only to the live dashboard list,
         // mirroring the config editor's dashboard-ready re-load.
-        .onChange(of: harness?.dashboardClient != nil) { _, hasClient in
-            guard hasClient, let harness else { return }
-            Task { await loadHermesProfiles(harness: harness) }
+        .onChange(of: controller.harness?.dashboardClient != nil) { _, hasClient in
+            guard hasClient, let harness = controller.harness else { return }
+            Task { await controller.loadHermesProfiles(harness: harness) }
             // Sessions resume over the dashboard, so a cold-launch restore can
             // only run once it's live. No-op on macOS (restoration store is nil).
             restoreIfNeeded(harness: harness)
@@ -100,21 +85,21 @@ struct DesktopServerWindow: View {
         // Last reliable hook before iOS may terminate the suspended app: persist
         // the navigation + open chats. No-op on macOS (the seam is a no-op there).
         .onEnterBackground {
-            if let harness { captureRestoration(harness: harness) }
+            if let harness = controller.harness { captureRestoration(harness: harness) }
         }
         // Clear the loading placeholder if the dashboard fails to spawn: the
         // client stays nil so the success path never fires, leaving the spinner
         // up forever otherwise.
-        .onChange(of: harness?.dashboardError != nil) { _, hasError in
-            if hasError { hermesProfilesLoading = false }
+        .onChange(of: controller.harness?.dashboardError != nil) { _, hasError in
+            if hasError { controller.hermesProfilesLoading = false }
         }
         // iPad: saving the first server (or a profile mutation while no harness
         // is live) connects without a relaunch. Harmless on macOS, which builds
         // a harness eagerly via the local fallback. Rebuilding while a harness
         // is live would drop the in-progress chat, so it's skipped then.
         .onChange(of: directory.profiles) { _, _ in
-            guard harness == nil else { return }
-            Task { await rebuildHarness() }
+            guard controller.harness == nil else { return }
+            Task { await controller.rebuild(defaultProfileId: profileId, directory: directory) }
         }
         // Settings sheet (iPad only — macOS uses the Settings scene). Attached
         // at body level so the no-server empty state can present it too.
@@ -127,7 +112,7 @@ struct DesktopServerWindow: View {
         .onDisappear {
             // Cancel the window-scoped log tailer + release the dashboard
             // refcount when the window closes.
-            harness?.tearDown()
+            controller.tearDown()
         }
     }
 
@@ -144,101 +129,8 @@ struct DesktopServerWindow: View {
     }
 
     @MainActor
-    private func rebuildHarness() async {
-        if UITestFlags.screenshotFixture {
-            hermesProfilesLoading = false
-            hermesProfiles = [
-                HermesProfileInfo(name: HermesProfiles.defaultProfileName, isDefault: true),
-                HermesProfileInfo(name: "release", isDefault: false),
-            ]
-            let previous = harness
-            let fixture = ServerWindowHarness.makeScreenshotFixture()
-            harness = fixture
-            previous?.tearDown()
-            if UITestFlags.opensScreenshotChat {
-                await fixture.openScreenshotSession()
-                if let promptKind = UITestFlags.screenshotPromptKind {
-                    // Let the chat surface attach its notification observer before
-                    // the scripted prompt is emitted, so the sheet actually shows.
-                    try? await Task.sleep(for: .milliseconds(400))
-                    fixture.emitScreenshotPrompt(promptKind)
-                }
-            }
-            return
-        }
-        if UITestFlags.mockServer {
-            // UI-test mode: bypass SSH entirely with an in-process ACP server.
-            // The mock never loads profiles and keeps a nil dashboard client, so
-            // clear the loading flag here or the placeholder would spin forever.
-            hermesProfilesLoading = false
-            let previous = harness
-            harness = ServerWindowHarness.makeMock()
-            previous?.tearDown()
-            return
-        }
-        // Re-arm the loading state so each rebuild/profile-switch re-shows the
-        // placeholder until the dashboard resolves the list.
-        hermesProfilesLoading = true
-        await directory.reload()
-        AppLog.general.info("rebuildHarness: \(directory.profiles.count) profile(s) configured")
-        let previous = harness
-        if let profile = ServerWindowHarness.resolveProfile(in: directory, requestedId: currentProfileId) {
-            harness = ServerWindowHarness.make(profile: profile, hermesProfileName: activeHermesProfile)
-        } else {
-            harness = nil
-        }
-        previous?.tearDown()
-        // Spawn the per-profile dashboard once the previous harness released
-        // its refcount. Done after `tearDown()` so the old supervisor is
-        // released before the new one acquires.
-        harness?.startDashboard()
-        // Enumerate the server's Hermes profiles for the sidebar switcher. Kept
-        // out of `.task(id:)` (it isn't a rebuild trigger — that would loop) and
-        // run as a detached child so a slow listing doesn't block the harness.
-        if let harness {
-            Task { await loadHermesProfiles(harness: harness) }
-        } else {
-            hermesProfiles = []
-        }
-    }
-
-    /// Populates `hermesProfiles` for the switcher straight from the dashboard
-    /// API (clean names + is-default flag). Stays default-only/hidden until the
-    /// dashboard is online or if the call fails — no CLI `profile list` fallback,
-    /// whose decorated table would leak marker glyphs into the menu. Re-run when
-    /// `dashboardClient` lands (see the `.onChange` below) to upgrade the list.
-    @MainActor
-    private func loadHermesProfiles(harness: ServerWindowHarness) async {
-        // Capture the client before the await: only a dashboard-backed load is
-        // authoritative. The first client-less load returns default-only and
-        // must keep the placeholder up until the dashboard lands.
-        let client = harness.dashboardClient
-        let profiles = await HermesProfiles.selectorProfiles(client: client)
-        // Drop a stale listing if the window rebuilt its harness (server or
-        // Hermes-profile switch) while this read was in flight — otherwise it
-        // would overwrite the active harness's profiles with the previous one's,
-        // offering `-p <name>`s the server lacks. Identity (not profile id) is
-        // the right key: a Hermes-profile switch keeps the server id but builds
-        // a fresh harness.
-        guard self.harness === harness else { return }
-        hermesProfiles = profiles
-        if client != nil { hermesProfilesLoading = false }
-    }
-
-    /// Re-runs the Hermes-profile listing after a Profiles mutation (clone /
-    /// rename / delete) so the sidebar switcher reflects the change. If the
-    /// currently-active `-p <name>` no longer exists (it was renamed or
-    /// deleted), falls back to `default` so the window isn't left scoped to a
-    /// dead profile.
-    @MainActor
     private func reconcileHermesProfiles(harness: ServerWindowHarness) {
-        Task {
-            await loadHermesProfiles(harness: harness)
-            guard self.harness === harness else { return }
-            if !hermesProfiles.contains(where: { $0.name == activeHermesProfile }) {
-                switchHermesProfile(to: HermesProfiles.defaultProfileName)
-            }
-        }
+        controller.reconcileHermesProfiles(harness: harness)
     }
 
     /// In-place profile swap: tears the old harness down before swapping
@@ -247,14 +139,9 @@ struct DesktopServerWindow: View {
     /// possibly-nonexistent named profile (both feed one key, so a single
     /// `.task` fire results).
     private func switchProfile(to newId: UUID) {
-        guard newId != currentProfileId else { return }
-        recents.record(newId)
-        harness?.tearDown()
-        harness = nil
-        browse = .sessions
-        hermesProfiles = []
-        activeHermesProfile = HermesProfiles.defaultProfileName
-        activeProfileId = newId
+        if controller.switchProfile(to: newId, launchProfileId: profileId, recents: recents) {
+            browse = .sessions
+        }
     }
 
     /// In-place Hermes-profile swap. Mirrors `switchProfile`: tears the harness
@@ -262,11 +149,9 @@ struct DesktopServerWindow: View {
     /// swapping `activeHermesProfile`, which re-fires `.task` to rebuild the
     /// whole window — dashboard, chat, and admin runner — under `-p <name>`.
     private func switchHermesProfile(to name: String) {
-        guard name != activeHermesProfile else { return }
-        harness?.tearDown()
-        harness = nil
-        browse = .sessions
-        activeHermesProfile = name
+        if controller.switchHermesProfile(to: name) {
+            browse = .sessions
+        }
     }
 
     /// Routes an `EntityLink` tap. A `.session` ref opens the chat (and clears
@@ -358,7 +243,7 @@ struct DesktopServerWindow: View {
               !didRestore, !userHasActed,
               harness.dashboardClient != nil,
               harness.store.openSessions.isEmpty,
-              self.harness === harness,
+              controller.harness === harness,
               harness.hostKeyCoordinator?.pending == nil,
               directory.profile(id: harness.profile.id) != nil
         else { return }
@@ -379,9 +264,13 @@ struct DesktopServerWindow: View {
         // selection once — after `isRestoring` clears, so the selection onChange
         // doesn't mistake restore's own write for a user tap.
         Task {
-            let reopened = await reopenSessions(harness: harness, snapshot: snapshot)
+            let reopened = await controller.reopenSessions(
+                harness: harness,
+                snapshot: snapshot,
+                shouldContinue: { !userHasActed }
+            )
             isRestoring = false
-            if let reopened, !userHasActed, self.harness === harness {
+            if let reopened, !userHasActed, controller.harness === harness {
                 harness.store.selection = WindowRestoration.resolvedSelection(
                     recorded: snapshot.selection,
                     reopened: reopened
@@ -391,26 +280,6 @@ struct DesktopServerWindow: View {
             // disk, so a capture would be a skip-if-equal no-op. Genuine navigation
             // re-captures from here on.
         }
-    }
-
-    /// Re-opens each recorded session via `reopenForRestore` (resolves cwd, seeds
-    /// history, **and skips a server-deleted / unpersisted id silently** — no error
-    /// banner) **without selecting** — the caller applies the recorded selection once
-    /// at the end (overriding nothing, since the loop didn't churn selection; a `nil`
-    /// recorded selection, i.e. Browse focused with tabs open, is therefore honored).
-    /// Returns the ids that re-opened, or `nil` if the restore was abandoned (the user
-    /// acted, via the `noteSelectionChange` latch, or the harness was replaced).
-    @MainActor
-    private func reopenSessions(harness: ServerWindowHarness, snapshot: WindowRestorationSnapshot) async -> [SessionId]? {
-        var reopened: [SessionId] = []
-        for id in snapshot.openSessionIds {
-            guard !userHasActed, self.harness === harness else { return nil }
-            if await harness.store.reopenForRestore(id: id, title: snapshot.openTitles[id] ?? "") {
-                reopened.append(id)
-            }
-        }
-        guard !userHasActed, self.harness === harness else { return nil }
-        return reopened
     }
 
     @ViewBuilder
@@ -496,10 +365,16 @@ struct DesktopServerWindow: View {
             serverProfiles: directory.allProfiles,
             currentServerId: currentProfileId,
             switchServer: { id in switchProfile(to: id) },
-            hermesProfiles: hermesProfiles,
-            activeHermesProfile: activeHermesProfile,
-            isLoadingHermesProfiles: hermesProfilesLoading,
+            hermesProfiles: controller.hermesProfiles,
+            activeHermesProfile: controller.activeHermesProfile,
+            isLoadingHermesProfiles: controller.hermesProfilesLoading,
             switchHermes: { name in switchHermesProfile(to: name) }))
+        // Arm the ⌘/⌥ held-state monitor for this window's lifetime and expose it
+        // to the sidebar + chat surfaces so their key-hint badges can reveal on
+        // hold. No-op on iOS/iPad (the seam stub does nothing).
+        .environment(modifiers)
+        .onAppear { modifiers.start() }
+        .onDisappear { modifiers.stop() }
     }
 
     @ViewBuilder
@@ -510,10 +385,10 @@ struct DesktopServerWindow: View {
                 profile: harness.profile,
                 profiles: directory.allProfiles,
                 onSwitchProfile: switchProfile,
-                hermesProfiles: hermesProfiles,
-                activeHermesProfile: activeHermesProfile,
+                hermesProfiles: controller.hermesProfiles,
+                activeHermesProfile: controller.activeHermesProfile,
                 onSwitchHermesProfile: switchHermesProfile,
-                isLoadingHermesProfiles: hermesProfilesLoading,
+                isLoadingHermesProfiles: controller.hermesProfilesLoading,
                 // The split-view sidebar is translucent (glass on iPad, sidebar
                 // material on macOS) and hides its grouped backdrop below, so
                 // rows render `.clear` to show it through.
@@ -530,9 +405,12 @@ struct DesktopServerWindow: View {
             // top-of-window strip (see `bridgeWindowBanners` in `content`).
 
             Section("Browse") {
-                browseRow(.sessions, store: harness.store)
-                ForEach(sidebarLayout.visibleManageDestinations(), id: \.self) { destination in
-                    browseRow(destination, store: harness.store)
+                // Index drives the ⌘-digit hint badge and must match the View
+                // menu's section order (`[.sessions] + visibleManageDestinations()`,
+                // see `SectionMenu`): Sessions is 0, manage destinations follow.
+                browseRow(.sessions, index: 0, store: harness.store)
+                ForEach(Array(sidebarLayout.visibleManageDestinations().enumerated()), id: \.element) { offset, destination in
+                    browseRow(destination, index: offset + 1, store: harness.store)
                 }
             }
         }
@@ -600,8 +478,8 @@ struct DesktopServerWindow: View {
             BrowseDetailView(
                 harness: harness,
                 destination: browse ?? .sessions,
-                hermesProfiles: hermesProfiles,
-                activeHermesProfile: activeHermesProfile,
+                hermesProfiles: controller.hermesProfiles,
+                activeHermesProfile: controller.activeHermesProfile,
                 onProfilesChanged: { reconcileHermesProfiles(harness: harness) }
             )
         }
@@ -635,7 +513,7 @@ struct DesktopServerWindow: View {
         return "\(user)\(host)\(port)"
     }
 
-    private func browseRow(_ destination: BrowseDestination, store: SessionsStore) -> some View {
+    private func browseRow(_ destination: BrowseDestination, index: Int, store: SessionsStore) -> some View {
         Button {
             store.selection = nil
             browse = destination
@@ -650,6 +528,20 @@ struct DesktopServerWindow: View {
                         .accessibilityLabel("Hermes update available")
                         .help("Hermes update available")
                 }
+                // While ⌘ is held, reveal the section's ⌘-digit shortcut (the same
+                // one the View menu wires via `SectionShortcut`, so the badge and
+                // the menu shortcut can't drift). Past the tenth row there's no
+                // digit, so no badge. macOS-only (`showsKeyboardShortcutHints`).
+                if Platform.showsKeyboardShortcutHints,
+                   modifiers.command,
+                   let key = SectionShortcut.keyEquivalent(forIndex: index) {
+                    Text("⌘\(String(key.character))")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(.ultraThinMaterial, in: Capsule())
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
@@ -662,13 +554,6 @@ struct DesktopServerWindow: View {
     /// the window-scoped ``UpdatesHarness`` (`@Observable`, so background checks
     /// landing flip the dot without a manual refresh).
     private func showsUpdateBadge(for destination: BrowseDestination) -> Bool {
-        destination == .system && harness?.updates?.status?.available == true
+        destination == .system && controller.harness?.updates?.status?.available == true
     }
-}
-
-/// Combined rebuild identity for a window's `.task(id:)`: a change to either
-/// the server profile or the active Hermes profile rebuilds the harness.
-private struct HarnessKey: Hashable {
-    let server: UUID
-    let hermes: String
 }

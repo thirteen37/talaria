@@ -20,6 +20,13 @@ struct ChatView: View {
     /// disabled composer when a prompt first appears.
     @FocusState private var promptFocused: Bool
 
+    /// Page Up / Page Down scroll-back. The composer's page-key closures set
+    /// `pendingScroll`; the `onChange` scroller inside the `ScrollViewReader`
+    /// consumes it. `pageAnchorIndex` remembers the last keyboard-driven anchor so
+    /// repeated presses walk the transcript instead of re-jumping to the bottom.
+    @State private var pendingScroll: ScrollDirection?
+    @State private var pageAnchorIndex: Int?
+
     /// Scroll anchor for the inline permission card. A fixed string id (the card is
     /// a singleton tail element) so the on-show scroll can target it.
     private static let permissionAnchorID = "permission-prompt-anchor"
@@ -122,10 +129,36 @@ struct ChatView: View {
                     }
                 }
                 .onChange(of: viewModel.messages) { _, messages in
+                    // New content re-anchors paging to the live bottom, so the next
+                    // Page Up resumes from the latest message rather than a stale
+                    // mid-transcript index.
+                    pageAnchorIndex = nil
                     guard let last = messages.last else {
                         return
                     }
                     proxy.scrollTo(last.id, anchor: .bottom)
+                }
+                // Page Up / Page Down (from the composer) walk the transcript by a
+                // fixed message stride. The anchor is *tracked*, not read from the
+                // live scroll position (macOS 14 lacks the offset-based
+                // `ScrollPosition` API, and mixing `.scrollPosition(id:)` with the
+                // imperative auto-scroll risks the fragile relayout #151 fixed), so
+                // a trackpad scroll between key presses makes the first Page key
+                // resume from the last keyboard anchor. Acceptable for v1.
+                .onChange(of: pendingScroll) { _, direction in
+                    guard let direction else { return }
+                    defer { pendingScroll = nil }
+                    guard let target = Self.pagedAnchorIndex(
+                        from: pageAnchorIndex,
+                        direction: direction,
+                        count: viewModel.messages.count
+                    ) else { return }
+                    let message = viewModel.messages[target]
+                    let isLast = target == viewModel.messages.count - 1
+                    // Land the last row on `.bottom` so Page Down returns cleanly to
+                    // the live tail; every earlier anchor lands on `.top`.
+                    proxy.scrollTo(message.id, anchor: isLast ? .bottom : .top)
+                    pageAnchorIndex = target
                 }
                 // When a prompt first appears, focus its inline card and scroll it
                 // into view. Runs after the `messages` onChange (the permission's
@@ -170,7 +203,9 @@ struct ChatView: View {
                     blockedPlaceholder: viewModel.blockedPlaceholder,
                     availableCommands: viewModel.availableCommands,
                     send: { Task { await viewModel.sendPrompt() } },
-                    cancel: { Task { await viewModel.cancel() } }
+                    cancel: { Task { await viewModel.cancel() } },
+                    onPageUp: { pendingScroll = .up },
+                    onPageDown: { pendingScroll = .down }
                 )
             }
         }
@@ -216,6 +251,29 @@ struct ChatView: View {
     /// layout) never produces a negative frame.
     private func rowWidth(for containerWidth: CGFloat) -> CGFloat {
         max(containerWidth - 32, 1)
+    }
+
+    /// Page Up / Page Down scroll direction.
+    enum ScrollDirection { case up, down }
+
+    /// Messages stepped per Page Up / Page Down. A rough stride — transcript rows
+    /// vary in height, so a fixed message count only approximates a "page" (see the
+    /// tracked-anchor limitation at the scroll call site).
+    nonisolated static let transcriptPageStride = 5
+
+    /// Next page-scroll anchor index: steps `current` (nil → the last message) by
+    /// `stride` in `direction`, clamped into `0..<count`. Returns nil for an empty
+    /// transcript. Pure and `nonisolated` so it's unit-testable off the `@MainActor`.
+    nonisolated static func pagedAnchorIndex(
+        from current: Int?,
+        direction: ScrollDirection,
+        count: Int,
+        stride: Int = transcriptPageStride
+    ) -> Int? {
+        guard count > 0 else { return nil }
+        let start = current ?? (count - 1)
+        let step = direction == .up ? -stride : stride
+        return min(max(start + step, 0), count - 1)
     }
 
     /// Hidden, always-mounted buttons that register the prompt's keyboard

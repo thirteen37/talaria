@@ -11,6 +11,13 @@ struct Composer: View {
     var availableCommands: [AvailableCommand]
     var send: () -> Void
     var cancel: () -> Void
+    /// Page Up / Page Down over the composer scroll the transcript back/forward
+    /// while the field keeps focus (see `ChatView`). Defaulted to no-ops so other
+    /// call sites / previews keep compiling.
+    var onPageUp: () -> Void = {}
+    var onPageDown: () -> Void = {}
+    /// Drives ⌘L focus-the-composer from anywhere in the window.
+    @FocusState private var inputFocused: Bool
     @State private var isSlashMenuDismissed = false
     @State private var slashMenuHeight: CGFloat = 0
     @State private var selectedCommandIndex = 0
@@ -22,6 +29,15 @@ struct Composer: View {
 
     private var trimmedPrompt: String {
         prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Empty-field placeholder. While blocked it mirrors the pending prompt's
+    /// status copy; otherwise it advertises the ⌘L focus shortcut — but only where
+    /// a hardware keyboard is guaranteed (`showsKeyboardShortcutHints`), so iOS
+    /// without a keyboard doesn't promise an unreachable chord.
+    private var placeholder: String {
+        if isBlocked { return blockedPlaceholder }
+        return Platform.showsKeyboardShortcutHints ? "Message Hermes (⌘L)" : "Message Hermes"
     }
 
     private var matchingCommands: [AvailableCommand] {
@@ -95,10 +111,11 @@ struct Composer: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            TextField(isBlocked ? blockedPlaceholder : "Message Hermes", text: $prompt, axis: .vertical)
+            TextField(placeholder, text: $prompt, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...6)
                 .disabled(isBlocked)
+                .focused($inputFocused)
                 .onChange(of: prompt) { _, newValue in
                     if !newValue.hasPrefix("/") {
                         isSlashMenuDismissed = false
@@ -182,6 +199,16 @@ struct Composer: View {
                     cancel()
                     return .handled
                 }
+                .onKeyPress(.pageUp) {
+                    // Scroll the transcript back a page while the composer keeps
+                    // focus. `.handled` overrides the field's own page-scroll.
+                    onPageUp()
+                    return .handled
+                }
+                .onKeyPress(.pageDown) {
+                    onPageDown()
+                    return .handled
+                }
 
             if isSending {
                 // Both controls while busy: Cancel always interrupts; Send
@@ -206,6 +233,19 @@ struct Composer: View {
                 .accessibilityLabel("Send")
                 .disabled(trimmedPrompt.isEmpty || isBlocked)
             }
+        }
+        // Hidden, zero-size ⌘L shortcut layer: focuses the composer from anywhere
+        // in the window. Mounted as a background (not inside the input `HStack`, so
+        // it adds no layout/spacing) — the same hidden-shortcut pattern as
+        // `ChatView.permissionShortcuts`. Always present in a live chat, so ⌘L
+        // works window-wide; read-only sessions have no composer, so it's absent
+        // (a harmless no-op) there.
+        .background {
+            Button("Focus Composer") { inputFocused = true }
+                .keyboardShortcut("l", modifiers: .command)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
         }
         // Float the slash-command menu above the input row as an overlay so it no
         // longer consumes layout height — the composer's measured height stays
