@@ -268,6 +268,31 @@ struct GatewayChatClientTests {
     }
 
     @Test
+    func foreignSessionEventDoesNotResolveTurn() async throws {
+        // Defense-in-depth for future socket multiplexing: an event carrying a
+        // different session's id must be dropped — a foreign `message.complete`
+        // (even an *error* one) must neither resolve nor fail THIS turn. Only the
+        // matching-id completion ends it.
+        let (client, fake, sid) = try await makeReadySession()   // runtime id "sess-1"
+        let sentBefore = fake.sent.count
+        let promptTask = Task { try await client.prompt(sessionId: sid, content: "x") }
+        let submitFrame = try await fake.waitForSent(at: sentBefore)
+        fake.pushInbound(responseFrame(id: idOf(submitFrame), result: ["status": .string("streaming")]))
+
+        // Foreign session's completion — must be ignored.
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: "intruder", payload: [
+            "status": .string("error"), "text": .string("not my turn")
+        ]))
+        // Our session's completion — resolves the turn cleanly.
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: sid, payload: [
+            "status": .string("complete")
+        ]))
+
+        let response = try await promptTask.value
+        #expect(response.stopReason == .endTurn)
+    }
+
+    @Test
     func cancelSendsInterrupt() async throws {
         let (client, fake, sid) = try await makeReadySession()
         let sentBefore = fake.sent.count

@@ -26,9 +26,10 @@ public final class URLSessionGatewayWebSocket: NSObject, GatewayWebSocket, URLSe
     /// HTTP status the server returned on a rejected upgrade, captured by the
     /// delegate (`task.response`) so the stream error can name it.
     private var handshakeStatus: Int?
-    /// Repeating keepalive ping that keeps a healthy idle socket from tripping
-    /// URLSession's 60s receive timeout (see ``GatewayKeepalive``). Cancelled in
-    /// ``close()``.
+    /// Active ping/PONG liveness probe (see ``GatewayKeepalive``). With this
+    /// socket's OS idle timeout disabled (see ``init(url:session:pingInterval:)``),
+    /// the keepalive is the *only* detector of a dead/half-open connection.
+    /// Cancelled in ``close()``.
     private var keepalive: GatewayKeepalive?
 
     /// Build the `ws://…/api/ws?<credential>` URL from the dashboard's base
@@ -47,10 +48,13 @@ public final class URLSessionGatewayWebSocket: NSObject, GatewayWebSocket, URLSe
 
     /// - Parameters:
     ///   - session: injected only by tests; production passes `nil` so we build a
-    ///     delegate-backed session (required to observe the handshake).
-    ///   - pingInterval: keepalive cadence. Default 20s — well under the 60s
-    ///     receive timeout — so a healthy idle socket draws a server PONG that
-    ///     resets the idle timer before it can fire. Injectable for tests.
+    ///     delegate-backed session (required to observe the handshake) whose idle
+    ///     timeouts are disabled (see below).
+    ///   - pingInterval: keepalive cadence. Default 20s. The keepalive
+    ///     (``GatewayKeepalive``) is an active ping/PONG liveness probe — it does
+    ///     **not** rely on the ping nudging any OS idle timer (that premise is
+    ///     unverified and was the suspected cause of mid-stream truncation).
+    ///     Injectable for tests.
     public init(url: URL, session: URLSession? = nil, pingInterval: TimeInterval = 20) {
         self.redactedURL = Self.redact(url)
         self.ownsSession = (session == nil)
@@ -63,7 +67,7 @@ public final class URLSessionGatewayWebSocket: NSObject, GatewayWebSocket, URLSe
 
         super.init()
 
-        self.urlSession = session ?? URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+        self.urlSession = session ?? URLSession(configuration: Self.longLivedConfiguration(), delegate: self, delegateQueue: nil)
         self.task = urlSession.webSocketTask(with: url)
         HermesLog.gateway.info("connecting \(self.redactedURL, privacy: .public)")
         task.resume()
@@ -71,11 +75,28 @@ public final class URLSessionGatewayWebSocket: NSObject, GatewayWebSocket, URLSe
         startKeepalive(interval: pingInterval)
     }
 
+    /// Configuration for the long-lived chat socket. Built from `.default` but
+    /// with the per-request / per-resource idle timeouts pushed effectively to
+    /// infinity: `timeoutIntervalForRequest` (60s on `.default`) otherwise applies
+    /// to the wait for *each inbound frame*, so a healthy-but-quiet socket (a long
+    /// tool call, a thinking pause, an unfocused idle session) trips
+    /// `NSURLErrorTimedOut` and the live chat truncates mid-stream. Liveness is
+    /// instead owned by ``GatewayKeepalive``'s active ping/PONG probe, so the OS
+    /// idle timer is taken out of the teardown path entirely.
+    static func longLivedConfiguration() -> URLSessionConfiguration {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = .greatestFiniteMagnitude
+        config.timeoutIntervalForResource = .greatestFiniteMagnitude
+        return config
+    }
+
     /// Starts the repeating keepalive ping on ``stateQueue`` (the same queue that
-    /// serializes `closed`). A failed ping means the socket is dead/half-open, so
-    /// it tears the stream down the same way ``receiveNext()``'s failure branch
-    /// does — detection of a dead connection isn't deferred to the next receive
-    /// timeout. The 60s receive timeout stays as a backstop for a hung socket.
+    /// serializes `closed`). The keepalive is an active liveness probe: after
+    /// ``GatewayKeepalive/maxMisses`` consecutive missing PONGs / ping errors it
+    /// tears the stream down the same way ``receiveNext()``'s failure branch does.
+    /// Since this socket's OS idle timeout is disabled (see
+    /// ``longLivedConfiguration()``), the keepalive is the sole detector of a
+    /// dead/half-open connection.
     private func startKeepalive(interval: TimeInterval) {
         let keepalive = GatewayKeepalive(
             interval: interval,

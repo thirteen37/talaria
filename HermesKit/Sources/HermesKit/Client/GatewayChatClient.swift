@@ -340,6 +340,18 @@ public actor GatewayChatClient: ChatBackend {
         if envelope.method == "event", let params = envelope.params {
             let fields = Self.object(params)
             guard let type = Self.string(fields["type"]) else { return }
+            // Defense-in-depth (see docs/gateway-chat.md): today one socket hosts
+            // exactly one session, but the gateway tags every turn event with the
+            // runtime `session_id` and the protocol reserves socket-multiplexing
+            // as a later optimization. Drop any event whose non-empty `session_id`
+            // isn't ours so a foreign session's `message.complete` can never end
+            // *this* turn. An empty/absent `session_id` is a global broadcast
+            // (`gateway.ready`, `skin.changed`, …) and is always allowed through;
+            // so is anything arriving before our runtime id is known.
+            if let eventSid = Self.string(fields["session_id"]), !eventSid.isEmpty,
+               let runtime = runtimeSessionId, eventSid != runtime {
+                return
+            }
             dispatchEvent(type: type, payload: fields["payload"])
             return
         }
