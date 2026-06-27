@@ -680,23 +680,35 @@ final class LocalChatViewModel {
         statusText = "Hermes is working in \(cwd)..."
         hasError = false
         store?.markTurnStarted(id: sessionId)
+        // Arm the "agent finished" notification *only* here, the genuine LLM-turn
+        // path (direct send + the `.submit` slash handoff) — not from every
+        // `markTurnStarted` caller, since non-turn busy states (/help, /undo)
+        // would arm without a turn to consume it. See `armAgentFinished`.
+        store?.armAgentFinished(id: sessionId)
 
         let id = sessionId
         promptTask = Task { [weak self] in
             do {
                 let response = try await client.prompt(sessionId: id, content: text)
                 self?.statusText = "Stopped: \(response.stopReason.rawValue)"
-                // Only the success branch is a real turn completion —
-                // cancellation and errors take the catch paths below — so notify
-                // here (gated by the store's policy + foreground/selection).
-                if let self {
-                    self.store?.handleTurnCompleted(id: id, title: self.title)
-                }
+                // The "agent finished" notification is no longer fired here: the
+                // prompt resolves on the *first* `message.complete`, but Hermes
+                // chains continuation turns after it, so firing here lands the
+                // banner at the start of the final response. It's now event-driven
+                // and debounced in `SessionsStore` (armed by `armAgentFinished`),
+                // which coalesces across the chained turns and fires once.
             } catch is CancellationError {
                 self?.statusText = "Cancelled"
+                // A cancelled turn must consume the arm so it doesn't carry over
+                // to a later autonomous turn on this still-open session.
+                self?.store?.disarmAgentFinished(id: id)
             } catch {
                 self?.hasError = true
                 self?.statusText = self?.errorMessage(for: error)
+                // A failed turn (transport error / socket death with no
+                // `message.complete`) likewise consumes the arm here, since no
+                // `.turnEnded` reaches the store to disarm it.
+                self?.store?.disarmAgentFinished(id: id)
             }
             self?.isSending = false
             self?.turnStartDate = nil
@@ -949,6 +961,11 @@ final class LocalChatViewModel {
                     error: JSONRPCError(code: -32601, message: "Talaria does not support \(method) yet")
                 )
             }
+        case .turnStarted, .turnEnded:
+            // Turn-boundary control signals: consumed by the store's always-on
+            // observer (notification coalescing). The chat view's busy/turn state
+            // is driven by the in-flight prompt, so they're a no-op here.
+            break
         }
     }
 

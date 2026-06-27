@@ -241,13 +241,20 @@ public actor SessionManager {
         guard var active = sessions[sessionId], active.epoch == epoch else {
             return
         }
-        // Always buffer for replay so a late subscriber (e.g. a chat tab
-        // opened after the session was registered) still sees the full
-        // resumed transcript. The cap prevents an unbounded transcript
-        // from growing memory without bound.
-        active.replay.append(notification)
-        if active.replay.count > Self.replayCap {
-            active.replay.removeFirst(active.replay.count - Self.replayCap)
+        // Buffer for replay so a late subscriber (e.g. a chat tab opened after
+        // the session was registered) still sees the full resumed transcript.
+        // The cap prevents an unbounded transcript from growing memory without
+        // bound. The transient turn-boundary signals are the one exception —
+        // they're live-only control events; replaying a stale `turnEnded` to a
+        // late subscriber would fire a spurious "agent finished" notification.
+        switch notification {
+        case .turnStarted, .turnEnded:
+            break
+        default:
+            active.replay.append(notification)
+            if active.replay.count > Self.replayCap {
+                active.replay.removeFirst(active.replay.count - Self.replayCap)
+            }
         }
         for (_, continuation) in active.subscribers {
             continuation.yield(notification)

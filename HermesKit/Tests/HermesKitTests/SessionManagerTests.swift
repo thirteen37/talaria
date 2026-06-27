@@ -58,6 +58,42 @@ struct SessionManagerTests {
     }
 
     @Test
+    func transientTurnSignalsAreNotReplayedToLateSubscribers() async throws {
+        // turnStarted/turnEnded are transient control signals: they must reach a
+        // *live* subscriber but never be buffered for replay. Replaying a stale
+        // turnEnded to a late subscriber would fire a spurious "agent finished".
+        let scripter = BackendScripter()
+        let manager = SessionManager(backendFactory: { await scripter.next() })
+
+        let state = try await manager.openExisting(id: "sess", cwd: "/tmp")
+        let backend = try await scripter.waitForBackend(at: 0)
+
+        let update = SessionNotification(
+            sessionId: state.id,
+            update: .agentMessageChunk(Content(content: .text("buffered history")))
+        )
+        backend.emit(.turnStarted(state.id))
+        backend.emit(.sessionUpdate(update))
+        backend.emit(.turnEnded(state.id, clean: true))
+        // Let the pump buffer them (no subscriber attached yet).
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let stream = await manager.notifications(for: state.id)
+        var iterator = stream.makeAsyncIterator()
+        // Only the sessionUpdate replays; the transient turn signals are dropped,
+        // so the first thing the late subscriber sees is the buffered update.
+        let first = await iterator.next()
+        #expect(first == .sessionUpdate(update))
+
+        // A turn signal emitted *after* subscribing still reaches the subscriber.
+        backend.emit(.turnEnded(state.id, clean: true))
+        let second = await iterator.next()
+        #expect(second == .turnEnded(state.id, clean: true))
+
+        await manager.close(id: "sess")
+    }
+
+    @Test
     func notificationsFanOutToMultipleSubscribers() async throws {
         let scripter = BackendScripter(newSessionId: "sess")
         let manager = SessionManager(backendFactory: { await scripter.next() })
