@@ -211,6 +211,12 @@ final class SessionsStore {
     /// the retry cadence can be driven deterministically in tests.
     private let recoveryDebounce: TimeInterval
 
+    /// Grace window for coalescing the "agent finished" notification across
+    /// Hermes' chained continuation turns (see ``AgentFinishedDebouncer``).
+    /// Injectable so the debounce can be driven fast and deterministically in
+    /// tests, mirroring ``recoveryDebounce`` / ``tuiPollInterval``.
+    private let agentFinishedDebounce: Duration
+
     /// How many *completed* recovery passes may fail to shrink the dead set before
     /// the driver gives up. Past this, a persistently-unreachable dashboard stops
     /// the loop and degrades to the manual-Reconnect error banner instead of an
@@ -261,6 +267,21 @@ final class SessionsStore {
     private var pendingTUIOpens: Set<SessionId> = []
     private var toolKinds: [SessionId: [ToolCallId: ToolKind]] = [:]
     private let cwdStore: SessionsCwdStore
+    /// Coalesces the "agent finished responding" notification across Hermes'
+    /// chained continuation turns so it fires once, after the agent fully
+    /// settles, instead of at the start of a continuation's response. Armed by a
+    /// user send (`armAgentFinished`, called only from the prompt path); the
+    /// actual fire-time policy gate + post live in `fireAgentFinished`. Lazily
+    /// built so it can capture `self`;
+    /// `@ObservationIgnored` because it's internal machinery (not observable UI
+    /// state), and `@Observable` would otherwise rewrite it into a computed
+    /// property, which `lazy` can't be.
+    @ObservationIgnored
+    private lazy var agentFinishedDebouncer = AgentFinishedDebouncer(
+        grace: agentFinishedDebounce
+    ) { [weak self] id in
+        self?.fireAgentFinished(id: id)
+    }
     /// Returns true while the open is blocked on interactive user input (the
     /// host-key trust prompt). The open timeout pauses while this is true so
     /// a slow fingerprint comparison doesn't trip the "handshake" deadline.
@@ -277,6 +298,7 @@ final class SessionsStore {
         onCloseTUI: (@MainActor @Sendable (SessionId) -> Void)? = nil,
         tuiPollInterval: Duration = .seconds(5),
         recoveryDebounce: TimeInterval = 5,
+        agentFinishedDebounce: Duration = .milliseconds(1250),
         profileId: UUID? = nil,
         notifier: ChatNotifier? = nil
     ) {
@@ -285,6 +307,7 @@ final class SessionsStore {
         self.dashboardClient = dashboardClient
         self.defaultCwd = defaultCwd
         self.recoveryDebounce = recoveryDebounce
+        self.agentFinishedDebounce = agentFinishedDebounce
         self.cwdStore = cwdStore
         self.isAwaitingUserInput = isAwaitingUserInput
         self.tuiSpecFactory = tuiSpecFactory
@@ -838,6 +861,8 @@ final class SessionsStore {
         statusTasks[id] = nil
         statuses[id] = nil
         toolKinds.removeValue(forKey: id)
+        // Drop any pending "agent finished" fire for a tab being torn down.
+        agentFinishedDebouncer.cancel(id: id)
         let isTUI = openSessions.first(where: { $0.id == id })?.kind == .tui
         openSessions.removeAll { $0.id == id }
         if selection == id {
@@ -986,6 +1011,30 @@ final class SessionsStore {
         statuses[id] = .working
     }
 
+    /// Arms the "agent finished" notification for a real, user-initiated LLM
+    /// turn. Deliberately **not** folded into ``markTurnStarted``: that also marks
+    /// the session `.working` for non-turn busy states (a `/help`-style slash
+    /// dispatch, `/undo`) which never produce a `message.start`/`message.complete`
+    /// pair — arming there would leave the session armed indefinitely (nothing
+    /// consumes the arm), so a later *autonomous* turn (background-process
+    /// reaction, `/goal` loop, poller) on that still-open session would fire a
+    /// spurious notification. Called only from the prompt path
+    /// (`ChatView.runPrompt`), which is the single choke point for genuine turns.
+    /// Purely autonomous turns the user never triggered never arm, so they don't
+    /// notify; a chained continuation inherits this arm while the debounce window
+    /// is open.
+    func armAgentFinished(id: SessionId) {
+        agentFinishedDebouncer.arm(id: id)
+    }
+
+    /// Consumes the arm for a turn that ended without a clean `.turnEnded` — a
+    /// prompt that threw (transport error, socket death) or was cancelled. Called
+    /// from `ChatView.runPrompt`'s failure paths so the arm doesn't linger and let
+    /// a later autonomous turn fire a spurious notification. Idempotent.
+    func disarmAgentFinished(id: SessionId) {
+        agentFinishedDebouncer.cancel(id: id)
+    }
+
     func markTurnFinished(id: SessionId) {
         resetActiveStatus(id: id)
     }
@@ -1023,17 +1072,21 @@ final class SessionsStore {
 
     // MARK: - Notifications
 
-    /// Called by the chat VM when a user-started turn completes (the prompt
-    /// success branch). Posts an "agent finished" banner unless the user is
-    /// already watching this chat. `title` is the chat's current display name.
-    func handleTurnCompleted(id: SessionId, title: String?) {
+    /// Posts the "agent finished" banner for `id` once the debouncer decides the
+    /// agent has fully settled (after the grace window with no chained
+    /// continuation in between). Suppressed when the user is already watching this
+    /// chat — the policy gate is evaluated *here*, at fire time, so navigating
+    /// into the chat during the debounce window correctly cancels the banner. The
+    /// title is resolved now (not at send time) so it reflects any rename the turn
+    /// produced. Invoked by ``agentFinishedDebouncer``.
+    private func fireAgentFinished(id: SessionId) {
         guard let profileId, let notifier else { return }
         guard NotificationPolicy.shouldNotifyAgentFinished(
             settings: notifier.settings,
             isForeground: isWindowForeground,
             isSelected: selection == id
         ) else { return }
-        notifier.postAgentFinished(profileId: profileId, sessionId: id, title: title ?? chatTitle(for: id))
+        notifier.postAgentFinished(profileId: profileId, sessionId: id, title: chatTitle(for: id))
     }
 
     /// Posts a "needs your input" banner for `id` unless the user is already
@@ -1098,6 +1151,14 @@ final class SessionsStore {
             statuses[id] = .error(message)
         case let .sessionUpdate(notification):
             handleStateMutation(sessionId: id, update: notification.update)
+        case .turnStarted:
+            // A turn (or chained continuation) started — hold any pending
+            // "agent finished" notification until activity settles.
+            agentFinishedDebouncer.turnStarted(id: id)
+        case let .turnEnded(_, clean):
+            // A turn ended; the debouncer coalesces across chained continuations
+            // and fires once, the grace later, via `fireAgentFinished`.
+            agentFinishedDebouncer.turnEnded(id: id, clean: clean)
         default:
             break
         }

@@ -9,6 +9,15 @@ public enum HermesNotification: Equatable, Sendable {
     case clientRequestError(id: JSONRPCID, method: String, message: String)
     case request(id: JSONRPCID, method: String, params: JSONValue?)
     case raw(method: String, params: JSONValue?)
+    /// A turn (or chained continuation turn) began on this session. Transient
+    /// control signal — used by the store to coalesce the "agent finished"
+    /// notification across Hermes' chained `message.start … message.complete`
+    /// cycles. Never buffered for replay (see `SessionManager.fanOut`).
+    case turnStarted(SessionId)
+    /// A turn ended. `clean == true` only for a normal end-of-turn
+    /// (`status:"complete"`); `false` for `interrupted`/`error`. Transient
+    /// control signal, never replayed.
+    case turnEnded(SessionId, clean: Bool)
 }
 
 /// Distinguishes the three semantically different blocking prompts the gateway

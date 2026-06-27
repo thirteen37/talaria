@@ -46,6 +46,14 @@ public actor GatewayChatClient: ChatBackend {
     /// Whether any `reasoning.delta` chunk streamed this turn — gates the
     /// redundant full-text `reasoning.available` emit. Reset on `message.start`.
     private var sawReasoningDelta = false
+    /// Whether a message cycle is in flight: set on `message.start`, cleared on
+    /// `message.complete`. Tracks *every* turn — including the autonomous
+    /// continuations Hermes chains after the prompt resolves (`turnContinuation`
+    /// is nil for those) — so a standalone `error` event can tell an aborted
+    /// in-flight cycle (emit `.turnEnded(clean: false)` to consume the store's
+    /// arm) from a passive error with no cycle (must not, or it would cancel a
+    /// legitimately-scheduled fire from the preceding turn).
+    private var messageCycleActive = false
 
     /// The id `SessionManager` registered this session under and the gateway's
     /// runtime id. Equal for new sessions; on resume `bound` is the stored id
@@ -428,7 +436,16 @@ public actor GatewayChatClient: ChatBackend {
             if let usage = usageUpdate(from: p["usage"]) {
                 emit(.usageUpdate(usage))
             }
-            resolveTurn(status: Self.string(p["status"]) ?? "complete", errorText: Self.string(p["text"]))
+            let status = Self.string(p["status"]) ?? "complete"
+            messageCycleActive = false
+            resolveTurn(status: status, errorText: Self.string(p["text"]))
+            // Turn boundary: surface the end so the store can coalesce the
+            // "agent finished" notification across chained continuation turns.
+            // `clean` distinguishes a normal end from interrupted/error (which
+            // must not notify). Derived from the same `status` `resolveTurn` reads.
+            if let sid = boundSessionId {
+                notificationContinuation.yield(.turnEnded(sid, clean: status == "complete"))
+            }
         case "approval.request":
             emitApproval(p)
         case "clarify.request":
@@ -439,6 +456,19 @@ public actor GatewayChatClient: ChatBackend {
             emitTextSecret(p, method: "secret.respond", field: "value")
         case "error":
             let message = Self.string(p["message"]) ?? "Hermes reported an error"
+            // An error aborting an *in-flight* cycle must consume the store's
+            // "agent finished" arm like a clean end does, or the arm lingers and a
+            // later autonomous turn fires a spurious notification. "In flight"
+            // means a pending prompt OR a started-but-not-completed cycle (the
+            // autonomous-continuation case, where `turnContinuation` is nil). It is
+            // NOT a passive error with no cycle — emitting there would cancel a
+            // legitimately-scheduled fire from the preceding turn.
+            if turnContinuation != nil || messageCycleActive {
+                if let sid = boundSessionId {
+                    notificationContinuation.yield(.turnEnded(sid, clean: false))
+                }
+            }
+            messageCycleActive = false
             if turnContinuation != nil {
                 failTurn(error: GatewayChatError.server(message))
             } else {
@@ -450,6 +480,12 @@ public actor GatewayChatClient: ChatBackend {
             // Turn boundary: reset per-turn reasoning de-dup state. The UI's
             // busy/turn-started state is already driven by the in-flight prompt.
             sawReasoningDelta = false
+            messageCycleActive = true
+            // Surface the start so the store holds (cancels) any pending
+            // "agent finished" notification while a chained continuation runs.
+            if let sid = boundSessionId {
+                notificationContinuation.yield(.turnStarted(sid))
+            }
         case "background.complete":
             // A `/bg` task finished (server-process thread). Surface it as a
             // session update so the chat can render the result + clear its live

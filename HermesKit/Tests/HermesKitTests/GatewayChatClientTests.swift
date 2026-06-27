@@ -268,6 +268,52 @@ struct GatewayChatClientTests {
     }
 
     @Test
+    func messageStartYieldsTurnStarted() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        var iterator = client.notifications.makeAsyncIterator()
+
+        fake.pushInbound(eventFrame(type: "message.start", sessionId: sid, payload: [:]))
+        let note = try await requireNext(&iterator)
+        #expect(note == .turnStarted(sid))
+    }
+
+    @Test
+    func messageCompleteYieldsCleanTurnEnded() async throws {
+        // A clean turn-end (status:"complete") yields .turnEnded(clean: true),
+        // and the prompt still resolves on this first complete.
+        let (client, fake, sid) = try await makeReadySession()
+        var iterator = client.notifications.makeAsyncIterator()
+        let sentBefore = fake.sent.count
+
+        let promptTask = Task { try await client.prompt(sessionId: sid, content: "go") }
+        let submitFrame = try await fake.waitForSent(at: sentBefore)
+        fake.pushInbound(responseFrame(id: idOf(submitFrame), result: ["status": .string("streaming")]))
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: sid, payload: ["status": .string("complete")]))
+
+        let response = try await promptTask.value
+        #expect(response.stopReason == .endTurn)
+
+        let note = try await requireNext(&iterator)
+        #expect(note == .turnEnded(sid, clean: true))
+    }
+
+    @Test
+    func interruptedAndErrorCompletionsYieldUncleanTurnEnded() async throws {
+        // Both an interrupted and an error end-of-turn must report clean == false,
+        // so the store disarms rather than notifying.
+        for status in ["interrupted", "error"] {
+            let (client, fake, sid) = try await makeReadySession()
+            var iterator = client.notifications.makeAsyncIterator()
+
+            fake.pushInbound(eventFrame(type: "message.complete", sessionId: sid, payload: [
+                "status": .string(status)
+            ]))
+            let note = try await requireNext(&iterator)
+            #expect(note == .turnEnded(sid, clean: false))
+        }
+    }
+
+    @Test
     func foreignSessionEventDoesNotResolveTurn() async throws {
         // Defense-in-depth for future socket multiplexing: an event carrying a
         // different session's id must be dropped — a foreign `message.complete`
@@ -366,6 +412,63 @@ struct GatewayChatClientTests {
         await #expect(throws: GatewayChatError.self) {
             _ = try await promptTask.value
         }
+    }
+
+    @Test
+    func errorEventDuringTurnYieldsUncleanTurnEnded() async throws {
+        // An `error` event that aborts an active turn must also emit
+        // .turnEnded(clean: false) so the store consumes the "agent finished"
+        // arm — a failed turn must not leave the session armed for a later
+        // autonomous turn to notify on.
+        let (client, fake, sid) = try await makeReadySession()
+        var iterator = client.notifications.makeAsyncIterator()
+        let sentBefore = fake.sent.count
+        let promptTask = Task { try await client.prompt(sessionId: sid, content: "x") }
+        let submitFrame = try await fake.waitForSent(at: sentBefore)
+        fake.pushInbound(responseFrame(id: idOf(submitFrame), result: ["status": .string("streaming")]))
+        fake.pushInbound(eventFrame(type: "error", sessionId: sid, payload: ["message": .string("boom")]))
+
+        let note = try await requireNext(&iterator)
+        #expect(note == .turnEnded(sid, clean: false))
+        await #expect(throws: GatewayChatError.self) {
+            _ = try await promptTask.value
+        }
+    }
+
+    @Test
+    func errorEndingAnAutonomousContinuationYieldsUncleanTurnEnded() async throws {
+        // No active prompt (turnContinuation nil), but a continuation cycle is in
+        // flight (message.start seen). An error ending it must still emit
+        // .turnEnded(clean: false) so the store consumes a lingering arm — the
+        // chained-continuation case the `turnContinuation != nil` guard alone misses.
+        let (client, fake, sid) = try await makeReadySession()
+        var iterator = client.notifications.makeAsyncIterator()
+
+        fake.pushInbound(eventFrame(type: "message.start", sessionId: sid, payload: [:]))
+        let started = try await requireNext(&iterator)
+        #expect(started == .turnStarted(sid))
+
+        fake.pushInbound(eventFrame(type: "error", sessionId: sid, payload: ["message": .string("boom")]))
+        let ended = try await requireNext(&iterator)
+        #expect(ended == .turnEnded(sid, clean: false))
+    }
+
+    @Test
+    func passiveErrorWithNoCycleInFlightDoesNotYieldTurnEnded() async throws {
+        // With no prompt and no in-flight cycle, an error must NOT emit
+        // .turnEnded(clean: false): doing so would cancel a legitimately-scheduled
+        // "agent finished" fire from a preceding clean turn. It surfaces as a
+        // clientRequestError instead.
+        let (client, fake, sid) = try await makeReadySession()
+        var iterator = client.notifications.makeAsyncIterator()
+
+        fake.pushInbound(eventFrame(type: "error", sessionId: sid, payload: ["message": .string("stray")]))
+        let note = try await requireNext(&iterator)
+        guard case let .clientRequestError(_, _, message) = note else {
+            Issue.record("expected clientRequestError, got \(note)")
+            return
+        }
+        #expect(message == "stray")
     }
 
     // MARK: - Slash commands
