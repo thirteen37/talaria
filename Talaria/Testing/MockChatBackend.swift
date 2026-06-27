@@ -35,6 +35,11 @@ final class MockChatBackend: ChatBackend, @unchecked Sendable {
     }
 
     func cancel(sessionId: SessionId) async throws {}
+
+    func promptBackground(sessionId: SessionId, text: String) async throws -> String {
+        "mock-bg-task"
+    }
+
     func respond(id: JSONRPCID, error: JSONRPCError) async throws {}
     func close() async { continuation.finish() }
 }

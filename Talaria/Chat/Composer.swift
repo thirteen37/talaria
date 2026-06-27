@@ -31,13 +31,17 @@ struct Composer: View {
 
         let query = String(prompt.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let ranked = rankedSlashCommands(availableCommands, matching: query)
-        // While a turn is in flight only the gateway's pending-input commands can
-        // be dispatched, so the menu offers just those — matching what
-        // `LocalChatViewModel.sendWhileBusy` will actually accept.
+        // While a turn is in flight only the gateway's pending-input commands and
+        // the concurrent background commands can be dispatched, so the menu offers
+        // just those — matching what `LocalChatViewModel.sendWhileBusy` accepts.
         guard isSending else {
             return ranked
         }
-        return ranked.filter { SlashCommand.pendingInputCommands.contains($0.name.lowercased()) }
+        return ranked.filter {
+            let name = $0.name.lowercased()
+            return SlashCommand.pendingInputCommands.contains(name)
+                || SlashCommand.backgroundCommands.contains(name)
+        }
     }
 
     /// Whether the current composer text can actually be dispatched over a live
@@ -50,7 +54,8 @@ struct Composer: View {
         guard trimmed.hasPrefix("/") else {
             return true
         }
-        return SlashCommand(parsing: trimmed).isPendingInput
+        let parsed = SlashCommand(parsing: trimmed)
+        return parsed.isPendingInput || parsed.isBackground
     }
 
     /// Help text for the Send button while a turn is in flight — adapts to what
@@ -65,6 +70,7 @@ struct Composer: View {
         switch parsed.name.lowercased() {
         case "queue", "q": return "Queue this message"
         case "steer": return "Steer the running turn"
+        case "background", "bg", "btw": return "Run this prompt in the background"
         default:
             return parsed.isPendingInput
                 ? "Send while running"

@@ -374,6 +374,45 @@ final class SessionsStore {
         }
     }
 
+    /// Opens the live session just created by `/branch` / `/fork`. The gateway
+    /// already forked the history into a new live session, but the branch RPC only
+    /// returns its title + parent (not the new stored id), and `GET /api/sessions`
+    /// doesn't expose the branch marker — so we pull the session list and match the
+    /// newest not-already-open row carrying the branch `title`. `session.resume`
+    /// reuses the already-live runtime via its by-key fast path, so this re-resume
+    /// spawns no duplicate. Mirrors the desktop's branch → switch-to-it UX.
+    func openBranchedSession(title: String) async {
+        guard let dashboardClient else {
+            lastError = "Branching needs the dashboard, which isn't connected."
+            return
+        }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A blank title can't identify the branch — matching on "" would select an
+        // arbitrary untitled session. Bail rather than open the wrong one.
+        guard !trimmed.isEmpty else {
+            lastError = "Branched session created, but it returned no title to locate it by."
+            return
+        }
+        do {
+            let response = try await dashboardClient.listSessions(limit: 200)
+            // The list is recency-first, so the first title match is the newest.
+            // Skip any tab already open (defensive against a duplicate match).
+            let openIds = Set(openSessions.map(\.id))
+            let match = response.sessions.first {
+                ($0.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == trimmed
+                    && !openIds.contains($0.id)
+            }
+            guard let match else {
+                lastError = "Branched session created, but it hasn't appeared in the session list yet."
+                return
+            }
+            await openExisting(HermesSessionSummary(match))
+            browserRefreshToken &+= 1
+        } catch {
+            lastError = Self.describe(error)
+        }
+    }
+
     /// `select` controls whether a successful open also focuses the tab. The
     /// default (`true`) is what every interactive caller wants. Cold-relaunch
     /// restore passes `false` so it can re-open several tabs *without* churning the

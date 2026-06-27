@@ -8,14 +8,20 @@ Run this script before a v1 release candidate.
 4. Trigger and answer a permission prompt.
 5. Interrupt a running session. While a turn is streaming, also confirm the
    send-while-busy paths: typing plain text + Send queues it (first time shows a
-   one-time tip, then a terse "Queued." — Hermes auto-submits it after the turn);
-   `/steer …` redirects the running turn; the slash menu only offers the
-   pending-input commands (`queue`, `q`, `steer`, `plan`, `goal`, `retry`,
-   `undo`) and Send is disabled for a non-pending slash like `/help`. The live
-   turn keeps streaming throughout (no new user bubble). Confirm interrupt works
-   via the Cancel button, `⌘.` (one chord), and a double-`Esc` (first arms with a
-   "Press Esc again to interrupt" hint, second cancels) — and that a single `Esc`
-   while the slash menu is open just dismisses the menu.
+   one-time tip, then a terse "Queued.") — Talaria holds the message locally and
+   submits it as a new turn when the current turn ends *cleanly*; queue two and
+   confirm they drain FIFO (one per clean turn), and that interrupting a turn
+   halts the drain (held items resume after the next clean turn). `/steer …`
+   redirects the running turn; `/bg <prompt>` starts a concurrent background task
+   (a "🌘 N running" indicator appears, the foreground turn is unaffected, and a
+   "🌖 Background task finished" line lands when it completes). The slash menu
+   offers the pending-input commands (`queue`, `q`, `steer`, `plan`, `goal`,
+   `retry`, `undo`) plus the background commands (`bg`, `background`, `btw`), and
+   Send is disabled for a non-pending slash like `/help`. The live turn keeps
+   streaming throughout (no new user bubble). Confirm interrupt works via the
+   Cancel button, `⌘.` (one chord), and a double-`Esc` (first arms with a "Press
+   Esc again to interrupt" hint, second cancels) — and that a single `Esc` while
+   the slash menu is open just dismisses the menu.
 6. Resume the same session from the sessions browser.
 7. Rename and delete a session through the app.
 8. **Doctor view**: open Manage → **System** and select the *Doctor* tab, click *Run Doctor*. Confirm:
