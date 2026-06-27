@@ -192,8 +192,7 @@ file browser that have no row here; fathah's app adds a "Hermes Office" 3D view.
 
 ## Where Talaria trails (honest gaps)
 
-These are present in one or more competitors and absent from Talaria today.
-Several are tracked in `docs/roadmap.md` as deliberately deferred:
+These are present in one or more competitors and absent from Talaria today:
 
 - **No activity feed, credential pools, webhooks, quick commands, or Hermes
   Proxy UI.** (A terminal/TUI escape hatch *has* shipped on macOS — chats can be

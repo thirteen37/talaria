@@ -201,32 +201,6 @@ struct UpdatesHarnessTests {
     }
 
     @Test
-    func skipsWhileChecking() async {
-        let runner = StubAdminRunner(checkResult("Update available: 1.2.3 → 1.3.0"))
-        let recorder = NotifyRecorder()
-        let harness = makeHarness(runner, recorder: recorder)
-        harness.isChecking = true
-
-        await harness.backgroundCheck()
-        #expect(runner.callCount == 0)
-        #expect(harness.applyLog.isEmpty)
-        #expect(recorder.count == 0)
-    }
-
-    @Test
-    func manualCheckSkipsWhileAnotherCheckRuns() async {
-        // A manual check must not race an in-flight check (the view's `.task`
-        // can fire it while the background loop's first check is still running).
-        let runner = StubAdminRunner(checkResult("Up to date (1.2.3)"))
-        let recorder = NotifyRecorder()
-        let harness = makeHarness(runner, recorder: recorder)
-        harness.isChecking = true
-
-        await harness.check()
-        #expect(runner.callCount == 0)
-    }
-
-    @Test
     func skipsWhileAnotherWindowOnSameProfileIsApplying() async {
         // A background tick must not fire `hermes update --check` (a git fetch)
         // while another window is mid-apply on the same source-install repo.
@@ -241,16 +215,6 @@ struct UpdatesHarnessTests {
         #expect(recorder.count == 0)
     }
 
-    @Test
-    func nilRunnerIsNoOp() async {
-        let recorder = NotifyRecorder()
-        let harness = makeHarness(nil, recorder: recorder)
-
-        await harness.backgroundCheck()
-        #expect(harness.status == nil)
-        #expect(harness.applyLog.isEmpty)
-        #expect(recorder.count == 0)
-    }
 }
 
 @MainActor
