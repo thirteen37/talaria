@@ -10,11 +10,17 @@ import Testing
 @MainActor
 @Suite
 struct ChatBusySendTests {
+    /// Keeps the (weakly-held) `SessionManager` alive for the test's duration —
+    /// otherwise it can dealloc before `sendPrompt` reads it under the parallel
+    /// runner, intermittently failing the busy-path assertions.
+    private let live = LiveManagers()
+
     private func makeBusyViewModel(
         id: SessionId,
         backend: RecordingChatBackend
     ) async throws -> LocalChatViewModel {
         let manager = SessionManager(backendFactory: { backend })
+        live.keep(manager)
         let session = try await manager.openExisting(id: id, cwd: "/tmp")
         let vm = LocalChatViewModel(manager: manager, sessionId: session.id, cwd: "/tmp")
         // Simulate a live turn the user is sending over.
@@ -105,6 +111,7 @@ struct ChatBusySendTests {
     func plainTextWhileIdleStartsRealTurnNotASlash() async throws {
         let backend = RecordingChatBackend()
         let manager = SessionManager(backendFactory: { backend })
+        live.keep(manager)
         let session = try await manager.openExisting(id: "idle-send", cwd: "/tmp")
         let vm = LocalChatViewModel(manager: manager, sessionId: session.id, cwd: "/tmp")
 
