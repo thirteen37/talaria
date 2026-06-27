@@ -2,6 +2,11 @@ import HermesKit
 import SwiftUI
 
 struct PermissionPrompt: View {
+    /// ⌥ held-state, so the `⌥N` badges reveal only while the modifier is down
+    /// (instead of cluttering the prompt always). Optional + defaulted so call
+    /// sites without the window's monitor in scope (previews, `PromptShotRenderer`)
+    /// keep compiling — absent reads as "not held", hiding the badges.
+    @Environment(ModifierKeyMonitor.self) private var modifiers: ModifierKeyMonitor?
     let state: PermissionPromptState
     /// Focus binding owned by `ChatView` so the card can take focus when it first
     /// appears (focus ring + steals key input from the disabled composer). Optional
@@ -116,19 +121,22 @@ struct PermissionPrompt: View {
 
     /// Wraps an option's label with its `⌥N` key-hint badge on the trailing edge.
     /// Only the first `maxShortcutOptions` options are badged (matching the
-    /// shortcuts wired up in `ChatView`), and only where a hardware keyboard is
-    /// guaranteed — otherwise the badge would advertise an unreachable shortcut.
+    /// shortcuts wired up in `ChatView`), only where a hardware keyboard is
+    /// guaranteed (otherwise the badge would advertise an unreachable shortcut),
+    /// and only while ⌥ is actually held — so the badges reveal the shortcut on
+    /// demand instead of permanently cluttering the prompt.
     @ViewBuilder
     private func optionLabel(_ label: some View, index: Int) -> some View {
         HStack(spacing: 8) {
             label
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if Platform.showsKeyboardShortcutHints, index < Self.maxShortcutOptions {
+            if Platform.showsKeyboardShortcutHints, (modifiers?.option ?? false), index < Self.maxShortcutOptions {
                 Text("⌥\(index + 1)")
                     .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(.thinMaterial, in: Capsule())
+                    .background(.ultraThinMaterial, in: Capsule())
             }
         }
     }
