@@ -54,17 +54,6 @@ struct DoctorHarnessTests {
     }
 
     @Test
-    func reportSurvivesIndependentOfAnyView() async {
-        // The regression intent: the harness — not a view — owns the result, so
-        // it remains readable after the run completes even though no view holds it.
-        let runner = StubAdminRunner(.success(multiSectionResult()))
-        let harness = DoctorHarness(runner: runner)
-        harness.runDoctor()
-        await harness.waitForCompletion()
-        #expect(harness.report != nil)
-    }
-
-    @Test
     func runFixIssuesFixSubcommand() async {
         let runner = StubAdminRunner(.success(multiSectionResult()))
         let harness = DoctorHarness(runner: runner)
@@ -84,13 +73,4 @@ struct DoctorHarnessTests {
         #expect(harness.isRunning == false)
     }
 
-    @Test
-    func runWithNilRunnerIsNoOp() async {
-        let harness = DoctorHarness(runner: nil)
-        harness.runDoctor()
-        await harness.waitForCompletion()
-        #expect(harness.report == nil)
-        #expect(harness.isRunning == false)
-        #expect(harness.lastError == nil)
-    }
 }

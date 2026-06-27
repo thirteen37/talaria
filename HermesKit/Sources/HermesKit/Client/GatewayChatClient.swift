@@ -240,6 +240,76 @@ public actor GatewayChatClient: ChatBackend {
         }
     }
 
+    /// Run a prompt concurrently in a background session via `prompt.background`
+    /// (`/bg`). The gateway starts a detached agent thread and returns a
+    /// `{task_id}`; completion arrives later as the `background.complete` event
+    /// (mapped to ``SessionUpdate/backgroundComplete(taskId:text:)``). Unlike
+    /// `prompt`, this never touches `turnContinuation` — it is not the foreground
+    /// turn, so the live turn (if any) is unaffected.
+    public func promptBackground(sessionId: SessionId, text: String) async throws -> String {
+        let runtime = runtimeSessionId ?? sessionId
+        let result = try await call("prompt.background", PromptParams(sessionId: runtime, text: text))
+        guard let taskId = Self.string(Self.object(result)["task_id"]) else {
+            throw GatewayChatError.server("background task did not start")
+        }
+        return taskId
+    }
+
+    /// Fork the current session into a new live session via `session.branch`.
+    /// The gateway creates a new DB row (marked `_branched_from`), inits an agent,
+    /// and returns the new runtime id + title + parent stored key. The new session
+    /// is already live under the returned runtime id.
+    public func branchSession(sessionId: SessionId, name: String?) async throws -> BranchResult {
+        let runtime = runtimeSessionId ?? sessionId
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = try await call(
+            "session.branch",
+            BranchParams(sessionId: runtime, name: (trimmed?.isEmpty == false) ? trimmed : nil)
+        )
+        let o = Self.object(result)
+        guard let newId = Self.string(o["session_id"]) else {
+            throw GatewayChatError.server("branch did not return a session id")
+        }
+        return BranchResult(
+            sessionId: newId,
+            title: Self.string(o["title"]) ?? "",
+            parent: Self.string(o["parent"]) ?? ""
+        )
+    }
+
+    /// Request a `/handoff` to a messaging platform via `handoff.request`. The
+    /// failure codes (4023–4027, 4009) come back as JSON-RPC errors carrying the
+    /// gateway's human-readable message, surfaced verbatim by the caller.
+    public func requestHandoff(sessionId: SessionId, platform: String) async throws -> HandoffRequestResult {
+        let runtime = runtimeSessionId ?? sessionId
+        let result = try await call("handoff.request", HandoffRequestParams(sessionId: runtime, platform: platform))
+        let o = Self.object(result)
+        return HandoffRequestResult(
+            queued: Self.bool(o["queued"]) ?? true,
+            sessionKey: Self.string(o["session_key"]) ?? "",
+            platform: Self.string(o["platform"]) ?? platform,
+            homeName: Self.string(o["home_name"]) ?? ""
+        )
+    }
+
+    /// Poll the handoff state via `handoff.state`.
+    public func handoffState(sessionId: SessionId) async throws -> HandoffState {
+        let runtime = runtimeSessionId ?? sessionId
+        let result = try await call("handoff.state", SessionIdParams(sessionId: runtime))
+        let o = Self.object(result)
+        return HandoffState(
+            state: Self.string(o["state"]) ?? "",
+            platform: Self.string(o["platform"]) ?? "",
+            error: Self.string(o["error"]) ?? ""
+        )
+    }
+
+    /// Mark an in-flight handoff failed via `handoff.fail` (poll timed out).
+    public func failHandoff(sessionId: SessionId, error: String) async throws {
+        let runtime = runtimeSessionId ?? sessionId
+        _ = try await call("handoff.fail", HandoffFailParams(sessionId: runtime, error: error))
+    }
+
     /// Rename the live session via the gateway `session.title` RPC. Returns the
     /// resolved title (the gateway echoes it back, possibly `pending` until the
     /// DB row is persisted).
@@ -278,6 +348,18 @@ public actor GatewayChatClient: ChatBackend {
         if envelope.method == "event", let params = envelope.params {
             let fields = Self.object(params)
             guard let type = Self.string(fields["type"]) else { return }
+            // Defense-in-depth (see docs/gateway-chat.md): today one socket hosts
+            // exactly one session, but the gateway tags every turn event with the
+            // runtime `session_id` and the protocol reserves socket-multiplexing
+            // as a later optimization. Drop any event whose non-empty `session_id`
+            // isn't ours so a foreign session's `message.complete` can never end
+            // *this* turn. An empty/absent `session_id` is a global broadcast
+            // (`gateway.ready`, `skin.changed`, …) and is always allowed through;
+            // so is anything arriving before our runtime id is known.
+            if let eventSid = Self.string(fields["session_id"]), !eventSid.isEmpty,
+               let runtime = runtimeSessionId, eventSid != runtime {
+                return
+            }
             dispatchEvent(type: type, payload: fields["payload"])
             return
         }
@@ -404,10 +486,19 @@ public actor GatewayChatClient: ChatBackend {
             if let sid = boundSessionId {
                 notificationContinuation.yield(.turnStarted(sid))
             }
+        case "background.complete":
+            // A `/bg` task finished (server-process thread). Surface it as a
+            // session update so the chat can render the result + clear its live
+            // "running" indicator; it's not a foreground turn, so `turnContinuation`
+            // is untouched.
+            emit(.backgroundComplete(
+                taskId: Self.string(p["task_id"]) ?? "",
+                text: Self.string(p["text"]) ?? ""
+            ))
         default:
             // gateway.ready, thinking.delta (kawaii spinner), tool.generating,
-            // status.update, skin.changed, background.complete, subagent.*,
-            // voice.* — not needed for v1 parity. See docs.
+            // status.update, skin.changed, subagent.*, voice.* — not needed for
+            // v1 parity. See docs.
             break
         }
     }
@@ -633,6 +724,11 @@ public actor GatewayChatClient: ChatBackend {
         return nil
     }
 
+    private static func bool(_ value: JSONValue?) -> Bool? {
+        if case let .bool(b) = value { return b }
+        return nil
+    }
+
     private static func key(for id: JSONRPCID) -> String {
         switch id {
         case let .string(s): return s
@@ -717,6 +813,34 @@ public actor GatewayChatClient: ChatBackend {
             case sessionId = "session_id"
             case name
             case arg
+        }
+    }
+
+    private struct BranchParams: Codable, Sendable {
+        let sessionId: String
+        /// Omitted when nil — the gateway then derives a lineage title.
+        let name: String?
+        enum CodingKeys: String, CodingKey {
+            case sessionId = "session_id"
+            case name
+        }
+    }
+
+    private struct HandoffRequestParams: Codable, Sendable {
+        let sessionId: String
+        let platform: String
+        enum CodingKeys: String, CodingKey {
+            case sessionId = "session_id"
+            case platform
+        }
+    }
+
+    private struct HandoffFailParams: Codable, Sendable {
+        let sessionId: String
+        let error: String
+        enum CodingKeys: String, CodingKey {
+            case sessionId = "session_id"
+            case error
         }
     }
 

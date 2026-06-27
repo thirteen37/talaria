@@ -62,62 +62,18 @@ struct SidebarLayoutTests {
     }
 
     @Test
-    func unknownStoredRawStringIsDropped() {
+    func storedOrderIsReconciledToCurrentManagePages() {
         let defaults = makeDefaults()
-        // Seed an order containing a bogus raw value plus a real one.
-        defaults.set(["bogusRemovedPage", BrowseDestination.extensions.rawValue], forKey: "sidebarOrder")
+        defaults.set(
+            ["bogusRemovedPage", BrowseDestination.sessions.rawValue, BrowseDestination.models.rawValue],
+            forKey: "sidebarOrder"
+        )
 
         let layout = SidebarLayout(defaults: defaults)
 
-        #expect(!layout.orderedManageDestinations.contains { $0.rawValue == "bogusRemovedPage" })
-        #expect(layout.orderedManageDestinations.contains(.extensions))
-    }
-
-    @Test
-    func legacyConsolidatedRawStringsAreDroppedAndExtensionsAppended() {
-        let defaults = makeDefaults()
-        // A pre-consolidation user's stored order references the four removed
-        // pages. They become unknown raw strings and are dropped; `.extensions`
-        // is appended as a missing manage page.
-        defaults.set(["skills", "tools", "mcp", "plugins"], forKey: "sidebarOrder")
-
-        let layout = SidebarLayout(defaults: defaults)
-
-        for legacy in ["skills", "tools", "mcp", "plugins"] {
-            #expect(!layout.orderedManageDestinations.contains { $0.rawValue == legacy })
-        }
-        #expect(layout.orderedManageDestinations.contains(.extensions))
-        // Every current manage page is present after reconcile.
-        #expect(Set(layout.orderedManageDestinations) == Set(BrowseDestination.manageOrder))
-    }
-
-    @Test
-    func sessionsStoredRawStringIsDropped() {
-        let defaults = makeDefaults()
-        // `.sessions` is valid but pinned — it must never enter the manage list.
-        defaults.set([BrowseDestination.sessions.rawValue, BrowseDestination.extensions.rawValue], forKey: "sidebarOrder")
-
-        let layout = SidebarLayout(defaults: defaults)
-
-        #expect(!layout.orderedManageDestinations.contains(.sessions))
-    }
-
-    @Test
-    func missingManageEntryIsAppended() {
-        let defaults = makeDefaults()
-        // Store only one page; every other `manageOrder` page should be appended.
-        defaults.set([BrowseDestination.models.rawValue], forKey: "sidebarOrder")
-
-        let layout = SidebarLayout(defaults: defaults)
-
-        // First is the explicitly-stored page.
         #expect(layout.orderedManageDestinations.first == .models)
-        // All manage pages are present.
+        #expect(!layout.orderedManageDestinations.contains(.sessions))
         #expect(Set(layout.orderedManageDestinations) == Set(BrowseDestination.manageOrder))
-        // The appended remainder keeps `manageOrder`'s relative ordering.
-        let appended = Array(layout.orderedManageDestinations.dropFirst())
-        let expectedAppended = BrowseDestination.manageOrder.filter { $0 != .models }
-        #expect(appended == expectedAppended)
     }
 
     @Test

@@ -158,8 +158,8 @@ git push origin v1.0
 The `Release` workflow will pick it up and produce a signed, notarised DMG
 attached to the GitHub Release plus a PR updating `docs/appcast.xml`.
 
-Then execute the manual test plan (`docs/test-plan.md`) against the
-artefact, including the **Release artifact verification** section.
+Then smoke-test the artefact and verify the appcast/update path described in
+`docs/release.md`.
 
 ## 9. iOS / iPadOS TestFlight
 

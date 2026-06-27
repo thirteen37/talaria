@@ -31,4 +31,14 @@ public struct SlashCommand: Equatable, Sendable {
     /// Whether this command may be dispatched mid-turn (see ``pendingInputCommands``).
     /// Compared case-insensitively so `/QUEUE` classifies like `/queue`.
     public var isPendingInput: Bool { Self.pendingInputCommands.contains(name.lowercased()) }
+
+    /// Commands that run a prompt *concurrently* in a background session — `/bg`
+    /// and its Hermes aliases `/background` / `/btw`. Dispatched via the
+    /// `prompt.background` RPC rather than queued: concurrency is the point, so
+    /// they fire immediately whether the session is idle or mid-turn.
+    public static let backgroundCommands: Set<String> = ["background", "bg", "btw"]
+
+    /// Whether this command runs concurrently in the background (see
+    /// ``backgroundCommands``). Compared case-insensitively.
+    public var isBackground: Bool { Self.backgroundCommands.contains(name.lowercased()) }
 }

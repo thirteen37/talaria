@@ -169,20 +169,29 @@ regardless of which behavior the connected Hermes exhibits.
 session (maps the runtime id → session, queues when the DB row isn't persisted
 yet). Talaria's `/title <name>` shim calls it, then mirrors the resolved title
 into the open tab + chat header. `/new` and `/reset` are pure native shims
-(`store.openNew()`); a few informational stubs (`/yolo`, `/profile`, `/skin`,
-`/branch`, `/fork`) render an honest "not available in Talaria" line instead of
-hitting the harness.
+(`store.openNew()`). Several commands map to **dedicated gateway RPCs** rather
+than the slash path: `/bg` (`/background`/`/btw`) runs a prompt concurrently in a
+background session (`prompt.background`, result delivered by the
+`background.complete` event); `/branch` (`/fork`) forks the current history into
+a new live session and switches to it (`session.branch`, then the store reopens
+the new row by title); `/handoff <platform>` hands the session to a messaging
+platform via `handoff.request` → bounded `handoff.state` poll → `handoff.fail` on
+timeout. The remaining informational stubs (`/yolo`, `/profile`, `/skin`) render
+an honest "not available in Talaria" line instead of hitting the harness.
 
 #### Sending while a turn is in flight (pending-input)
 
 A send is **not** blocked while a turn streams. `LocalChatViewModel.sendPrompt`
-routes a busy send to `sendWhileBusy`, which accepts exactly two shapes and
+routes a busy send to `sendWhileBusy`, which accepts exactly three shapes and
 no-ops on everything else (so a second normal turn can never race the live one):
 
 - a slash command in the pending-input set
   (`SlashCommand.pendingInputCommands` = `{retry, queue, q, steer, plan, goal,
   undo}`, the single source of truth mirroring `server.py:5931`), dispatched via
-  the same `command.dispatch` path above; and
+  the same `command.dispatch` path above;
+- a background command (`SlashCommand.backgroundCommands` = `{background, bg,
+  btw}`), dispatched **immediately** via `prompt.background` (concurrency is the
+  point — never queued, runs alongside the live turn); and
 - plain text, auto-wrapped as `/queue <text>` so the user needn't know the verb
   (with a one-time inline tip explaining `/queue` and `/steer`).
 
@@ -190,15 +199,20 @@ The live turn's busy state (`isSending`, `turnStartDate`, `statusText`,
 `markTurnStarted`) is left untouched — the streaming turn owns it — and the
 dispatch's feedback is surfaced as an inline `.event` line, never a new user
 bubble. Because the dispatch shares the `command.dispatch` round-trip, the
-`whileBusy` path adds two guards over the idle mapping: a `send`/`.submit`
-payload is refused (it would start a racing turn), and the `prefill`/`/undo`
-shape does **not** refill the composer or re-seed the transcript mid-stream
-(that would clobber the live turn) — it surfaces only the harness notice.
+`whileBusy` path handles its payloads specially: a `send`/`.submit` payload (what
+`/queue`, `/q`, the `/steer` no-active-run fallback, and `/goal <text>` resolve
+to mid-turn) is **held** in a local `queuedPrompts` list rather than starting a
+racing turn, then submitted as a real turn when the current turn ends *cleanly*
+(FIFO, one per turn; a cancel/error halts the drain and the held items resume
+after the next clean turn). The `prefill`/`/undo` shape does **not** refill the
+composer or re-seed the transcript mid-stream (that would clobber the live turn)
+— it surfaces only the harness notice.
 
 The composer mirrors this: while busy it shows **both** Send and Cancel, enables
-Send only when the text is dispatchable (plain text or a pending-input slash —
-non-pending slashes are disabled and the slash menu is filtered to the
-pending-input set), and binds `⌘.` (one chord) and a double-`Esc` (arm-then-
+Send only when the text is dispatchable (plain text, a pending-input slash, or a
+background command — other slashes are disabled and the slash menu is filtered to
+the pending-input + background sets), and binds `⌘.` (one chord) and a
+double-`Esc` (arm-then-
 confirm) to `session.interrupt`. As with any non-`.submit` slash RPC, Cancel is
 inert during the brief `command.dispatch` round-trip itself (the gateway has no
 slash-cancel RPC); these resolve in tens of ms.

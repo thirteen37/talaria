@@ -29,7 +29,7 @@ xcodebuild build -scheme HermesKit \
   -destination 'generic/platform=iOS Simulator' -workspace Talaria.xcworkspace
 ```
 
-Release builds (signing, notarisation, stapling, DMG, Sparkle appcast) go through `scripts/release.sh`; see `docs/release.md`. `docs/test-plan.md` is the manual QA script run before a release candidate.
+Release builds (signing, notarisation, stapling, DMG, Sparkle appcast) go through `scripts/release.sh`; see `docs/release.md`.
 
 ## Architecture
 

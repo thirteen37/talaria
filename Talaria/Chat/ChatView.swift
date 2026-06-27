@@ -20,6 +20,13 @@ struct ChatView: View {
     /// disabled composer when a prompt first appears.
     @FocusState private var promptFocused: Bool
 
+    /// Page Up / Page Down scroll-back. The composer's page-key closures set
+    /// `pendingScroll`; the `onChange` scroller inside the `ScrollViewReader`
+    /// consumes it. `pageAnchorIndex` remembers the last keyboard-driven anchor so
+    /// repeated presses walk the transcript instead of re-jumping to the bottom.
+    @State private var pendingScroll: ScrollDirection?
+    @State private var pageAnchorIndex: Int?
+
     /// Scroll anchor for the inline permission card. A fixed string id (the card is
     /// a singleton tail element) so the on-show scroll can target it.
     private static let permissionAnchorID = "permission-prompt-anchor"
@@ -122,10 +129,36 @@ struct ChatView: View {
                     }
                 }
                 .onChange(of: viewModel.messages) { _, messages in
+                    // New content re-anchors paging to the live bottom, so the next
+                    // Page Up resumes from the latest message rather than a stale
+                    // mid-transcript index.
+                    pageAnchorIndex = nil
                     guard let last = messages.last else {
                         return
                     }
                     proxy.scrollTo(last.id, anchor: .bottom)
+                }
+                // Page Up / Page Down (from the composer) walk the transcript by a
+                // fixed message stride. The anchor is *tracked*, not read from the
+                // live scroll position (macOS 14 lacks the offset-based
+                // `ScrollPosition` API, and mixing `.scrollPosition(id:)` with the
+                // imperative auto-scroll risks the fragile relayout #151 fixed), so
+                // a trackpad scroll between key presses makes the first Page key
+                // resume from the last keyboard anchor. Acceptable for v1.
+                .onChange(of: pendingScroll) { _, direction in
+                    guard let direction else { return }
+                    defer { pendingScroll = nil }
+                    guard let target = Self.pagedAnchorIndex(
+                        from: pageAnchorIndex,
+                        direction: direction,
+                        count: viewModel.messages.count
+                    ) else { return }
+                    let message = viewModel.messages[target]
+                    let isLast = target == viewModel.messages.count - 1
+                    // Land the last row on `.bottom` so Page Down returns cleanly to
+                    // the live tail; every earlier anchor lands on `.top`.
+                    proxy.scrollTo(message.id, anchor: isLast ? .bottom : .top)
+                    pageAnchorIndex = target
                 }
                 // When a prompt first appears, focus its inline card and scroll it
                 // into view. Runs after the `messages` onChange (the permission's
@@ -156,6 +189,10 @@ struct ChatView: View {
                 contextSize: viewModel.contextSize
             )
 
+            // Live `/bg` status stack (desktop parity). Event-driven: tasks start
+            // running on `prompt.background` and flip finished on `background.complete`.
+            BackgroundTasksIndicator(tasks: viewModel.backgroundTasks)
+
             if viewModel.isReadOnly {
                 ReadOnlyComposerBanner()
             } else {
@@ -166,7 +203,9 @@ struct ChatView: View {
                     blockedPlaceholder: viewModel.blockedPlaceholder,
                     availableCommands: viewModel.availableCommands,
                     send: { Task { await viewModel.sendPrompt() } },
-                    cancel: { Task { await viewModel.cancel() } }
+                    cancel: { Task { await viewModel.cancel() } },
+                    onPageUp: { pendingScroll = .up },
+                    onPageDown: { pendingScroll = .down }
                 )
             }
         }
@@ -212,6 +251,29 @@ struct ChatView: View {
     /// layout) never produces a negative frame.
     private func rowWidth(for containerWidth: CGFloat) -> CGFloat {
         max(containerWidth - 32, 1)
+    }
+
+    /// Page Up / Page Down scroll direction.
+    enum ScrollDirection { case up, down }
+
+    /// Messages stepped per Page Up / Page Down. A rough stride — transcript rows
+    /// vary in height, so a fixed message count only approximates a "page" (see the
+    /// tracked-anchor limitation at the scroll call site).
+    nonisolated static let transcriptPageStride = 5
+
+    /// Next page-scroll anchor index: steps `current` (nil → the last message) by
+    /// `stride` in `direction`, clamped into `0..<count`. Returns nil for an empty
+    /// transcript. Pure and `nonisolated` so it's unit-testable off the `@MainActor`.
+    nonisolated static func pagedAnchorIndex(
+        from current: Int?,
+        direction: ScrollDirection,
+        count: Int,
+        stride: Int = transcriptPageStride
+    ) -> Int? {
+        guard count > 0 else { return nil }
+        let start = current ?? (count - 1)
+        let step = direction == .up ? -stride : stride
+        return min(max(start + step, 0), count - 1)
     }
 
     /// Hidden, always-mounted buttons that register the prompt's keyboard
@@ -321,6 +383,67 @@ struct ChatView: View {
     }
 }
 
+/// Compact live indicator for `/bg` background tasks — "🌘 N running" with a
+/// popover listing them. Hidden when nothing is running (the per-task result
+/// also lands in the transcript). Event-driven; see ``LocalChatViewModel``.
+private struct BackgroundTasksIndicator: View {
+    let tasks: [LocalChatViewModel.BackgroundTask]
+    @State private var showingPopover = false
+
+    private var running: [LocalChatViewModel.BackgroundTask] {
+        tasks.filter { $0.state == .running }
+    }
+
+    var body: some View {
+        if !running.isEmpty {
+            HStack {
+                Spacer(minLength: 0)
+                Button {
+                    showingPopover.toggle()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "moonphase.waning.crescent")
+                        Text("\(running.count) running")
+                            .font(.caption)
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("\(running.count) background task\(running.count == 1 ? "" : "s") running — show details")
+                .accessibilityLabel("Background tasks")
+                .popover(isPresented: $showingPopover, arrowEdge: .bottom) {
+                    BackgroundTasksList(tasks: running)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+            .background(.bar)
+        }
+    }
+}
+
+/// The popover body listing the running `/bg` tasks and their prompts.
+private struct BackgroundTasksList: View {
+    let tasks: [LocalChatViewModel.BackgroundTask]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Background tasks")
+                .font(.headline)
+            ForEach(tasks) { task in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(task.text)
+                        .font(.callout)
+                        .lineLimit(3)
+                }
+            }
+        }
+        .padding(16)
+        .frame(minWidth: 240, maxWidth: 360, alignment: .leading)
+    }
+}
+
 private struct ReadOnlyComposerBanner: View {
     var body: some View {
         HStack(spacing: 8) {
@@ -341,6 +464,14 @@ private struct ReadOnlyComposerBanner: View {
 @MainActor
 @Observable
 final class LocalChatViewModel {
+    /// One `/bg` background task, tracked for the live status indicator.
+    struct BackgroundTask: Identifiable, Equatable {
+        let id: String
+        let text: String
+        var state: State
+        enum State: Equatable { case running, finished }
+    }
+
     var prompt = ""
     var messages: [ChatTranscriptMessage] = []
     var isSending = false
@@ -353,6 +484,14 @@ final class LocalChatViewModel {
     var hasError = false
     var pendingPermission: PermissionPromptState?
     var availableCommands: [AvailableCommand] = []
+    /// `/bg` tasks started this session, for the live status indicator. A task is
+    /// added (running) when `prompt.background` returns its id and flipped to
+    /// finished on the matching `background.complete`. Purely event-driven: there's
+    /// no `process.list` reconcile, because `/bg` AIAgent tasks don't surface in
+    /// the OS process registry, so the gateway has nothing to reconcile against. A
+    /// dropped `background.complete` would leave a task shown as running (benign —
+    /// the result still lands in the transcript when it arrives).
+    private(set) var backgroundTasks: [BackgroundTask] = []
     var gitBranch: String?
     /// Active model/mode alias reported by the gateway (`session.info`), shown
     /// as a badge in the status bar. Nil until the first session-info update.
@@ -370,6 +509,15 @@ final class LocalChatViewModel {
     private let cwd: String
     private var notificationTask: Task<Void, Never>?
     private var promptTask: Task<Void, Never>?
+    /// The detached `/handoff` poll, so it can be cancelled on shutdown / when a
+    /// newer handoff supersedes it. Runs off the turn-busy state by design (see
+    /// ``runHandoff(platform:client:)``).
+    private var handoffPollTask: Task<Void, Never>?
+    /// Plain text / `/queue`d messages the user sent mid-turn, held until the
+    /// current turn ends *cleanly* and then submitted one at a time (FIFO). A
+    /// cancel/error halts the drain (the items persist and resume after the next
+    /// clean turn). See ``drainNextQueuedPrompt(client:)``.
+    private var queuedPrompts: [String] = []
     private var currentUserStreamMessageId: UUID?
     private var currentAgentMessageId: UUID?
     private var currentThoughtMessageId: UUID?
@@ -540,6 +688,14 @@ final class LocalChatViewModel {
         let isAutoQueue: Bool
         if text.hasPrefix("/") {
             let parsed = SlashCommand(parsing: text)
+            // Background commands run concurrently — dispatch immediately rather
+            // than queueing (concurrency is the whole point), and never touch the
+            // live turn's busy state.
+            if parsed.isBackground {
+                prompt = ""
+                await startBackgroundPrompt(text: parsed.arg, client: client)
+                return
+            }
             guard parsed.isPendingInput else {
                 // A non-pending-input slash (/help, /model, …) while busy is a
                 // no-op: dispatching it would be inert at best and confusing at
@@ -688,6 +844,10 @@ final class LocalChatViewModel {
 
         let id = sessionId
         promptTask = Task { [weak self] in
+            // Only a clean (non-cancelled, non-error) completion drains the next
+            // queued prompt; a cancel/error halts the drain and leaves the queue
+            // intact for the next clean turn.
+            var completedCleanly = false
             do {
                 let response = try await client.prompt(sessionId: id, content: text)
                 self?.statusText = "Stopped: \(response.stopReason.rawValue)"
@@ -697,6 +857,7 @@ final class LocalChatViewModel {
                 // banner at the start of the final response. It's now event-driven
                 // and debounced in `SessionsStore` (armed by `armAgentFinished`),
                 // which coalesces across the chained turns and fires once.
+                completedCleanly = true
             } catch is CancellationError {
                 self?.statusText = "Cancelled"
                 // A cancelled turn must consume the arm so it doesn't carry over
@@ -713,7 +874,22 @@ final class LocalChatViewModel {
             self?.isSending = false
             self?.turnStartDate = nil
             self?.store?.markTurnFinished(id: id)
+            if completedCleanly {
+                self?.drainNextQueuedPrompt(client: client)
+            }
         }
+    }
+
+    /// Submits the next mid-turn-queued prompt (if any) as a real LLM turn after
+    /// the current one ended cleanly. Drains one at a time — each turn's clean
+    /// completion pulls the next — so a backlog runs FIFO without overlapping.
+    /// The drained text is echoed as a user bubble (it becomes a real user turn).
+    private func drainNextQueuedPrompt(client: any ChatBackend) {
+        guard !queuedPrompts.isEmpty else {
+            return
+        }
+        let next = queuedPrompts.removeFirst()
+        Task { await runPrompt(text: next, client: client, echoUser: true) }
     }
 
     /// Routes a parsed slash command: native shims (real Talaria actions),
@@ -738,6 +914,10 @@ final class LocalChatViewModel {
             } else {
                 await runSetTitle(to: arg, client: client)
             }
+        case "background", "bg", "btw":
+            // `/bg <prompt>` runs concurrently in a background session via the
+            // `prompt.background` RPC — never a foreground turn (returns false).
+            await startBackgroundPrompt(text: arg, client: client)
 
         // B. Informational stubs — capabilities Talaria doesn't have, intercepted
         // so they neither hit the LLM nor create confusing harness state.
@@ -748,13 +928,118 @@ final class LocalChatViewModel {
         case "skin":
             append(kind: .event, text: "Talaria follows the system appearance; skins aren't supported.")
         case "branch", "fork":
-            append(kind: .event, text: "Session branching isn't supported in Talaria yet.")
+            // Forks the current history into a new live session and opens it.
+            await branchCurrentSession(name: arg, client: client)
+        case "handoff":
+            // Hands the session off to a messaging platform (Slack/Matrix/…) via a
+            // request→poll→fail protocol. Only works with a configured `hermes
+            // gateway`; otherwise the request RPC returns a clear error.
+            await runHandoff(platform: arg, client: client)
 
         // C. Everything else → harness.
         default:
             return await runHarnessSlash(name: name, arg: arg, client: client)
         }
         return false
+    }
+
+    /// Dispatches a `/bg` prompt via `prompt.background` and registers it in
+    /// ``backgroundTasks`` for the live indicator. Shared by the idle (`runSlash`)
+    /// and mid-turn (`sendWhileBusy`) paths; never starts or touches a foreground
+    /// turn, so a live turn keeps streaming alongside it.
+    private func startBackgroundPrompt(text: String, client: any ChatBackend) async {
+        guard !text.isEmpty else {
+            append(kind: .event, text: "Usage: /bg <prompt>")
+            return
+        }
+        do {
+            let taskId = try await client.promptBackground(sessionId: sessionId, text: text)
+            backgroundTasks.append(BackgroundTask(id: taskId, text: text, state: .running))
+            append(kind: .event, text: "🌘 Background task started…")
+        } catch {
+            append(kind: .event, text: errorMessage(for: error))
+        }
+    }
+
+    /// Forks the current session via `session.branch`, then opens the new branch
+    /// (the store resolves the freshly-created row and switches to it). Surfaces
+    /// the harness 4008 "nothing to branch" error for an empty session. `name` is
+    /// an optional branch title.
+    private func branchCurrentSession(name: String, client: any ChatBackend) async {
+        do {
+            let result = try await client.branchSession(sessionId: sessionId, name: name.isEmpty ? nil : name)
+            append(kind: .event, text: "🌱 Branched into “\(result.title)”.")
+            await store?.openBranchedSession(title: result.title)
+        } catch {
+            append(kind: .event, text: errorMessage(for: error))
+        }
+    }
+
+    /// Bounded `/handoff` poll: `handoffPollAttempts` attempts spaced by
+    /// `handoffPollInterval` (≈30 × 1s, matching the desktop). Instance-level and
+    /// observation-ignored so a test can shrink them without racing shared state.
+    @ObservationIgnored var handoffPollAttempts = 30
+    @ObservationIgnored var handoffPollInterval: Duration = .seconds(1)
+
+    /// Drives a `/handoff <platform>`: request → bounded poll on `handoff.state`
+    /// → terminal line. On timeout it marks the handoff failed (so the user can
+    /// retry) and says so. Each failure code surfaces the gateway's own message.
+    /// Idle-only — `handoff` isn't in the mid-turn sets, so the busy path never
+    /// dispatches it.
+    private func runHandoff(platform rawPlatform: String, client: any ChatBackend) async {
+        let platform = rawPlatform.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !platform.isEmpty else {
+            append(kind: .event, text: "Usage: /handoff <platform> (e.g. /handoff slack)")
+            return
+        }
+        do {
+            let request = try await client.requestHandoff(sessionId: sessionId, platform: platform)
+            let destination = request.homeName.isEmpty ? platform : request.homeName
+            append(kind: .event, text: "Handing off to \(destination)…")
+            // Poll for the terminal state *detached* — crucially NOT while holding
+            // the turn-busy state. The poll can run ~30s; if it held `isSending`,
+            // anything the user typed meanwhile would be routed to `queuedPrompts`
+            // and stranded there (the queue only drains on a clean `runPrompt`,
+            // which a handoff never runs). Detaching keeps the session idle and
+            // usable while the transfer settles.
+            handoffPollTask?.cancel()
+            handoffPollTask = Task { [weak self] in
+                await self?.pollHandoff(platform: platform, destination: destination, client: client)
+            }
+        } catch {
+            append(kind: .event, text: errorMessage(for: error))
+        }
+    }
+
+    /// The bounded `handoff.state` poll, run as a detached task by ``runHandoff``.
+    /// Appends the terminal line, or on timeout marks the handoff failed (so the
+    /// user can retry) and says so. Stops quietly if cancelled (session torn down
+    /// or a newer handoff superseded it).
+    private func pollHandoff(platform: String, destination: String, client: any ChatBackend) async {
+        do {
+            for _ in 0 ..< handoffPollAttempts {
+                try await Task.sleep(for: handoffPollInterval)
+                let state = try await client.handoffState(sessionId: sessionId)
+                switch state.state {
+                case "completed":
+                    append(kind: .event, text: "✓ Handed off to \(destination).")
+                    return
+                case "failed":
+                    let detail = state.error.isEmpty ? "" : ": \(state.error)"
+                    append(kind: .event, text: "✗ Handoff failed\(detail).")
+                    return
+                default:
+                    continue // pending / running / "" — keep polling
+                }
+            }
+            // Timed out: mark it failed so a retry is possible, then say so.
+            try? await client.failHandoff(sessionId: sessionId, error: "timed out waiting for handoff")
+            append(kind: .event, text: "Handoff timed out — retry with /handoff \(platform).")
+        } catch is CancellationError {
+            // Superseded or shutting down — leave the transcript as-is.
+        } catch {
+            append(kind: .event, text: errorMessage(for: error))
+        }
     }
 
     private func runSetTitle(to newTitle: String, client: any ChatBackend) async {
@@ -822,11 +1107,17 @@ final class LocalChatViewModel {
                 }
             case let .submit(message, notice):
                 if whileBusy {
-                    // A pending-input dispatch must never start a turn over the
-                    // live one. Hermes shouldn't return `send` for the
-                    // pending-input set, so treat it as an error rather than
-                    // silently launching a racing turn.
-                    append(kind: .event, text: "Couldn't send while the current turn is running.")
+                    // A pending-input dispatch resolved to `send` mid-turn — the
+                    // shape Hermes returns for `/queue`, `/q`, the `/steer`
+                    // no-active-run fallback, and `/goal <text>`. It must never
+                    // start a turn over the live one; instead hold the message and
+                    // submit it when the current turn ends cleanly (see
+                    // `drainNextQueuedPrompt`). The caller already surfaced the
+                    // "Queued." feedback; append any harness notice too.
+                    if let notice, !notice.isEmpty {
+                        append(kind: .event, text: notice)
+                    }
+                    queuedPrompts.append(message)
                     return false
                 }
                 if let notice, !notice.isEmpty {
@@ -919,6 +1210,8 @@ final class LocalChatViewModel {
         notificationTask?.cancel()
         notificationTask = nil
         promptTask?.cancel()
+        handoffPollTask?.cancel()
+        handoffPollTask = nil
         if pendingPermission != nil {
             await resolvePermission(.cancelled)
         }
@@ -998,6 +1291,17 @@ final class LocalChatViewModel {
         case let .usageUpdate(update):
             contextUsed = update.used
             contextSize = update.size
+        case let .backgroundComplete(taskId, text):
+            // Flip the live indicator's task to finished and render the result.
+            // Deliberately does NOT reset the streaming cursor: `/bg` runs
+            // concurrently with the foreground turn, so this event can land while
+            // the agent reply/thought is mid-stream — nilling the cursor would
+            // split that in-progress bubble in two. `append` creates its own
+            // event message regardless of the cursor.
+            if let index = backgroundTasks.firstIndex(where: { $0.id == taskId }) {
+                backgroundTasks[index].state = .finished
+            }
+            append(kind: .event, text: "🌖 Background task finished:\n\(text)")
         case let .sessionInfoUpdate(update):
             if let model = update.model, !model.isEmpty {
                 self.model = model

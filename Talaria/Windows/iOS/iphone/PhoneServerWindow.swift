@@ -16,7 +16,7 @@ struct PhoneServerWindow: View {
     /// navigation snapshot once the dashboard is live, and is written on
     /// backgrounding + each navigation change.
     @Environment(WindowRestorationStore.self) private var restoration: WindowRestorationStore?
-    @State private var harness: ServerWindowHarness?
+    @State private var controller = ServerWindowController()
     /// Window-scoped navigation intent for `EntityLink` taps. Injected into the
     /// content and the Browse sheet; this window observes `pendingFocus` to open
     /// the chat or the Browse sheet seeded to the entity's page.
@@ -51,30 +51,15 @@ struct PhoneServerWindow: View {
     /// hooks don't persist half-restored state and the latch ignores restore's own
     /// writes.
     @State private var isRestoring = false
-    @State private var activeProfileId: UUID?
-    /// Active Hermes profile (`hermes -p <name>`) the whole window is scoped to.
-    /// Does not persist — resets to `default` on launch and on every server
-    /// switch.
-    @State private var activeHermesProfile = HermesProfiles.defaultProfileName
-    /// Hermes profiles available on the active server, enumerated after the
-    /// dashboard comes online. Drives the sidebar switcher.
-    @State private var hermesProfiles: [HermesProfileInfo] = []
-    /// True while the Hermes-profile list is loading, so the sidebar shows a
-    /// placeholder in the selector slot instead of popping the menu in. Cleared
-    /// once the dashboard produces an authoritative answer (success or error).
-    @State private var hermesProfilesLoading = true
-
-    private var currentProfileId: UUID { activeProfileId ?? profileId }
+    private var currentProfileId: UUID { controller.currentProfileId(default: profileId) }
 
     /// Combined rebuild identity: a change to either the server or the Hermes
     /// profile tears the harness down and rebuilds it.
-    private var harnessKey: HarnessKey {
-        HarnessKey(server: currentProfileId, hermes: activeHermesProfile)
-    }
+    private var harnessKey: ServerWindowHarnessKey { controller.harnessKey(default: profileId) }
 
     var body: some View {
         Group {
-            if let harness {
+            if let harness = controller.harness {
                 content(harness: harness)
             } else if directory.profiles.isEmpty {
                 // iPhone is remote-only (no bundled local profile), so an empty
@@ -88,17 +73,20 @@ struct PhoneServerWindow: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .navigationTitle(harness?.profile.name ?? directory.profile(id: currentProfileId)?.name ?? "Hermes")
+        .navigationTitle(controller.harness?.profile.name ?? directory.profile(id: currentProfileId)?.name ?? "Hermes")
         .task(id: harnessKey) {
-            await rebuildHarness()
+            await controller.rebuild(defaultProfileId: profileId, directory: directory)
+            if UITestFlags.screenshotFixture, UITestFlags.opensScreenshotChat {
+                chatPath = [ScreenshotFixtures.primarySessionID]
+            }
         }
         // The dashboard comes online async, after `rebuildHarness` already ran
         // its first (client-less) profile load. Re-run once it lands so the
         // switcher upgrades from default-only to the live dashboard list,
         // mirroring the config editor's dashboard-ready re-load.
-        .onChange(of: harness?.dashboardClient != nil) { _, hasClient in
-            guard hasClient, let harness else { return }
-            Task { await loadHermesProfiles(harness: harness) }
+        .onChange(of: controller.harness?.dashboardClient != nil) { _, hasClient in
+            guard hasClient, let harness = controller.harness else { return }
+            Task { await controller.loadHermesProfiles(harness: harness) }
             // Sessions resume over the dashboard, so a cold-launch restore can
             // only run once it's live. Reuses this same dashboard-ready edge.
             restoreIfNeeded(harness: harness)
@@ -106,19 +94,19 @@ struct PhoneServerWindow: View {
         // Last reliable hook before iOS may terminate the suspended app: persist
         // the navigation + open chats so a cold relaunch lands back in place.
         .onEnterBackground {
-            if let harness { captureRestoration(harness: harness) }
+            if let harness = controller.harness { captureRestoration(harness: harness) }
         }
         // Clear the loading placeholder if the dashboard fails to spawn: the
         // client stays nil so the success path never fires, leaving the spinner
         // up forever otherwise.
-        .onChange(of: harness?.dashboardError != nil) { _, hasError in
-            if hasError { hermesProfilesLoading = false }
+        .onChange(of: controller.harness?.dashboardError != nil) { _, hasError in
+            if hasError { controller.hermesProfilesLoading = false }
         }
         // Auto-build only when no server is active yet (the no-server empty
         // state), so saving the first server connects without a relaunch.
         .onChange(of: directory.profiles) { _, _ in
-            guard harness == nil else { return }
-            Task { await rebuildHarness() }
+            guard controller.harness == nil else { return }
+            Task { await controller.rebuild(defaultProfileId: profileId, directory: directory) }
         }
         // Attached at body level so the no-server empty state (which has no
         // harness/sidebar in scope) can still present the Settings sheet.
@@ -129,7 +117,7 @@ struct PhoneServerWindow: View {
                 .environment(notificationSettings)
         }
         .onDisappear {
-            harness?.tearDown()
+            controller.tearDown()
         }
     }
 
@@ -146,111 +134,21 @@ struct PhoneServerWindow: View {
     }
 
     @MainActor
-    private func rebuildHarness() async {
-        if UITestFlags.screenshotFixture {
-            hermesProfilesLoading = false
-            hermesProfiles = [
-                HermesProfileInfo(name: HermesProfiles.defaultProfileName, isDefault: true),
-                HermesProfileInfo(name: "release", isDefault: false),
-            ]
-            let previous = harness
-            let fixture = ServerWindowHarness.makeScreenshotFixture()
-            harness = fixture
-            previous?.tearDown()
-            if UITestFlags.opensScreenshotChat {
-                await fixture.openScreenshotSession()
-                chatPath = [ScreenshotFixtures.primarySessionID]
-            }
-            return
-        }
-        if UITestFlags.mockServer {
-            // The mock never loads profiles and keeps a nil dashboard client, so
-            // clear the loading flag here or the placeholder would spin forever.
-            hermesProfilesLoading = false
-            let previous = harness
-            harness = ServerWindowHarness.makeMock()
-            previous?.tearDown()
-            return
-        }
-        // Re-arm the loading state so each rebuild/profile-switch re-shows the
-        // placeholder until the dashboard resolves the list.
-        hermesProfilesLoading = true
-        await directory.reload()
-        AppLog.general.info("rebuildHarness: \(directory.profiles.count) profile(s) configured")
-        let previous = harness
-        if let profile = ServerWindowHarness.resolveProfile(in: directory, requestedId: currentProfileId) {
-            harness = ServerWindowHarness.make(profile: profile, hermesProfileName: activeHermesProfile)
-        } else {
-            harness = nil
-        }
-        previous?.tearDown()
-        harness?.startDashboard()
-        // Enumerate the server's Hermes profiles for the sidebar switcher. Kept
-        // out of `.task(id:)` (it isn't a rebuild trigger — that would loop).
-        if let harness {
-            Task { await loadHermesProfiles(harness: harness) }
-        } else {
-            hermesProfiles = []
-        }
-    }
-
-    /// Populates `hermesProfiles` for the switcher straight from the dashboard
-    /// API. Stays default-only/hidden until the dashboard is online or if the
-    /// call fails — no CLI `profile list` fallback, whose decorated table would
-    /// leak marker glyphs into the menu. Re-run when `dashboardClient` lands (see
-    /// the `.onChange` below) to upgrade the list.
-    @MainActor
-    private func loadHermesProfiles(harness: ServerWindowHarness) async {
-        // Capture the client before the await: only a dashboard-backed load is
-        // authoritative. The first client-less load returns default-only and
-        // must keep the placeholder up until the dashboard lands.
-        let client = harness.dashboardClient
-        let profiles = await HermesProfiles.selectorProfiles(client: client)
-        // Drop a stale listing if the window rebuilt its harness (server or
-        // Hermes-profile switch) while this read was in flight, so it can't
-        // overwrite the active harness's profiles with the previous one's.
-        // Identity (not profile id) is the right key: a Hermes-profile switch
-        // keeps the server id but builds a fresh harness.
-        guard self.harness === harness else { return }
-        hermesProfiles = profiles
-        if client != nil { hermesProfilesLoading = false }
-    }
-
-    /// Re-runs the Hermes-profile listing after a Profiles mutation so the
-    /// switcher reflects the change. If the active `-p <name>` was renamed or
-    /// deleted, falls back to `default` so the window isn't scoped to a dead
-    /// profile.
-    @MainActor
     private func reconcileHermesProfiles(harness: ServerWindowHarness) {
-        Task {
-            await loadHermesProfiles(harness: harness)
-            guard self.harness === harness else { return }
-            if !hermesProfiles.contains(where: { $0.name == activeHermesProfile }) {
-                switchHermesProfile(to: HermesProfiles.defaultProfileName)
-            }
-        }
+        controller.reconcileHermesProfiles(harness: harness)
     }
 
     /// In-place server swap. Resets the Hermes profile to `default` so a new
     /// server never inherits a possibly-nonexistent named profile (both feed
     /// one key, so a single `.task` fire results).
     private func switchProfile(to newId: UUID) {
-        guard newId != currentProfileId else { return }
-        recents.record(newId)
-        harness?.tearDown()
-        harness = nil
-        hermesProfiles = []
-        activeHermesProfile = HermesProfiles.defaultProfileName
-        activeProfileId = newId
+        _ = controller.switchProfile(to: newId, launchProfileId: profileId, recents: recents)
     }
 
     /// In-place Hermes-profile swap: tears the harness down (dropping open
     /// chats) and rebuilds the whole window under `-p <name>`.
     private func switchHermesProfile(to name: String) {
-        guard name != activeHermesProfile else { return }
-        harness?.tearDown()
-        harness = nil
-        activeHermesProfile = name
+        _ = controller.switchHermesProfile(to: name)
     }
 
     /// Routes an `EntityLink` tap. A `.session` ref opens the chat (and clears
@@ -355,7 +253,7 @@ struct PhoneServerWindow: View {
               !didRestore, !userHasActed,
               harness.dashboardClient != nil,
               harness.store.openSessions.isEmpty,
-              self.harness === harness,
+              controller.harness === harness,
               harness.hostKeyCoordinator?.pending == nil,
               directory.profile(id: harness.profile.id) != nil
         else { return }
@@ -374,9 +272,13 @@ struct PhoneServerWindow: View {
         // selection once — after `isRestoring` clears, so the selection onChange
         // doesn't mistake restore's own write for a user tap.
         Task {
-            let reopened = await reopenSessions(harness: harness, snapshot: snapshot)
+            let reopened = await controller.reopenSessions(
+                harness: harness,
+                snapshot: snapshot,
+                shouldContinue: { !userHasActed }
+            )
             isRestoring = false
-            if let reopened, !userHasActed, self.harness === harness {
+            if let reopened, !userHasActed, controller.harness === harness {
                 harness.store.selection = WindowRestoration.resolvedSelection(
                     recorded: snapshot.selection,
                     reopened: reopened
@@ -398,26 +300,6 @@ struct PhoneServerWindow: View {
         case "settings": showingSettings = true
         default: break
         }
-    }
-
-    /// Re-opens each recorded session via `reopenForRestore` (resolves cwd, seeds
-    /// history, **and skips a server-deleted / unpersisted id silently** — no error
-    /// banner) **without selecting** — the caller applies the recorded selection
-    /// once at the end. Returns the ids that re-opened, or `nil` if the restore was
-    /// abandoned (the user acted, via the `noteSelectionChange` latch, or the harness
-    /// was replaced). Because the selection stays still during the loop, a user tap
-    /// mid-re-open is detected and bails here rather than being silently overwritten.
-    @MainActor
-    private func reopenSessions(harness: ServerWindowHarness, snapshot: WindowRestorationSnapshot) async -> [SessionId]? {
-        var reopened: [SessionId] = []
-        for id in snapshot.openSessionIds {
-            guard !userHasActed, self.harness === harness else { return nil }
-            if await harness.store.reopenForRestore(id: id, title: snapshot.openTitles[id] ?? "") {
-                reopened.append(id)
-            }
-        }
-        guard !userHasActed, self.harness === harness else { return nil }
-        return reopened
     }
 
     @ViewBuilder
@@ -523,10 +405,10 @@ struct PhoneServerWindow: View {
                 profile: harness.profile,
                 profiles: directory.allProfiles,
                 onSwitchProfile: switchProfile,
-                hermesProfiles: hermesProfiles,
-                activeHermesProfile: activeHermesProfile,
+                hermesProfiles: controller.hermesProfiles,
+                activeHermesProfile: controller.activeHermesProfile,
                 onSwitchHermesProfile: switchHermesProfile,
-                isLoadingHermesProfiles: hermesProfilesLoading,
+                isLoadingHermesProfiles: controller.hermesProfilesLoading,
                 // The iPhone navigation list has no glass backing — keep the
                 // opaque grouped white card so rows don't expose grey.
                 translucentRows: false
@@ -598,8 +480,8 @@ struct PhoneServerWindow: View {
         }) {
             PhoneBrowseSheet(
                 harness: harness,
-                hermesProfiles: hermesProfiles,
-                activeHermesProfile: activeHermesProfile,
+                hermesProfiles: controller.hermesProfiles,
+                activeHermesProfile: controller.activeHermesProfile,
                 onProfilesChanged: { reconcileHermesProfiles(harness: harness) },
                 initialPath: browseInitialPath,
                 onPathChange: { newPath in
@@ -633,11 +515,4 @@ struct PhoneServerWindow: View {
             }
         }
     }
-}
-
-/// Combined rebuild identity for the window's `.task(id:)`: a change to either
-/// the server profile or the active Hermes profile rebuilds the harness.
-private struct HarnessKey: Hashable {
-    let server: UUID
-    let hermes: String
 }

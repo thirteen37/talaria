@@ -314,6 +314,31 @@ struct GatewayChatClientTests {
     }
 
     @Test
+    func foreignSessionEventDoesNotResolveTurn() async throws {
+        // Defense-in-depth for future socket multiplexing: an event carrying a
+        // different session's id must be dropped — a foreign `message.complete`
+        // (even an *error* one) must neither resolve nor fail THIS turn. Only the
+        // matching-id completion ends it.
+        let (client, fake, sid) = try await makeReadySession()   // runtime id "sess-1"
+        let sentBefore = fake.sent.count
+        let promptTask = Task { try await client.prompt(sessionId: sid, content: "x") }
+        let submitFrame = try await fake.waitForSent(at: sentBefore)
+        fake.pushInbound(responseFrame(id: idOf(submitFrame), result: ["status": .string("streaming")]))
+
+        // Foreign session's completion — must be ignored.
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: "intruder", payload: [
+            "status": .string("error"), "text": .string("not my turn")
+        ]))
+        // Our session's completion — resolves the turn cleanly.
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: sid, payload: [
+            "status": .string("complete")
+        ]))
+
+        let response = try await promptTask.value
+        #expect(response.stopReason == .endTurn)
+    }
+
+    @Test
     func cancelSendsInterrupt() async throws {
         let (client, fake, sid) = try await makeReadySession()
         let sentBefore = fake.sent.count
@@ -616,6 +641,165 @@ struct GatewayChatClientTests {
         ]))
         let resolved = try await task.value
         #expect(resolved == "Foo")
+    }
+
+    // MARK: - Background prompts (/bg)
+
+    @Test
+    func promptBackgroundSendsRPCAndReturnsTaskId() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let task = Task { try await client.promptBackground(sessionId: sid, text: "summarise the repo") }
+        let frame = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: frame) == "prompt.background")
+        #expect(stringParam(frame, "session_id") == sid)
+        #expect(stringParam(frame, "text") == "summarise the repo")
+
+        fake.pushInbound(responseFrame(id: idOf(frame), result: ["task_id": .string("bg_abc123")]))
+        let taskId = try await task.value
+        #expect(taskId == "bg_abc123")
+    }
+
+    @Test
+    func backgroundCompleteEventMapsToSessionUpdate() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        var iterator = client.notifications.makeAsyncIterator()
+
+        fake.pushInbound(eventFrame(type: "background.complete", sessionId: sid, payload: [
+            "task_id": .string("bg_abc123"),
+            "text": .string("done: 3 files")
+        ]))
+
+        let notification = try await requireNext(&iterator)
+        guard case let .sessionUpdate(update) = notification,
+              case let .backgroundComplete(taskId, text) = update.update else {
+            Issue.record("expected a backgroundComplete session update, got \(notification)")
+            return
+        }
+        #expect(taskId == "bg_abc123")
+        #expect(text == "done: 3 files")
+    }
+
+    // MARK: - Branch (/branch /fork)
+
+    @Test
+    func branchSessionSendsRPCAndMapsResult() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let task = Task { try await client.branchSession(sessionId: sid, name: "experiment") }
+        let frame = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: frame) == "session.branch")
+        #expect(stringParam(frame, "session_id") == sid)
+        #expect(stringParam(frame, "name") == "experiment")
+
+        fake.pushInbound(responseFrame(id: idOf(frame), result: [
+            "session_id": .string("rt-new"),
+            "title": .string("experiment"),
+            "parent": .string("old-key")
+        ]))
+        let result = try await task.value
+        #expect(result == BranchResult(sessionId: "rt-new", title: "experiment", parent: "old-key"))
+    }
+
+    @Test
+    func branchSessionOmitsBlankName() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let task = Task { try await client.branchSession(sessionId: sid, name: "   ") }
+        let frame = try await fake.waitForSent(at: sentBefore)
+        #expect(stringParam(frame, "name") == nil) // blank → key omitted
+
+        fake.pushInbound(responseFrame(id: idOf(frame), result: [
+            "session_id": .string("rt-new"), "title": .string("foo (branch)"), "parent": .string("old")
+        ]))
+        _ = try await task.value
+    }
+
+    @Test
+    func branchSessionSurfacesNothingToBranchError() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let task = Task { try await client.branchSession(sessionId: sid, name: nil) }
+        let frame = try await fake.waitForSent(at: sentBefore)
+        fake.pushInbound(errorFrame(id: idOf(frame), message: "nothing to branch — send a message first"))
+
+        await #expect(throws: GatewayChatError.server("nothing to branch — send a message first")) {
+            try await task.value
+        }
+    }
+
+    // MARK: - Handoff (/handoff)
+
+    @Test
+    func requestHandoffSendsRPCAndMapsResult() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let task = Task { try await client.requestHandoff(sessionId: sid, platform: "slack") }
+        let frame = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: frame) == "handoff.request")
+        #expect(stringParam(frame, "platform") == "slack")
+        #expect(stringParam(frame, "session_id") == sid)
+
+        fake.pushInbound(responseFrame(id: idOf(frame), result: [
+            "queued": .bool(true),
+            "session_key": .string("key-1"),
+            "platform": .string("slack"),
+            "home_name": .string("#hermes")
+        ]))
+        let result = try await task.value
+        #expect(result == HandoffRequestResult(queued: true, sessionKey: "key-1", platform: "slack", homeName: "#hermes"))
+    }
+
+    @Test
+    func requestHandoffSurfacesNotConfiguredError() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let task = Task { try await client.requestHandoff(sessionId: sid, platform: "slack") }
+        let frame = try await fake.waitForSent(at: sentBefore)
+        fake.pushInbound(errorFrame(id: idOf(frame), message: "platform 'slack' is not configured/enabled in the gateway"))
+
+        await #expect(throws: GatewayChatError.server("platform 'slack' is not configured/enabled in the gateway")) {
+            try await task.value
+        }
+    }
+
+    @Test
+    func handoffStateMapsTerminalResult() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let task = Task { try await client.handoffState(sessionId: sid) }
+        let frame = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: frame) == "handoff.state")
+
+        fake.pushInbound(responseFrame(id: idOf(frame), result: [
+            "state": .string("failed"),
+            "platform": .string("slack"),
+            "error": .string("home channel gone")
+        ]))
+        let state = try await task.value
+        #expect(state == HandoffState(state: "failed", platform: "slack", error: "home channel gone"))
+    }
+
+    @Test
+    func failHandoffSendsRPC() async throws {
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let task = Task { try await client.failHandoff(sessionId: sid, error: "timed out") }
+        let frame = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: frame) == "handoff.fail")
+        #expect(stringParam(frame, "error") == "timed out")
+        #expect(stringParam(frame, "session_id") == sid)
+
+        fake.pushInbound(responseFrame(id: idOf(frame), result: ["failed": .bool(true), "state": .string("failed")]))
+        try await task.value
     }
 
     // MARK: - Helpers

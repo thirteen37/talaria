@@ -911,6 +911,11 @@ public enum SessionUpdate: Codable, Equatable, Sendable {
     case configOptionUpdate(ConfigOptionUpdate)
     case sessionInfoUpdate(SessionInfoUpdate)
     case usageUpdate(UsageUpdate)
+    /// A `/bg` background task finished. Mapped internally from the gateway
+    /// `background.complete` event (carrying `{task_id, text}`); not part of the
+    /// ACP `session/update` wire surface, so it round-trips under a synthetic
+    /// `background_complete` kind purely for symmetry/testing.
+    case backgroundComplete(taskId: String, text: String)
     case unknown(kind: String, payload: JSONValue)
 
     public init(from decoder: Decoder) throws {
@@ -944,6 +949,11 @@ public enum SessionUpdate: Codable, Equatable, Sendable {
             self = .sessionInfoUpdate(try decoder.decode(SessionInfoUpdate.self, from: data))
         case "usage_update":
             self = .usageUpdate(try decoder.decode(UsageUpdate.self, from: data))
+        case "background_complete":
+            self = .backgroundComplete(
+                taskId: (object["task_id"].flatMap { if case let .string(s) = $0 { return s } else { return nil } }) ?? "",
+                text: (object["text"].flatMap { if case let .string(s) = $0 { return s } else { return nil } }) ?? ""
+            )
         default:
             self = .unknown(kind: kind, payload: value)
         }
@@ -973,6 +983,12 @@ public enum SessionUpdate: Codable, Equatable, Sendable {
             try update.encodeWithSessionUpdate("session_info_update", to: encoder)
         case let .usageUpdate(update):
             try update.encodeWithSessionUpdate("usage_update", to: encoder)
+        case let .backgroundComplete(taskId, text):
+            try JSONValue.object([
+                "sessionUpdate": .string("background_complete"),
+                "task_id": .string(taskId),
+                "text": .string(text)
+            ]).encode(to: encoder)
         case let .unknown(_, payload):
             try payload.encode(to: encoder)
         }
