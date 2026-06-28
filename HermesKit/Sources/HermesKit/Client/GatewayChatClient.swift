@@ -14,6 +14,27 @@ public enum GatewayChatError: Error, Equatable, Sendable, LocalizedError {
     }
 }
 
+public extension PromptResponse {
+    /// The raw gateway completion status (`complete`, `end_turn`, `max_tokens`,
+    /// `aborted`, a novel string, …) carried verbatim from `message.complete`,
+    /// when present. Lets the UI show the *true* reason a turn ended instead of
+    /// collapsing everything to "end_turn". Nil for non-gateway backends.
+    var gatewayStatus: String? {
+        if case let .string(value)? = meta?["gatewayStatus"] { return value }
+        return nil
+    }
+
+    /// Whether this turn ended cleanly (the agent finished normally). Derived
+    /// from the raw gateway status via ``GatewayChatClient/isCleanCompletion(_:)``
+    /// — the SAME clean-set the `turnEnded` banner uses — so the queue-drain
+    /// decision and the banner never disagree. Falls back to the typed
+    /// `stopReason` when no raw status was carried (non-gateway backends).
+    var isCleanTurnEnd: Bool {
+        guard let gatewayStatus else { return stopReason == .endTurn }
+        return GatewayChatClient.isCleanCompletion(gatewayStatus)
+    }
+}
+
 /// Live-chat backend over the Hermes dashboard `/api/ws` JSON-RPC gateway.
 /// Conforms to ``ChatBackend`` by mapping gateway events
 /// (`message.delta`, `tool.start`, `approval.request`, …) onto the same
@@ -54,6 +75,13 @@ public actor GatewayChatClient: ChatBackend {
     /// arm) from a passive error with no cycle (must not, or it would cancel a
     /// legitimately-scheduled fire from the preceding turn).
     private var messageCycleActive = false
+    /// Per-turn `message.delta` tally — chunk count and total character length —
+    /// reset on `message.start` and logged on `message.complete`. Counts/lengths
+    /// only (never frame text), so the next truncation is attributable: "few
+    /// deltas then complete" (Hermes/model early stop) vs "deltas flowing then a
+    /// transport drop". See CLAUDE.md (log no frame contents).
+    private var deltaCount = 0
+    private var deltaChars = 0
 
     /// The id `SessionManager` registered this session under and the gateway's
     /// runtime id. Equal for new sessions; on resume `bound` is the stored id
@@ -382,6 +410,8 @@ public actor GatewayChatClient: ChatBackend {
         switch type {
         case "message.delta":
             if let text = Self.string(p["text"]) {
+                deltaCount += 1
+                deltaChars += text.count
                 emit(.agentMessageChunk(Content(content: .text(text))))
             }
         case "reasoning.delta":
@@ -437,14 +467,20 @@ public actor GatewayChatClient: ChatBackend {
                 emit(.usageUpdate(usage))
             }
             let status = Self.string(p["status"]) ?? "complete"
+            // Lightweight turn diagnostics: status + per-turn delta tally (counts
+            // and lengths only — never frame text, per CLAUDE.md). Makes the next
+            // truncation attributable.
+            HermesLog.gateway.info("turn end status=\(status, privacy: .public) deltas=\(self.deltaCount, privacy: .public) chars=\(self.deltaChars, privacy: .public)")
             messageCycleActive = false
             resolveTurn(status: status, errorText: Self.string(p["text"]))
             // Turn boundary: surface the end so the store can coalesce the
             // "agent finished" notification across chained continuation turns.
-            // `clean` distinguishes a normal end from interrupted/error (which
-            // must not notify). Derived from the same `status` `resolveTurn` reads.
+            // `clean` distinguishes a normal end from a non-clean terminal status
+            // (interrupted/error/max_tokens/aborted/… which must not notify).
+            // Uses the SAME clean-set `resolveTurn` reads via `isCleanTurnEnd`, so
+            // the banner and the queue-drain decision never disagree.
             if let sid = boundSessionId {
-                notificationContinuation.yield(.turnEnded(sid, clean: status == "complete"))
+                notificationContinuation.yield(.turnEnded(sid, clean: Self.isCleanCompletion(status)))
             }
         case "approval.request":
             emitApproval(p)
@@ -481,6 +517,8 @@ public actor GatewayChatClient: ChatBackend {
             // busy/turn-started state is already driven by the in-flight prompt.
             sawReasoningDelta = false
             messageCycleActive = true
+            deltaCount = 0
+            deltaChars = 0
             // Surface the start so the store holds (cancels) any pending
             // "agent finished" notification while a chained continuation runs.
             if let sid = boundSessionId {
@@ -537,6 +575,25 @@ public actor GatewayChatClient: ChatBackend {
         emit(.sessionInfoUpdate(SessionInfoUpdate(model: model, cwd: cwd, branch: branch)))
     }
 
+    /// The exact gateway completion statuses that count as a *clean* turn end —
+    /// the agent finished normally. Any other status (`max_tokens`, `aborted`,
+    /// `refusal`, a disconnect-driven terminal status, a novel string Hermes may
+    /// add, …) is a non-clean end: surfaced verbatim, but it must NOT drain the
+    /// prompt queue or fire the "agent finished" banner. Single source of truth
+    /// shared by the `message.complete` turn-end signal and ChatView's
+    /// queue-drain decision (`PromptResponse.isCleanTurnEnd`). We deliberately do
+    /// not map Hermes' vocabulary onto guessed `StopReason` cases — see the plan.
+    static func isCleanCompletion(_ status: String) -> Bool {
+        status == "complete" || status == "end_turn"
+    }
+
+    /// Gateway statuses that mean the turn was cancelled/interrupted (mapped to
+    /// `StopReason.cancelled`). Like ``isCleanCompletion(_:)``, an exact match —
+    /// not a guess.
+    static func isCancelledCompletion(_ status: String) -> Bool {
+        status == "interrupted" || status == "cancelled"
+    }
+
     private func resolveTurn(status: String, errorText: String?) {
         guard let cont = turnContinuation else { return }
         turnContinuation = nil
@@ -547,8 +604,18 @@ public actor GatewayChatClient: ChatBackend {
             cont.resume(throwing: GatewayChatError.server(errorText ?? "Hermes reported an error"))
             return
         }
-        let stopReason: StopReason = status == "interrupted" ? .cancelled : .endTurn
-        cont.resume(returning: PromptResponse(stopReason: stopReason))
+        // Keep a typed `StopReason` for control flow, but carry the *raw* status
+        // string so the UI can show the truth verbatim (`max_tokens`, `aborted`,
+        // a novel string) instead of collapsing everything to "end_turn". Only
+        // an exact cancelled-set status maps to `.cancelled`; everything else
+        // (clean and non-clean alike) keeps the neutral `.endTurn` typed reason —
+        // cleanliness is read from the raw status via `isCleanTurnEnd`, not the
+        // typed reason.
+        let stopReason: StopReason = Self.isCancelledCompletion(status) ? .cancelled : .endTurn
+        cont.resume(returning: PromptResponse(
+            meta: ["gatewayStatus": .string(status)],
+            stopReason: stopReason
+        ))
     }
 
     private func failTurn(error: Error) {
