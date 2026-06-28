@@ -314,6 +314,69 @@ struct GatewayChatClientTests {
     }
 
     @Test
+    func cleanCompletionPreservesRawGatewayStatus() async throws {
+        // A clean end carries the raw status verbatim ("complete") so the footer
+        // shows the truth, and reports isCleanTurnEnd == true.
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+        let promptTask = Task { try await client.prompt(sessionId: sid, content: "go") }
+        let submitFrame = try await fake.waitForSent(at: sentBefore)
+        fake.pushInbound(responseFrame(id: idOf(submitFrame), result: ["status": .string("streaming")]))
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: sid, payload: ["status": .string("complete")]))
+
+        let response = try await promptTask.value
+        #expect(response.stopReason == .endTurn)
+        #expect(response.gatewayStatus == "complete")
+        #expect(response.isCleanTurnEnd)
+    }
+
+    @Test
+    func nonCleanCompletionSurfacesRawStatusAndIsNotClean() async throws {
+        // A terminal status outside the clean set — max_tokens / aborted / a novel
+        // string Hermes may add — must: resolve the prompt (not throw), preserve
+        // the raw status verbatim for the footer, report turnEnded clean:false, and
+        // have the queue-drain decision (isCleanTurnEnd) AGREE with that flag.
+        for status in ["max_tokens", "aborted", "something_new"] {
+            let (client, fake, sid) = try await makeReadySession()
+            var iterator = client.notifications.makeAsyncIterator()
+            let sentBefore = fake.sent.count
+            let promptTask = Task { try await client.prompt(sessionId: sid, content: "go") }
+            let submitFrame = try await fake.waitForSent(at: sentBefore)
+            fake.pushInbound(responseFrame(id: idOf(submitFrame), result: ["status": .string("streaming")]))
+            fake.pushInbound(eventFrame(type: "message.complete", sessionId: sid, payload: ["status": .string(status)]))
+
+            let response = try await promptTask.value
+            #expect(response.gatewayStatus == status)
+            #expect(response.isCleanTurnEnd == false)
+
+            let note = try await requireNext(&iterator)
+            guard case let .turnEnded(_, clean) = note else {
+                Issue.record("expected turnEnded, got \(note)")
+                return
+            }
+            #expect(clean == false)
+            // Consistency: the queue-drain decision matches the turnEnded decision.
+            #expect(response.isCleanTurnEnd == clean)
+        }
+    }
+
+    @Test
+    func missingStatusDefaultsToCompleteCleanEnd() async throws {
+        // Documents current behavior: a message.complete with no status defaults
+        // to "complete" — a clean end carrying that raw status.
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+        let promptTask = Task { try await client.prompt(sessionId: sid, content: "go") }
+        let submitFrame = try await fake.waitForSent(at: sentBefore)
+        fake.pushInbound(responseFrame(id: idOf(submitFrame), result: ["status": .string("streaming")]))
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: sid, payload: [:]))
+
+        let response = try await promptTask.value
+        #expect(response.gatewayStatus == "complete")
+        #expect(response.isCleanTurnEnd)
+    }
+
+    @Test
     func foreignSessionEventDoesNotResolveTurn() async throws {
         // Defense-in-depth for future socket multiplexing: an event carrying a
         // different session's id must be dropped — a foreign `message.complete`

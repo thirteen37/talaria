@@ -23,9 +23,14 @@ public final class URLSessionGatewayWebSocket: NSObject, GatewayWebSocket, URLSe
     private let redactedURL: String
     private var receiveStarted = false
     private var closed = false
-    /// HTTP status the server returned on a rejected upgrade, captured by the
-    /// delegate (`task.response`) so the stream error can name it.
+    /// HTTP status the server returned on a *rejected* upgrade (>= 300), captured
+    /// by the delegate (`task.response`) so the stream error can name it. A
+    /// successful upgrade is `101`/2xx and is never stored here.
     private var handshakeStatus: Int?
+    /// The real WebSocket close code (e.g. `1001` "going away"), captured by the
+    /// delegate's `didCloseWith`. Preferred over the handshake status when a
+    /// successful socket later drops, so logs read `code=1001` not `HTTP 101`.
+    private var closeCode: Int?
     /// Active ping/PONG liveness probe (see ``GatewayKeepalive``). With this
     /// socket's OS idle timeout disabled (see ``init(url:session:pingInterval:)``),
     /// the keepalive is the *only* detector of a dead/half-open connection.
@@ -204,19 +209,48 @@ public final class URLSessionGatewayWebSocket: NSObject, GatewayWebSocket, URLSe
                 // socket isn't pinged for up to one more interval before its next
                 // ping fails. Idempotent if the ping path already self-terminated.
                 self.keepalive?.stop()
-                // Prefer the HTTP status the delegate captured from the rejected
-                // upgrade; fall back to the task.response, then the raw error.
-                let status = self.stateQueue.sync { self.handshakeStatus }
+                // Classify the failure: a real close code (e.g. 1001 going away)
+                // is preferred over the handshake status, and a *successful*
+                // upgrade (101/2xx) is never mistaken for a rejection — so logs
+                // and the stream error name the true cause.
+                let handshakeStatus = self.stateQueue.sync { self.handshakeStatus }
                     ?? (self.task.response as? HTTPURLResponse)?.statusCode
-                if let status, !(200..<300).contains(status) {
+                let closeCode = self.stateQueue.sync { self.closeCode }
+                switch Self.classifyReceiveFailure(handshakeStatus: handshakeStatus, closeCode: closeCode) {
+                case let .closeCode(code):
+                    HermesLog.gateway.error("receive failed; closed code=\(code, privacy: .public) for \(self.redactedURL, privacy: .public)")
+                    self.continuation.finish(throwing: GatewayWebSocketError.closedWithCode(code))
+                case let .handshakeRejected(status):
                     HermesLog.gateway.error("receive failed; handshake HTTP \(status, privacy: .public) for \(self.redactedURL, privacy: .public)")
                     self.continuation.finish(throwing: GatewayWebSocketError.closedWithCode(status))
-                } else {
+                case .underlying:
                     HermesLog.gateway.error("receive failed: \(error.localizedDescription, privacy: .public) (\((error as NSError).code, privacy: .public)) for \(self.redactedURL, privacy: .public)")
                     self.continuation.finish(throwing: error)
                 }
             }
         }
+    }
+
+    /// What a receive-loop failure should finish the stream with.
+    enum CloseClassification: Equatable {
+        /// A real WebSocket close frame (e.g. `1001` going away).
+        case closeCode(Int)
+        /// A real upgrade rejection — the server answered the handshake with an
+        /// HTTP error (>= 300).
+        case handshakeRejected(Int)
+        /// Neither: surface the raw transport error. Covers a *successful* upgrade
+        /// (`101`/2xx) that later dropped without a close frame.
+        case underlying
+    }
+
+    /// Pure classification so the close-diagnostics logic is unit-testable without
+    /// a live socket. A real close code wins; a handshake status only counts as a
+    /// rejection when it's an HTTP error (>= 300), so `101`/2xx are never
+    /// misreported as rejections.
+    static func classifyReceiveFailure(handshakeStatus: Int?, closeCode: Int?) -> CloseClassification {
+        if let closeCode { return .closeCode(closeCode) }
+        if let handshakeStatus, handshakeStatus >= 300 { return .handshakeRejected(handshakeStatus) }
+        return .underlying
     }
 
     // MARK: - URLSession delegate (diagnostics)
@@ -236,11 +270,15 @@ public final class URLSessionGatewayWebSocket: NSObject, GatewayWebSocket, URLSe
         reason: Data?
     ) {
         let text = reason.flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        stateQueue.sync { self.closeCode = Int(closeCode.rawValue) }
         HermesLog.gateway.error("closed code=\(closeCode.rawValue, privacy: .public) reason=\(text, privacy: .public)")
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let http = task.response as? HTTPURLResponse {
+        // Only a real HTTP error (>= 300) is an upgrade *rejection*. A successful
+        // upgrade reports `101` (and 2xx responses are also success) — recording
+        // those as a rejection would mask the true close reason (e.g. 1001).
+        if let http = task.response as? HTTPURLResponse, http.statusCode >= 300 {
             stateQueue.sync { self.handshakeStatus = http.statusCode }
             let server = (http.allHeaderFields["Server"] as? String) ?? "?"
             HermesLog.gateway.error("upgrade rejected: HTTP \(http.statusCode, privacy: .public) server=\(server, privacy: .public) for \(self.redactedURL, privacy: .public)")
