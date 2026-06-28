@@ -196,6 +196,10 @@ struct SessionsBrowser: View {
     @State private var sort: SortOrder = .recent
     @State private var filter = Filter()
     @State private var sessions: [HermesSessionSummary] = []
+    /// Highlighted row for hardware-keyboard navigation (↑/↓ move it, Return
+    /// opens it). macOS-driven; inert on iOS without a keyboard. Cleared/clamped
+    /// when the filtered list no longer contains it (see `content`).
+    @State private var selectedID: HermesSessionSummary.ID?
     @State private var errorMessage: String?
     @State private var isLoading = false
     /// Server-reported total session count from the unfiltered browse path,
@@ -270,13 +274,10 @@ struct SessionsBrowser: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(filteredSessions) { summary in
+                List(filteredSessions, selection: $selectedID) { summary in
                     SessionRow(
                         summary: summary,
-                        open: {
-                            Task { await store.openExisting(summary) }
-                            onOpen?()
-                        },
+                        open: { open(summary) },
                         // Resume this session as the real Hermes TUI (embedded
                         // terminal) instead of the native chat view. `nil` hides
                         // the button on platforms without TUI support (iOS);
@@ -300,6 +301,21 @@ struct SessionsBrowser: View {
                         onExport: { exportTranscript(for: summary) },
                         onDelete: { deleteTarget = summary }
                     )
+                }
+                // Return opens the highlighted row (macOS hardware keyboard);
+                // ↑/↓ row navigation comes free from `List(selection:)`. No-op on
+                // iOS without a keyboard, where a tap still opens (see `SessionRow`).
+                .onKeyPress(.return) {
+                    guard selectedID != nil else { return .ignored }
+                    openSelected()
+                    return .handled
+                }
+                // Keep the highlight valid as the list refilters (search/filter/
+                // sort): drop a selection that's no longer present.
+                .onChange(of: filteredSessions) { _, rows in
+                    if let id = selectedID, !rows.contains(where: { $0.id == id }) {
+                        selectedID = nil
+                    }
                 }
             }
         }
@@ -406,6 +422,21 @@ struct SessionsBrowser: View {
         }
         .help("Filter sessions by source, model, activity, size, cost, or tool use")
         .accessibilityLabel("Filter sessions")
+    }
+
+    /// Opens a session into the window (chat detail) and dismisses the browser
+    /// sheet on iOS via `onOpen`. Shared by the row's tap/double-click and the
+    /// Return-key path so they can't drift.
+    private func open(_ summary: HermesSessionSummary) {
+        Task { await store.openExisting(summary) }
+        onOpen?()
+    }
+
+    /// Opens the keyboard-highlighted row, if it's still in the filtered list.
+    private func openSelected() {
+        guard let selectedID,
+              let summary = filteredSessions.first(where: { $0.id == selectedID }) else { return }
+        open(summary)
     }
 
     /// Fetches the transcript and arms the file exporter for `summary`. Bails
@@ -548,36 +579,49 @@ private struct SessionRow: View {
     @State private var isHovering = false
 
     var body: some View {
-        Button(action: open) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    if summary.isActive {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 7, height: 7)
-                            .accessibilityLabel("Active")
-                    }
-                    Text(summary.title.isEmpty ? SessionIdFormatter.short(summary.id) : summary.title)
-                        .font(.body)
-                        .lineLimit(2)
+        // Plain (non-Button) primary content so the row participates in
+        // `List(selection:)` ↑/↓ navigation instead of swallowing clicks.
+        // Opening is double-click on macOS (single-click selects + arrows) and
+        // single-tap on iOS, where there's no keyboard selection to preserve.
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                if summary.isActive {
+                    Circle()
+                        .fill(.green)
+                        .frame(width: 7, height: 7)
+                        .accessibilityLabel("Active")
                 }
-                // Reserve room for the top-trailing action overlay so a long
-                // title never slides under the hover icons. Only the title row
-                // is inset; the preview and metadata rows still span full width
-                // so the indicators stay flush against the row's trailing edge.
-                .padding(.trailing, actionClusterWidth)
-                if let preview = summary.preview {
-                    Text(preview)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-                metadata
+                Text(summary.title.isEmpty ? SessionIdFormatter.short(summary.id) : summary.title)
+                    .font(.body)
+                    .lineLimit(2)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+            // Reserve room for the top-trailing action overlay so a long
+            // title never slides under the hover icons. Only the title row
+            // is inset; the preview and metadata rows still span full width
+            // so the indicators stay flush against the row's trailing edge.
+            .padding(.trailing, actionClusterWidth)
+            if let preview = summary.preview {
+                Text(preview)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            metadata
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        #if os(macOS)
+        .onTapGesture(count: 2, perform: open)
+        #else
+        .onTapGesture(perform: open)
+        #endif
+        // Pointer-driven tap gestures aren't exposed to assistive tech
+        // (VoiceOver / Full Keyboard Access can't synthesize the macOS
+        // double-click), so restore button semantics + an activation action
+        // for the open path the gestures provide.
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { open() }
         // Action icons float on top of the top-trailing corner instead of as
         // siblings in flow, so they reserve no horizontal space in the metadata
         // row — the indicators reach the true trailing edge and align identically

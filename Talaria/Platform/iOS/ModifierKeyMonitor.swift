@@ -10,6 +10,7 @@ import SwiftUI
 final class ModifierKeyMonitor {
     private(set) var command = false
     private(set) var option = false
+    private(set) var control = false
 
     func start() {}
     func stop() {}

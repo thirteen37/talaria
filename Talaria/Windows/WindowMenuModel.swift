@@ -24,6 +24,27 @@ struct WindowMenuModel {
     var isOpeningSession: Bool
     var newSession: () -> Void
 
+    // Sidebar + open-session tabs
+    /// Flips the window's sidebar between shown and hidden (the View menu's
+    /// Hide/Show Sidebar item; ⌃⌘S).
+    var toggleSidebar: () -> Void
+    /// Cycle the selected open-session tab forward / backward with wrap-around
+    /// (⌃Tab / ⌃⇧Tab). No-ops when nothing is open.
+    var selectNextSession: () -> Void
+    var selectPreviousSession: () -> Void
+    /// Closes the focused session tab (the File menu's Close Session item; ⌘W).
+    var closeSession: () -> Void
+    /// True when a session tab is selected, so Close Session is enabled; when
+    /// false ⌘W falls through to the system Close Window.
+    var canCloseSession: Bool
+
+    // Chat actions (scoped to the focused window's active session)
+    /// Copies the active chat's most recent agent response (Edit menu, ⌘⇧C).
+    var copyLastResponse: () -> Void
+    /// True when the active chat has an agent response to copy (drives the Copy
+    /// Last Response item's enabled state).
+    var canCopyLastResponse: Bool
+
     // Server profile
     var serverProfiles: [ServerProfile]
     var currentServerId: UUID

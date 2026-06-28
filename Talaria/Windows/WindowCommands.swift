@@ -16,8 +16,15 @@ struct WindowCommands: Commands {
         // (plus New Window ⌘⇧N, to preserve new-window access).
         CommandGroup(replacing: .newItem) { NewItemMenu(recents: recents) }
         // Add to the existing standard View menu (a bare CommandMenu("View")
-        // would create a duplicate).
-        CommandGroup(after: .sidebar) { SectionMenu() }
+        // would create a duplicate). The sidebar toggle + tab-cycle items lead;
+        // the ⌘-digit section list follows.
+        CommandGroup(after: .sidebar) {
+            ViewExtrasMenu()
+            SectionMenu()
+        }
+        // Edit menu: a discoverable home for the chat's ⌘⇧C copy-last-response
+        // (it'd otherwise be an invisible window-wide shortcut).
+        CommandGroup(after: .pasteboard) { CopyResponseMenu() }
         CommandMenu("Profiles") { ProfilesMenu(recents: recents) }
     }
 }
@@ -83,6 +90,59 @@ private struct NewItemMenu: View {
             openWindow(value: recents.ids.first ?? ProfileDirectory.localProfileID)
         }
         .keyboardShortcut("n", modifiers: [.command, .shift])
+
+        Divider()
+
+        // Close the focused session tab. Disabled when no tab is selected, so the
+        // ⌘W keystroke falls through to the system Close Window — the same
+        // behavior the old hidden `closeTabShortcut` button gave, now discoverable
+        // in the File menu.
+        Button("Close Session") { model?.closeSession() }
+            .keyboardShortcut("w", modifiers: .command)
+            .disabled(model?.canCloseSession != true)
+    }
+}
+
+/// **Edit menu** addition: Copy Last Response (⌘⇧C) copies the focused chat's
+/// most recent Hermes message. Disabled with no focused window or no agent
+/// response yet, so the chord is discoverable but inert when there's nothing to
+/// copy.
+private struct CopyResponseMenu: View {
+    @FocusedValue(\.windowMenu) private var model
+
+    var body: some View {
+        Button("Copy Last Response") { model?.copyLastResponse() }
+            .keyboardShortcut("c", modifiers: [.command, .shift])
+            .disabled(model?.canCopyLastResponse != true)
+    }
+}
+
+/// **View menu** leading group: the sidebar toggle (⌃⌘S) and open-session
+/// tab-cycle items (⌃Tab / ⌃⇧Tab). Reads the focused window's model like the
+/// section list below it; disabled with no focused window so the shortcuts stay
+/// discoverable.
+private struct ViewExtrasMenu: View {
+    @FocusedValue(\.windowMenu) private var model
+
+    var body: some View {
+        // SwiftUI does NOT auto-provide a "Show/Hide Sidebar" ⌃⌘S View-menu
+        // command for our `NavigationSplitView(columnVisibility:)` (verified
+        // against a running build — the View menu has no system sidebar item, and
+        // `columnVisibility` was never toggled by any other code), so this is the
+        // sole ⌃⌘S owner, not a duplicate. The toggle writes the window's bound
+        // visibility, so even on an OS that did add the system command they'd stay
+        // in sync.
+        Button("Toggle Sidebar") { model?.toggleSidebar() }
+            .keyboardShortcut("s", modifiers: [.command, .control])
+            .disabled(model == nil)
+
+        Button("Next Session") { model?.selectNextSession() }
+            .keyboardShortcut(.tab, modifiers: .control)
+            .disabled(model == nil)
+
+        Button("Previous Session") { model?.selectPreviousSession() }
+            .keyboardShortcut(.tab, modifiers: [.control, .shift])
+            .disabled(model == nil)
     }
 }
 

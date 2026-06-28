@@ -888,6 +888,61 @@ final class SessionsStore {
         await manager.close(id: id)
     }
 
+    /// Selects the next open-session tab, wrapping from the last back to the
+    /// first (⌃Tab). No-op when nothing is open.
+    func selectNextSession() {
+        cycleSelection(by: 1)
+    }
+
+    /// Selects the previous open-session tab, wrapping from the first to the
+    /// last (⌃⇧Tab). No-op when nothing is open.
+    func selectPreviousSession() {
+        cycleSelection(by: -1)
+    }
+
+    /// Text of the most recent agent (Hermes) message in the active chat, for the
+    /// Edit menu's Copy Last Response action (⌘⇧C). Nil when no chat is selected
+    /// or it has no agent message yet (TUI tabs have no view model, so also nil).
+    /// Reads the `messages` array, so call it only on demand (the menu *action*),
+    /// never eagerly in a view body — see `selectionHasActiveResponse`.
+    func lastAgentResponseText() -> String? {
+        guard let id = selection, let vm = viewModel(for: id) else { return nil }
+        return vm.messages.last(where: { $0.kind == .agent })?.text
+    }
+
+    /// Whether the active chat has an agent response to copy — the cheap enabled
+    /// state for the Copy Last Response menu item. Reads only the view model's
+    /// `hasAgentResponse` flag (flips once, on the first response) rather than the
+    /// `messages` array, so observing it from the window body doesn't re-evaluate
+    /// the whole window on every streamed chunk.
+    func selectionHasActiveResponse() -> Bool {
+        guard let id = selection, let vm = viewModel(for: id) else { return false }
+        return vm.hasAgentResponse
+    }
+
+    private func cycleSelection(by step: Int) {
+        guard let next = Self.cycledSelectionIndex(
+            count: openSessions.count,
+            current: selection.flatMap { id in openSessions.firstIndex { $0.id == id } },
+            step: step
+        ) else { return }
+        selection = openSessions[next].id
+    }
+
+    /// Next tab index when cycling by `step` (±1) with wrap-around. `current` is
+    /// the selected tab's index, or nil when the selection isn't an open tab (a
+    /// browse surface is showing) — then a forward step lands on the first tab
+    /// and a backward step on the last. Returns nil only for an empty list. Pure
+    /// and `nonisolated` so it's unit-testable off the `@MainActor`.
+    nonisolated static func cycledSelectionIndex(count: Int, current: Int?, step: Int) -> Int? {
+        guard count > 0 else { return nil }
+        guard let current else {
+            // No tab selected: forward → first, backward → last.
+            return step >= 0 ? 0 : count - 1
+        }
+        return ((current + step) % count + count) % count
+    }
+
     /// Whether session rename is available. Rename has no dashboard route, so it
     /// falls back to `hermes sessions rename` via the CLI admin runner — which is
     /// absent on iOS. The chat toolbar and browser rows gate their Rename button

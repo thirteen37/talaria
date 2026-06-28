@@ -15,6 +15,7 @@ import SwiftUI
 final class ModifierKeyMonitor {
     private(set) var command = false
     private(set) var option = false
+    private(set) var control = false
 
     private var monitor: Any?
 
@@ -37,10 +38,12 @@ final class ModifierKeyMonitor {
         monitor = nil
         command = false
         option = false
+        control = false
     }
 
     private func update(from flags: NSEvent.ModifierFlags) {
         command = flags.contains(.command)
         option = flags.contains(.option)
+        control = flags.contains(.control)
     }
 }
