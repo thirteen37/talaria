@@ -362,6 +362,21 @@ struct DesktopServerWindow: View {
             selectBrowse: { dest in harness.store.selection = nil; browse = dest },
             isOpeningSession: harness.store.isOpening,
             newSession: { Task { await harness.store.openNew() } },
+            toggleSidebar: { columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly },
+            selectNextSession: { harness.store.selectNextSession() },
+            selectPreviousSession: { harness.store.selectPreviousSession() },
+            closeSession: {
+                if let id = harness.store.selection {
+                    Task { await harness.store.closeTab(id) }
+                }
+            },
+            canCloseSession: harness.store.selection != nil,
+            copyLastResponse: {
+                if let text = harness.store.lastAgentResponseText() {
+                    Pasteboard.copy(text)
+                }
+            },
+            canCopyLastResponse: harness.store.selectionHasActiveResponse(),
             serverProfiles: directory.allProfiles,
             currentServerId: currentProfileId,
             switchServer: { id in switchProfile(to: id) },
@@ -452,6 +467,10 @@ struct DesktopServerWindow: View {
                 Button { harness.reconnectDashboard() } label: {
                     Label("Reconnect Dashboard", systemImage: "arrow.clockwise")
                 }
+                // ⌘⇧R, not ⌘R: reconnect tears down and re-establishes the
+                // dashboard (interrupting any in-flight live chat), so it's kept
+                // off the reflexive "reload" chord to avoid a disruptive misfire.
+                .keyboardShortcut("r", modifiers: [.command, .shift])
                 .help("Reconnect the Hermes dashboard")
             }
         }
@@ -467,13 +486,11 @@ struct DesktopServerWindow: View {
             // the ACP `ChatView`; they have no view model.
             platformTUIDetail(tabId: session.id, spec: harness.store.tuiSpec(for: session.id))
                 .id(session.id)
-                .background { closeTabShortcut(harness: harness) }
         } else if let selection = harness.store.selection,
                   let session = harness.store.openSessions.first(where: { $0.id == selection }),
                   let viewModel = harness.store.viewModel(for: session.id) {
             ChatView(viewModel: viewModel, store: harness.store)
                 .id(session.id)
-                .background { closeTabShortcut(harness: harness) }
         } else {
             BrowseDetailView(
                 harness: harness,
@@ -483,22 +500,6 @@ struct DesktopServerWindow: View {
                 onProfilesChanged: { reconcileHermesProfiles(harness: harness) }
             )
         }
-    }
-
-    /// ⌘W normally closes the window; when a session tab is selected we hijack
-    /// the shortcut to close that tab instead (ACP and TUI alike). Disabled with
-    /// no selection so the default `Performs Close` handles the keystroke as
-    /// usual. Works on iPad with a hardware keyboard too — no `#if` needed.
-    @ViewBuilder
-    private func closeTabShortcut(harness: ServerWindowHarness) -> some View {
-        Button("Close Session") {
-            if let id = harness.store.selection {
-                Task { await harness.store.closeTab(id) }
-            }
-        }
-        .keyboardShortcut("w", modifiers: .command)
-        .disabled(harness.store.selection == nil)
-        .hidden()
     }
 
     /// SSH profiles show `user@host[:port]` so users can tell two same-named

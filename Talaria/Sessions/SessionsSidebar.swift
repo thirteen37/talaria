@@ -25,6 +25,10 @@ struct SessionsSidebar: View {
     @State private var renameTarget: SessionsStore.OpenSession?
     @State private var renameText: String = ""
     @State private var hoveredSessionId: SessionId?
+    /// ⌃/⌘/⌥ held-state, used to reveal the ⌃Tab tab-cycle hint on hold. Optional
+    /// because the iPhone window doesn't inject it (and it's an inert stub on iOS
+    /// anyway) — mirrors `PermissionPrompt`'s optional read.
+    @Environment(ModifierKeyMonitor.self) private var modifiers: ModifierKeyMonitor?
 
     init(
         store: SessionsStore,
@@ -84,7 +88,7 @@ struct SessionsSidebar: View {
                 }
             }
 
-            Section("Chat") {
+            Section {
                 ForEach(store.openSessions) { session in
                     row(for: session)
                 }
@@ -131,10 +135,34 @@ struct SessionsSidebar: View {
                 // Match the session rows: clear over a glass host so it shows
                 // through, the grouped white card on the iPhone list.
                 .listRowBackground(auxRowBackground)
+            } header: {
+                chatSectionHeader
             }
         }
         .sheet(item: $renameTarget) { target in
             renameSheet(for: target)
+        }
+    }
+
+    /// "Chat" section header with a hold-⌃ affordance: while Control is down (and
+    /// there are tabs to cycle), a subtle capsule reveals the ⌃Tab / ⌃⇧Tab
+    /// next/previous-session shortcuts — the same hint idiom as the sidebar's
+    /// ⌘-digit badges. macOS-only (`showsKeyboardShortcutHints`); inert on iOS.
+    @ViewBuilder
+    private var chatSectionHeader: some View {
+        HStack {
+            Text("Chat")
+            if Platform.showsKeyboardShortcutHints,
+               modifiers?.control == true,
+               !store.openSessions.isEmpty {
+                Spacer(minLength: 0)
+                Text("⌃Tab  ⌃⇧Tab")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
         }
     }
 

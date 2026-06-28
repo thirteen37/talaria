@@ -20,12 +20,18 @@ struct ChatView: View {
     /// disabled composer when a prompt first appears.
     @FocusState private var promptFocused: Bool
 
-    /// Page Up / Page Down scroll-back. The composer's page-key closures set
-    /// `pendingScroll`; the `onChange` scroller inside the `ScrollViewReader`
-    /// consumes it. `pageAnchorIndex` remembers the last keyboard-driven anchor so
-    /// repeated presses walk the transcript instead of re-jumping to the bottom.
+    /// Page Up / Page Down scroll-back, plus ⌘↓ jump-to-latest. The window-wide
+    /// hidden buttons in `chatShortcuts` set `pendingScroll`; the `onChange`
+    /// scroller inside the `ScrollViewReader` consumes it. `pageAnchorIndex`
+    /// remembers the last keyboard-driven anchor so repeated presses walk the
+    /// transcript instead of re-jumping to the bottom.
     @State private var pendingScroll: ScrollDirection?
     @State private var pageAnchorIndex: Int?
+    /// Mirrors the composer's focus (reported via `Composer.onFocusChange`). Gates
+    /// the window-wide Page Up/Down shortcuts so they're live only when focus is
+    /// *outside* the composer — making the composer and window-wide page paths
+    /// mutually exclusive by construction (no reliance on AppKit routing order).
+    @State private var composerFocused = false
 
     /// Scroll anchor for the inline permission card. A fixed string id (the card is
     /// a singleton tail element) so the on-show scroll can target it.
@@ -148,6 +154,14 @@ struct ChatView: View {
                 .onChange(of: pendingScroll) { _, direction in
                     guard let direction else { return }
                     defer { pendingScroll = nil }
+                    // ⌘↓ jump-to-latest: land on the live tail and re-anchor paging
+                    // there, so a following Page Up resumes from the bottom.
+                    if direction == .bottom {
+                        guard let last = viewModel.messages.last else { return }
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                        pageAnchorIndex = viewModel.messages.count - 1
+                        return
+                    }
                     guard let target = Self.pagedAnchorIndex(
                         from: pageAnchorIndex,
                         direction: direction,
@@ -175,6 +189,15 @@ struct ChatView: View {
                         proxy.scrollTo(Self.permissionAnchorID, anchor: .bottom)
                     }
                 }
+                // Visible "jump to latest" affordance — the discoverable
+                // counterpart to the ⌘↓ shortcut — shown only while scrolled up.
+                .overlay(alignment: .bottomTrailing) {
+                    if !transcriptAtLatest {
+                        jumpToLatestButton
+                            .transition(.opacity)
+                    }
+                }
+                .animation(.easeInOut(duration: 0.15), value: transcriptAtLatest)
                 }
             }
 
@@ -204,8 +227,11 @@ struct ChatView: View {
                     availableCommands: viewModel.availableCommands,
                     send: { Task { await viewModel.sendPrompt() } },
                     cancel: { Task { await viewModel.cancel() } },
+                    // Forward page keys while the composer holds focus; the
+                    // window-wide `chatShortcuts` layer covers focus elsewhere.
                     onPageUp: { pendingScroll = .up },
-                    onPageDown: { pendingScroll = .down }
+                    onPageDown: { pendingScroll = .down },
+                    onFocusChange: { composerFocused = $0 }
                 )
             }
         }
@@ -216,6 +242,10 @@ struct ChatView: View {
         // Always-mounted, zero-size shortcut layer so ⌥N/Esc keep working even
         // after the inline card scrolls out of the recycling `LazyVStack`.
         .background { permissionShortcuts }
+        // Window-wide chat-action shortcuts (copy last response, scroll-to-latest,
+        // page up/down) — mounted as a hidden layer so they fire regardless of
+        // where focus sits, not only when the composer is focused.
+        .background { chatShortcuts }
         // Per-session manage actions on the active chat's toolbar, plus their
         // rename sheet, delete confirmation, and JSONL exporter. All gate on
         // `store` internally, so the group is inert (toolbar empty) when no store
@@ -253,8 +283,9 @@ struct ChatView: View {
         max(containerWidth - 32, 1)
     }
 
-    /// Page Up / Page Down scroll direction.
-    enum ScrollDirection { case up, down }
+    /// Transcript scroll intent: Page Up / Page Down step by a message stride;
+    /// `.bottom` jumps straight to the latest message (⌘↓).
+    enum ScrollDirection { case up, down, bottom }
 
     /// Messages stepped per Page Up / Page Down. A rough stride — transcript rows
     /// vary in height, so a fixed message count only approximates a "page" (see the
@@ -309,6 +340,75 @@ struct ChatView: View {
             .frame(width: 0, height: 0)
             .accessibilityHidden(true)
         }
+    }
+
+    /// Whether the transcript is (per the tracked keyboard anchor) already at the
+    /// latest message, so ⌘↓ has nothing to scroll to and should fall through to
+    /// the composer's move-to-end editing action. `pageAnchorIndex` is nil right
+    /// after open / new messages (auto-scrolled to the bottom) and equals the last
+    /// index after a jump-to-latest. Trackpad scrolls aren't tracked (same
+    /// best-effort limitation as the page-anchor scroller), so this can read
+    /// "at latest" after a trackpad scroll-up; acceptable for v1.
+    private var transcriptAtLatest: Bool {
+        guard !viewModel.messages.isEmpty else { return true }
+        return pageAnchorIndex == nil || pageAnchorIndex == viewModel.messages.count - 1
+    }
+
+    /// Floating "jump to latest" affordance shown when the transcript is scrolled
+    /// up (mirrors `transcriptAtLatest`). The visible, discoverable counterpart to
+    /// the ⌘↓ shortcut — its tooltip names the chord — and it self-explains the
+    /// fall-through: when the button is gone you're at the bottom, so ⌘↓ moves the
+    /// composer cursor to the end instead of scrolling.
+    private var jumpToLatestButton: some View {
+        Button { pendingScroll = .bottom } label: {
+            Image(systemName: "chevron.down")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(10)
+                .background(.ultraThinMaterial, in: Circle())
+                .overlay(Circle().strokeBorder(.quaternary, lineWidth: 0.5))
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, 16)
+        .padding(.bottom, 12)
+        .help("Scroll to latest (⌘↓)")
+        .accessibilityLabel("Scroll to latest")
+    }
+
+    /// Hidden, always-mounted buttons that register the window-wide chat-action
+    /// shortcuts: ⌘↓ jumps to the latest message, and Page Up / Page Down page the
+    /// transcript. Mounted as a zero-size background (the same pattern as
+    /// `permissionShortcuts` and the composer's ⌘L) so the keys work from anywhere
+    /// in the chat — not only while the composer holds focus. (Copy-last ⌘⇧C lives
+    /// in the Edit menu instead, for discoverability.)
+    @ViewBuilder
+    private var chatShortcuts: some View {
+        ZStack {
+            // ⌘↓ jumps to the latest message. When already at the latest there's
+            // nothing to scroll to, so the button is disabled and the ⌘↓ key
+            // equivalent falls through to the focused composer's standard
+            // move-insertion-point-to-end-of-document editing action instead of
+            // being shadowed. (Disabled also covers the empty transcript.)
+            Button("Scroll to latest") { pendingScroll = .bottom }
+                .keyboardShortcut(.downArrow, modifiers: .command)
+                .disabled(transcriptAtLatest)
+
+            // Transcript paging for when focus sits outside the composer (e.g. a
+            // clicked chat bubble). Disabled while the composer is focused — then
+            // the composer's own `onKeyPress` owns the page keys — so the two
+            // paths are mutually exclusive and never double-page, independent of
+            // AppKit's key-equivalent-vs-keyDown routing order. A disabled Button's
+            // keyboard shortcut does not fire.
+            Button("Page up") { pendingScroll = .up }
+                .keyboardShortcut(.pageUp, modifiers: [])
+                .disabled(composerFocused)
+            Button("Page down") { pendingScroll = .down }
+                .keyboardShortcut(.pageDown, modifiers: [])
+                .disabled(composerFocused)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
     }
 
     /// The session's display name for confirmation copy — its title, or a short
@@ -474,6 +574,13 @@ final class LocalChatViewModel {
 
     var prompt = ""
     var messages: [ChatTranscriptMessage] = []
+    /// Whether this chat has at least one agent (Hermes) response — drives the
+    /// Edit menu's Copy Last Response enabled state without observers having to
+    /// read the whole `messages` array (which mutates per streamed chunk). Flips
+    /// false→true once when the first agent bubble is created (the streaming path
+    /// only `append`s on a bubble's first chunk, then updates in place), so it
+    /// doesn't churn observation during a turn. Recomputed on transcript replace.
+    private(set) var hasAgentResponse = false
     var isSending = false
     /// Hermes' auto-generated session title, written by `SessionsStore` from the
     /// agent → client `session_info_update`. Mirrors `OpenSession.title` so the
@@ -1357,6 +1464,11 @@ final class LocalChatViewModel {
         }
         let message = ChatTranscriptMessage(kind: kind, text: text, toolCallId: toolCallId)
         messages.append(message)
+        // Guarded so it triggers observation only on the first agent response,
+        // not on every later agent bubble (let alone every chunk).
+        if kind == .agent, !hasAgentResponse {
+            hasAgentResponse = true
+        }
         return message.id
     }
 
@@ -1441,6 +1553,9 @@ final class LocalChatViewModel {
     /// pointed at the now-removed messages.
     func replaceTranscript(with messages: [ChatTranscriptMessage]) {
         self.messages = messages
+        // A rewind can drop the last agent turn, so recompute (once) rather than
+        // leaving a stale `true`.
+        hasAgentResponse = messages.contains { $0.kind == .agent }
         resetStreamingMessages()
         toolMessageIds.removeAll()
         toolTitles.removeAll()

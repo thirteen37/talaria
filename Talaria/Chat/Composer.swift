@@ -11,11 +11,22 @@ struct Composer: View {
     var availableCommands: [AvailableCommand]
     var send: () -> Void
     var cancel: () -> Void
-    /// Page Up / Page Down over the composer scroll the transcript back/forward
-    /// while the field keeps focus (see `ChatView`). Defaulted to no-ops so other
-    /// call sites / previews keep compiling.
+    /// Page Up / Page Down forwarded to the transcript scroller (`ChatView` sets
+    /// `pendingScroll`). The window-wide `ChatView.chatShortcuts` layer covers
+    /// paging when focus is *outside* the composer; these own it while the field
+    /// holds focus, where a focused multi-line editor can otherwise swallow the
+    /// page keys before a modifier-less window-wide shortcut fires. The two paths
+    /// are made mutually exclusive via `onFocusChange` (ChatView disables its
+    /// window-wide page shortcuts while focused), so they can't both fire for one
+    /// press regardless of AppKit routing order. Defaulted to no-ops so previews /
+    /// other call sites keep compiling.
     var onPageUp: () -> Void = {}
     var onPageDown: () -> Void = {}
+    /// Reports composer focus changes up to `ChatView` so it can gate its
+    /// window-wide Page Up/Down shortcuts on the composer *not* being focused —
+    /// the structural guarantee that the composer and window-wide page paths never
+    /// both handle the same keypress.
+    var onFocusChange: (Bool) -> Void = { _ in }
     /// Drives ⌘L focus-the-composer from anywhere in the window.
     @FocusState private var inputFocused: Bool
     @State private var isSlashMenuDismissed = false
@@ -130,6 +141,11 @@ struct Composer: View {
                     // A turn ending (or being cancelled) disarms any pending Esc-cancel.
                     if !busy { escapeArmedToCancel = false }
                 }
+                .onChange(of: inputFocused) { _, focused in
+                    // Report focus up so ChatView disables its window-wide page
+                    // shortcuts while we own the keys (see `onPageUp`/`onPageDown`).
+                    onFocusChange(focused)
+                }
                 .task(id: escapeArmedToCancel) {
                     // Auto-disarm after a short window so the cancel reads as a
                     // double-tap, not a latent state a much-later Esc can trip.
@@ -200,8 +216,10 @@ struct Composer: View {
                     return .handled
                 }
                 .onKeyPress(.pageUp) {
-                    // Scroll the transcript back a page while the composer keeps
-                    // focus. `.handled` overrides the field's own page-scroll.
+                    // Page the transcript while the composer keeps focus.
+                    // `.handled` overrides the field's own page-scroll. The
+                    // window-wide page shortcut is disabled whenever we're focused
+                    // (via `onFocusChange`), so only this path fires here.
                     onPageUp()
                     return .handled
                 }
