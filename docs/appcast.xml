@@ -3,8 +3,22 @@
     <channel>
         <title>Talaria</title>
         <item>
+            <title>2.0</title>
+            <pubDate>Sun, 28 Jun 2026 15:37:13 +0000</pubDate>
+            <sparkle:version>20260628.1529</sparkle:version>
+            <sparkle:shortVersionString>2.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/thirteen37/talaria/releases/download/v2.0/Talaria-2.0.dmg" length="15485473" type="application/octet-stream" sparkle:edSignature="DbbWccipi1nthwcEvCGls2OjpxFwkv8cLLE2c5geggC85SliY19+diPzX+2zmnwFR/gGrateM4IkheESJxpkCg=="/>
+            <sparkle:deltas>
+                <enclosure url="https://thirteen37.github.io/talaria/Talaria20260628.1529-20260624.1434.delta" sparkle:deltaFrom="20260624.1434" length="7985630" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="980464" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="3HVWzQa7L5uGf/JWeEBxnAT1qDteUSOhk9prkKBsAk+hupisjbB7WnsvORiN040nhaWyl2D++OfJawX0hJZwCA=="/>
+                <enclosure url="https://thirteen37.github.io/talaria/Talaria20260628.1529-20260620.0925.delta" sparkle:deltaFrom="20260620.0925" length="7988182" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="980464" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="cVWJY5RfOD12C0IQWU2c5SKsY4FXu/WdICi8xg4PpCr5Ox3Ve0r8OMWYLY3SRSja9aOpjT/tpLToRkBssqYyBQ=="/>
+                <enclosure url="https://thirteen37.github.io/talaria/Talaria20260628.1529-20260608.1556.delta" sparkle:deltaFrom="20260608.1556" length="8792550" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="980464" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="WlOumavarvoKg2vPOaAonvvtHpnnVPsB2X1ni1tAl8WyHKD+sClYGfpOOtTZhfe7aotI5zJXT0ROIOF3nDRZBw=="/>
+                <enclosure url="https://thirteen37.github.io/talaria/Talaria20260628.1529-20260605.0331.delta" sparkle:deltaFrom="20260605.0331" length="9141134" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="980464" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="T/vqGUAcHANGFW2pYWM1RMJZZKBAPuCC3jaNQa6up66Xb94PiXxVHCscgLAIiA/8adlZWQdqpR3ygekf740XDw=="/>
+            </sparkle:deltas>
+        </item>
+        <item>
             <title>1.3</title>
-            <pubDate>Wed, 24 Jun 2026 14:42:40 +0000</pubDate>
+            <pubDate>Sun, 28 Jun 2026 15:37:09 +0000</pubDate>
             <sparkle:version>20260624.1434</sparkle:version>
             <sparkle:shortVersionString>1.3</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -17,7 +31,7 @@
         </item>
         <item>
             <title>1.2</title>
-            <pubDate>Wed, 24 Jun 2026 14:42:38 +0000</pubDate>
+            <pubDate>Sun, 28 Jun 2026 15:37:10 +0000</pubDate>
             <sparkle:version>20260620.0925</sparkle:version>
             <sparkle:shortVersionString>1.2</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
@@ -25,7 +39,7 @@
         </item>
         <item>
             <title>1.1</title>
-            <pubDate>Wed, 24 Jun 2026 14:42:39 +0000</pubDate>
+            <pubDate>Sun, 28 Jun 2026 15:37:11 +0000</pubDate>
             <sparkle:version>20260608.1556</sparkle:version>
             <sparkle:shortVersionString>1.1</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
