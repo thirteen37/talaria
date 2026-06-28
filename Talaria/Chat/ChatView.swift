@@ -882,14 +882,23 @@ final class LocalChatViewModel {
             var completedCleanly = false
             do {
                 let response = try await client.prompt(sessionId: id, content: content)
-                self?.statusText = "Stopped: \(response.stopReason.rawValue)"
+                // Show the *true* reason the turn ended — the raw gateway status
+                // (`end_turn`, `complete`, `max_tokens`, `aborted`, …) when the
+                // backend carried it, falling back to the typed stop reason. This
+                // stops every completion from being painted as a clean "end_turn".
+                let stoppedReason = response.gatewayStatus ?? response.stopReason.rawValue
+                self?.statusText = "Stopped: \(stoppedReason)"
                 // The "agent finished" notification is no longer fired here: the
                 // prompt resolves on the *first* `message.complete`, but Hermes
                 // chains continuation turns after it, so firing here lands the
                 // banner at the start of the final response. It's now event-driven
                 // and debounced in `SessionsStore` (armed by `armAgentFinished`),
                 // which coalesces across the chained turns and fires once.
-                completedCleanly = true
+                //
+                // Only a *clean* end drains the next queued prompt — a non-clean
+                // terminal status (max_tokens/aborted/…) must not, matching the
+                // suppressed "agent finished" banner so the two never disagree.
+                completedCleanly = response.isCleanTurnEnd
             } catch is CancellationError {
                 self?.statusText = "Cancelled"
                 // A cancelled turn must consume the arm so it doesn't carry over
