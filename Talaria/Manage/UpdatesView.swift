@@ -34,12 +34,31 @@ final class UpdatesHarness {
         let text: String
     }
 
+    /// The on-device changelog summary's lifecycle for the current available
+    /// update. `ready` wraps a ``ChangelogSummary`` that may itself be
+    /// `.unavailable` (model off/ineligible) — both that and the top-level
+    /// `.unavailable` (no pending commits) fall back to the plain subtitle.
+    enum ChangelogState: Equatable, Sendable {
+        case idle
+        case loading
+        case ready(ChangelogSummary)
+        case unavailable
+    }
+
     var status: UpdateStatus?
     var isChecking: Bool = false
     var isApplying: Bool = false
     var applyLog: [LogEntry] = []
     var applyExitCode: Int32?
     var lastError: String?
+    /// AI changelog state for the current update. Driven only by foreground
+    /// source-install checks (see ``performCheck(silent:)``).
+    var changelog: ChangelogState = .idle
+    /// Whether an apply (the `hermes update` process) was the **last** thing run.
+    /// The main panel shows the changelog summary by default and only swaps to the
+    /// apply log when this is true — set when an apply starts, cleared by the next
+    /// foreground check. So once you re-Check, the summary comes back.
+    var lastRunWasApply: Bool = false
     /// Top-of-window banner hub (window-scoped). Hard errors route here keyed by
     /// the surface id so they render full-width across the top. Optional so a
     /// missing host degrades to no-op.
@@ -75,10 +94,27 @@ final class UpdatesHarness {
     var markApplying: (Bool) -> Void = { _ in }
 
     let runner: HermesAdminRunning?
+    /// Fetches the pending upstream commits for a source-install update. `nil`
+    /// (the default, and the mock/no-host-shell case) leaves the changelog inert.
+    let commitFetcher: PendingCommitFetching?
+    /// Summarizes those commits on-device. `nil` leaves the changelog inert.
+    let summarizer: ChangelogSummarizing?
 
     private var nextLogID: Int = 0
     private var applyTask: Task<Void, Never>?
     private var backgroundTask: Task<Void, Never>?
+    /// The in-flight summarize task; cancelled when a re-check supersedes it or
+    /// the window tears down. Internal so tests can await it deterministically.
+    var changelogTask: Task<Void, Never>?
+    /// In-memory cache of the last successful summary and the exact commit set it
+    /// was built from. Re-checking an unchanged update reuses it instead of
+    /// re-running the model (which, even with greedy sampling, we'd rather not pay
+    /// for twice). Per-harness, so it resets on a profile switch / window rebuild.
+    private var summarizedCommits: [PendingCommit]?
+    private var cachedSummaryValue: ChangelogSummary?
+    /// How many commits the current summary covers — shown in the panel footnote
+    /// (and signals truncation when it hits the summarizer's cap).
+    var summarizedCommitCount: Int?
     /// De-dupe state so the same un-applied update doesn't re-notify every
     /// interval. Semver builds key on `latest` (a newer release re-notifies);
     /// source-install builds have no version — their `detail` carries a drifting
@@ -89,8 +125,14 @@ final class UpdatesHarness {
     private var lastNotifiedLatest: HermesVersion?
     private var notifiedSourceAvailable: Bool = false
 
-    init(runner: HermesAdminRunning?) {
+    init(
+        runner: HermesAdminRunning?,
+        commitFetcher: PendingCommitFetching? = nil,
+        summarizer: ChangelogSummarizing? = nil
+    ) {
         self.runner = runner
+        self.commitFetcher = commitFetcher
+        self.summarizer = summarizer
     }
 
     private func appendLog(_ text: String) {
@@ -147,20 +189,25 @@ final class UpdatesHarness {
 
     /// Shared core for manual and background checks: claims the `isChecking`
     /// gate (so it blocks, and is blocked by, the other operations), runs
-    /// `hermes update --check`, assigns `status`, and appends a concise result
-    /// line to the **same** `applyLog` the manual/apply flow shows — there is one
-    /// update-activity log, not a hidden background path. `silent` swallows
-    /// errors (background is best-effort).
+    /// `hermes update --check`, and assigns `status` (which drives the verdict
+    /// banner). The check verdict is **not** written to `applyLog` — that log is
+    /// reserved for the actual `hermes update` apply output, so the panel never
+    /// shows check chatter. `silent` swallows errors (background is best-effort).
     private func performCheck(silent: Bool) async {
         guard let runner else { return }
         isChecking = true
         defer { isChecking = false }
-        if !silent { lastError = nil }
+        if !silent {
+            lastError = nil
+            // A foreground check is the latest activity, so the panel goes back to
+            // showing the summary rather than a prior apply's log.
+            lastRunWasApply = false
+        }
         do {
             let result = try await HermesUpdates.check(runner: runner)
             status = result
             banners?.dismiss(key: "updates")
-            appendLog(checkResultLine(result))
+            updateChangelog(for: result, silent: silent)
             if !result.available {
                 // Whenever *any* path observes "up to date" — a manual check, a
                 // background tick, or the post-apply refresh — reset the de-dupe
@@ -172,12 +219,107 @@ final class UpdatesHarness {
             }
         } catch {
             if silent {
-                appendLog("Update check failed")
+                AppLog.updates.log("background update check failed: \(error.localizedDescription, privacy: .public)")
             } else {
                 lastError = error.localizedDescription
                 banners?.surfaceError("updates", error.localizedDescription)
             }
         }
+    }
+
+    /// Decides the changelog for a freshly-checked status. A **source-install**
+    /// update (`available`, versionless) summarizes — but only on a **foreground**
+    /// check: a background tick must neither spin up the on-device model nor
+    /// clobber a summary already on screen, so it leaves the changelog untouched.
+    /// Anything else (up to date, or a semver update with no local commits) clears
+    /// any stale summary on every check, foreground or background.
+    private func updateChangelog(for status: UpdateStatus, silent: Bool) {
+        if status.available, status.latest == nil {
+            if !silent { startChangelogSummary() }
+        } else {
+            cancelChangelogSummary()
+        }
+    }
+
+    /// Ensures a summary is showing for an available source-install update —
+    /// called when the Updates screen appears. This makes the summary show **by
+    /// default** even when a background check already populated `status` (so the
+    /// view's first-check path was skipped). Idempotent: it only starts one when
+    /// the changelog is idle, so an in-flight or finished summary is left alone;
+    /// and it clears a stale summary when there's no longer a source update.
+    func ensureChangelogSummary() {
+        guard let status, status.available, status.latest == nil else {
+            cancelChangelogSummary()
+            return
+        }
+        if case .idle = changelog { startChangelogSummary() }
+    }
+
+    /// Kicks off (or restarts) the on-device changelog summary: cancels any prior
+    /// task, shows `.loading`, then fetches the pending commits and summarizes
+    /// them — unless the **same commit set** was already summarized, in which case
+    /// the cached summary is reused (no churn, no second model run). Empty commits
+    /// (not a git repo, no `origin/main`, …) land on `.unavailable`; the model's
+    /// own `.unavailable` is published but **not** cached, so enabling Apple
+    /// Intelligence later re-tries. Honors cancellation so a re-check supersedes
+    /// an in-flight summary cleanly. Inert without both deps.
+    private func startChangelogSummary() {
+        guard let commitFetcher, let summarizer else {
+            cancelChangelogSummary()
+            return
+        }
+        // Don't run our `git fetch` while any window on this profile is mid-apply
+        // (a `git pull`) on the shared source repo — concurrent ref updates can
+        // fail with a lock error and break the in-progress apply. Mirrors the
+        // `backgroundCheck` interlock; the summary refreshes on the next check
+        // once the apply finishes. Leaves the changelog as-is (no cancel/loading).
+        guard !isProfileApplying() else { return }
+        changelogTask?.cancel()
+        // Only show the spinner when there's nothing to show yet. If a summary is
+        // already up, keep it visible while we re-fetch — an unchanged diff hits
+        // the cache and the summary never flickers.
+        if case .ready = changelog {} else { changelog = .loading }
+        changelogTask = Task { [weak self] in
+            let commits = await commitFetcher.pendingCommits(limit: FoundationModelsChangelogSummarizer.maxTotalCommits)
+            guard !Task.isCancelled else { return }
+            if commits.isEmpty {
+                self?.changelog = .unavailable
+                return
+            }
+            // Identical diff as last time → reuse the cached summary verbatim.
+            if let cached = self?.cachedSummary(matching: commits) {
+                self?.summarizedCommitCount = commits.count
+                self?.changelog = .ready(cached)
+                return
+            }
+            let summary = await summarizer.summarize(commits: commits)
+            guard !Task.isCancelled else { return }
+            self?.applyChangelogSummary(summary, for: commits)
+        }
+    }
+
+    /// The cached summary iff it was built from exactly `commits`.
+    private func cachedSummary(matching commits: [PendingCommit]) -> ChangelogSummary? {
+        commits == summarizedCommits ? cachedSummaryValue : nil
+    }
+
+    /// Publishes a fresh summary and caches it — but only when it's an actual
+    /// summary, so a transient model `.unavailable` isn't pinned to this diff.
+    private func applyChangelogSummary(_ summary: ChangelogSummary, for commits: [PendingCommit]) {
+        if case .summary = summary {
+            summarizedCommits = commits
+            cachedSummaryValue = summary
+        }
+        summarizedCommitCount = commits.count
+        changelog = .ready(summary)
+    }
+
+    /// Cancels any in-flight summary and resets to `.idle`. Called on
+    /// non-source/non-foreground checks and on window teardown.
+    func cancelChangelogSummary() {
+        changelogTask?.cancel()
+        changelogTask = nil
+        changelog = .idle
     }
 
     /// Clears the per-window de-dupe state and the cross-window notification
@@ -186,22 +328,6 @@ final class UpdatesHarness {
         lastNotifiedLatest = nil
         notifiedSourceAvailable = false
         onUpdateCleared?()
-    }
-
-    private func checkResultLine(_ status: UpdateStatus) -> String {
-        if status.available {
-            if let current = status.current, let latest = status.latest {
-                return "↑ Update available: \(Self.formatVersion(current)) → \(Self.formatVersion(latest))"
-            }
-            if let detail = status.detail, !detail.isEmpty {
-                return "↑ Update available: \(detail)"
-            }
-            return "↑ Update available"
-        }
-        if let current = status.current {
-            return "✓ Up to date (\(Self.formatVersion(current)))"
-        }
-        return "✓ Up to date"
     }
 
     static func formatVersion(_ v: HermesVersion) -> String {
@@ -254,6 +380,9 @@ final class UpdatesHarness {
     func apply() {
         guard let runner, !isApplying, !isChecking else { return }
         isApplying = true
+        // The apply is now the last thing run, so the panel shows its log instead
+        // of the summary (until the next foreground check flips it back).
+        lastRunWasApply = true
         // Publish the apply to the process-wide coordinator so another window's
         // background check on the same source-install repo skips while we run.
         markApplying(true)
@@ -285,9 +414,12 @@ final class UpdatesHarness {
                 // so the "Install update" button disables itself and the
                 // "X commits behind"/version subtitle reflects post-update
                 // reality. On non-zero exits the previous status is still
-                // accurate, so leave it alone.
+                // accurate, so leave it alone. A **silent** refresh so it
+                // doesn't clear `lastRunWasApply` — the panel keeps showing the
+                // apply log (the result the user just produced) rather than
+                // snapping back to a summary.
                 if exit == 0 {
-                    await self?.check()
+                    await self?.performCheck(silent: true)
                 }
             } catch is CancellationError {
                 // User tapped Cancel — normal exit path, no banner.
@@ -342,8 +474,15 @@ struct UpdatesView: View {
         // nil` guards against clobbering an in-flight apply when the user
         // navigates back mid-apply — the apply log persists.
         .task(id: updates != nil) {
-            guard let updates, updates.runner != nil, updates.status == nil else { return }
-            await updates.check()
+            guard let updates, updates.runner != nil else { return }
+            // First visit runs a check (which summarizes); a revisit where a
+            // background check already set the status just ensures the summary is
+            // generated, so it shows by default.
+            if updates.status == nil {
+                await updates.check()
+            } else {
+                updates.ensureChangelogSummary()
+            }
         }
     }
 
@@ -393,7 +532,7 @@ struct UpdatesView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             Divider()
-            applyLogView(harness: harness)
+            mainPanel(harness: harness)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         // Hard errors now route to the top-of-window strip; only the orange
@@ -408,6 +547,9 @@ struct UpdatesView: View {
         )
     }
 
+    /// Concise verdict banner: an icon, the "Update available" / "Up to date"
+    /// headline, and the version-delta / "N commits behind" subtitle. The AI
+    /// changelog lives in the main panel (``mainPanel``), not here.
     @ViewBuilder
     private func statusBanner(harness: UpdatesHarness) -> some View {
         if let status = harness.status {
@@ -444,10 +586,131 @@ struct UpdatesView: View {
         return status.detail
     }
 
+    /// The main content area below the verdict banner. By default it shows the AI
+    /// changelog (loading spinner → headline + highlights, or a state-appropriate
+    /// fallback when there's no summary). The apply log takes over only when an
+    /// apply (the `hermes update` process) was the last thing run.
+    @ViewBuilder
+    private func mainPanel(harness: UpdatesHarness) -> some View {
+        if harness.lastRunWasApply {
+            applyLogView(harness: harness)
+        } else {
+            switch harness.changelog {
+            case .loading:
+                loadingView("Summarizing changes…")
+            case .ready(.summary(let headline, let highlights)):
+                changelogPanel(headline: headline, highlights: highlights, commitCount: harness.summarizedCommitCount)
+            case .idle, .unavailable, .ready(.unavailable):
+                changelogFallbackView(harness: harness)
+            }
+        }
+    }
+
+    /// Shown when there's no AI summary to display and no apply is the latest
+    /// activity. Text matches the situation — the model's own reason when it was
+    /// unavailable, a checking state while the **first** check is still in flight
+    /// (status not yet resolved), "up to date" only for a *resolved* non-available
+    /// status, or a neutral note for an available update with no summary (a semver
+    /// update, or no pending commits). It deliberately does **not** mention apply
+    /// output — that placeholder belongs to ``applyLogView``.
+    @ViewBuilder
+    private func changelogFallbackView(harness: UpdatesHarness) -> some View {
+        if case .ready(.unavailable(let reason)) = harness.changelog {
+            ContentUnavailableView("No changelog summary", systemImage: "sparkles", description: Text(reason))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if harness.status == nil {
+            // The first check hasn't resolved yet — never assert "up to date"
+            // here. Show a checking state while it runs, neutral otherwise (e.g.
+            // a check that failed surfaces its error in the banner above).
+            if harness.isChecking {
+                loadingView("Checking for updates…")
+            } else {
+                ContentUnavailableView(
+                    "Updates",
+                    systemImage: "arrow.triangle.2.circlepath",
+                    description: Text("Check for the latest version.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else if harness.status?.available == true {
+            ContentUnavailableView(
+                "No changelog summary",
+                systemImage: "sparkles",
+                description: Text("A summary isn't available for this update.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ContentUnavailableView(
+                "Up to date",
+                systemImage: "checkmark.circle",
+                description: Text("You're running the latest version.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func loadingView(_ text: String) -> some View {
+        VStack(spacing: 10) {
+            ProgressView()
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// The AI changelog rendered as the main panel: a headline, the highlights as
+    /// a bulleted list, and an on-device attribution footnote that also conveys
+    /// how many commits were summarized (and whether the range was truncated).
+    private func changelogPanel(headline: String, highlights: [String], commitCount: Int?) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(.secondary)
+                    Text(headline)
+                        .font(.title3.weight(.semibold))
+                        .textSelection(.enabled)
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(highlights.enumerated()), id: \.offset) { _, highlight in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "circle.fill")
+                                .font(.system(size: 5))
+                                .foregroundStyle(.secondary)
+                            Text(highlight)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+                Text(changelogFootnote(commitCount: commitCount))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// Attribution + coverage footnote. When the commit count hits the
+    /// summarizer's cap we summarized only the newest slice, so say "most recent".
+    private func changelogFootnote(commitCount: Int?) -> String {
+        guard let count = commitCount else {
+            return "Summarized on-device by Apple Intelligence"
+        }
+        let noun = count == 1 ? "change" : "changes"
+        if count >= FoundationModelsChangelogSummarizer.maxTotalCommits {
+            return "Summarized the \(count) most recent \(noun) on-device by Apple Intelligence"
+        }
+        return "Summarized \(count) \(noun) on-device by Apple Intelligence"
+    }
+
     @ViewBuilder
     private func applyLogView(harness: UpdatesHarness) -> some View {
         if harness.applyLog.isEmpty {
-            ContentUnavailableView("Update log", systemImage: "text.viewfinder", description: Text("Output appears here once an update is applied."))
+            ContentUnavailableView("Update log", systemImage: "text.viewfinder", description: Text("Output appears here as the update runs."))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollViewReader { proxy in

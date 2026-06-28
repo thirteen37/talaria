@@ -214,6 +214,12 @@ if [[ $SKIP_SIGN_UPDATE -eq 0 ]]; then
         echo "${SIGN_OUTPUT}" > "${BUILD_DIR}/sparkle-signature.txt"
         echo
         echo "Append the line above to ${APPCAST_PATH} inside a new <item> block."
+        # The new <item> MUST carry a minimumSystemVersion matching the build's
+        # macOS floor, or Macs older than the deployment target are offered an
+        # update they can't launch. Surface the current floor so the hand-authored
+        # item uses it (mirrors the MARKETING_VERSION parse above).
+        MACOS_MIN="$(awk '/^  Talaria:/{f=1} f&&/deploymentTarget:/{gsub(/[" ]/,"",$2); print $2; exit}' "${REPO_ROOT}/project.yml")"
+        echo "The new <item> MUST set <sparkle:minimumSystemVersion>${MACOS_MIN}</sparkle:minimumSystemVersion> (the macOS deployment floor)."
     else
         echo "sign_update binary not found; build the app once in Xcode to fetch Sparkle, then re-run."
     fi

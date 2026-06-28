@@ -144,7 +144,21 @@ final class ServerWindowHarness {
         self.hostKeyCoordinator = hostKeyCoordinator
         self.baseAdminRunner = baseAdminRunner
         self.doctor = DoctorHarness(runner: store.adminRunner)
-        self.updates = UpdatesHarness(runner: store.adminRunner)
+        // Source-install changelog: fetch pending commits over the window's host
+        // shell (the host where the repo lives — local `/bin/sh` or the remote
+        // box), then summarize on-device. No host shell (the iOS local stub) →
+        // no fetcher → the changelog stays inert and the subtitle path shows.
+        let commitFetcher: PendingCommitFetching? = hostShell.map {
+            HostShellCommitLogFetcher(
+                shell: $0,
+                repoPath: HermesCommitLog.repoPath(hermesHome: profile.hermesHome)
+            )
+        }
+        self.updates = UpdatesHarness(
+            runner: store.adminRunner,
+            commitFetcher: commitFetcher,
+            summarizer: FoundationModelsChangelogSummarizer()
+        )
         // When a live chat's WebSocket dies silently (the macOS case — no
         // background→foreground hook), the chat VM routes the stream end to the
         // store, which calls back here to probe + re-resume the dead sessions. The

@@ -6,4 +6,5 @@ import os
 enum AppLog {
     static let general = Logger(subsystem: "com.talaria.app", category: "general")
     static let session = Logger(subsystem: "com.talaria.app", category: "session")
+    static let updates = Logger(subsystem: "com.talaria.app", category: "updates")
 }
