@@ -348,6 +348,229 @@ struct GatewayChatClientTests {
         #expect(method(of: frame) == "session.interrupt")
     }
 
+    // MARK: - Image attachments
+
+    @Test
+    func promptWithImageAttachesThenSubmits() async throws {
+        // One image → `image.attach_bytes` (data-URL content, derived filename)
+        // first, *then* `prompt.submit` carrying the text, then the turn resolves
+        // on `message.complete`.
+        let (client, fake, sid) = try await makeReadySession()   // runtime id "sess-1"
+        let sentBefore = fake.sent.count
+
+        let image = ContentBlock.image(ImageContent(data: "aGVsbG8=", mimeType: "image/png"))
+        let promptTask = Task {
+            try await client.prompt(sessionId: sid, content: [.text("look"), image])
+        }
+
+        let attachFrame = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: attachFrame) == "image.attach_bytes")
+        #expect(stringParam(attachFrame, "session_id") == "sess-1")
+        #expect(stringParam(attachFrame, "content_base64") == "data:image/png;base64,aGVsbG8=")
+        #expect(stringParam(attachFrame, "filename") == "talaria-1.png")
+        fake.pushInbound(responseFrame(id: idOf(attachFrame), result: ["ok": .bool(true)]))
+
+        let submitFrame = try await fake.waitForSent(at: sentBefore + 1)
+        #expect(method(of: submitFrame) == "prompt.submit")
+        #expect(stringParam(submitFrame, "session_id") == "sess-1")
+        #expect(stringParam(submitFrame, "text") == "look")
+        fake.pushInbound(responseFrame(id: idOf(submitFrame), result: ["status": .string("streaming")]))
+
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: sid, payload: ["status": .string("complete")]))
+        let response = try await promptTask.value
+        #expect(response.stopReason == .endTurn)
+    }
+
+    @Test
+    func promptWithMultipleImagesAttachesInArrayOrder() async throws {
+        // Multiple images attach in array order with distinct, mime-derived
+        // filenames before the single text submit.
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let png = ContentBlock.image(ImageContent(data: "aW1n", mimeType: "image/png"))
+        let jpg = ContentBlock.image(ImageContent(data: "anBn", mimeType: "image/jpeg"))
+        let promptTask = Task {
+            try await client.prompt(sessionId: sid, content: [png, jpg, .text("two")])
+        }
+
+        let first = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: first) == "image.attach_bytes")
+        #expect(stringParam(first, "filename") == "talaria-1.png")
+        #expect(stringParam(first, "content_base64") == "data:image/png;base64,aW1n")
+        fake.pushInbound(responseFrame(id: idOf(first), result: [:]))
+
+        let second = try await fake.waitForSent(at: sentBefore + 1)
+        #expect(method(of: second) == "image.attach_bytes")
+        #expect(stringParam(second, "filename") == "talaria-2.jpg")
+        #expect(stringParam(second, "content_base64") == "data:image/jpeg;base64,anBn")
+        fake.pushInbound(responseFrame(id: idOf(second), result: [:]))
+
+        let submit = try await fake.waitForSent(at: sentBefore + 2)
+        #expect(method(of: submit) == "prompt.submit")
+        #expect(stringParam(submit, "text") == "two")
+        fake.pushInbound(responseFrame(id: idOf(submit), result: ["status": .string("streaming")]))
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: sid, payload: ["status": .string("complete")]))
+        _ = try await promptTask.value
+    }
+
+    @Test
+    func promptImageOnlySubmitsEmptyText() async throws {
+        // An image-only turn (no text block) still submits — with text == "".
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let image = ContentBlock.image(ImageContent(data: "aW1n", mimeType: "image/png"))
+        let promptTask = Task { try await client.prompt(sessionId: sid, content: [image]) }
+
+        let attach = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: attach) == "image.attach_bytes")
+        fake.pushInbound(responseFrame(id: idOf(attach), result: [:]))
+
+        let submit = try await fake.waitForSent(at: sentBefore + 1)
+        #expect(method(of: submit) == "prompt.submit")
+        #expect(stringParam(submit, "text") == "")
+        fake.pushInbound(responseFrame(id: idOf(submit), result: ["status": .string("streaming")]))
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: sid, payload: ["status": .string("complete")]))
+        _ = try await promptTask.value
+    }
+
+    @Test
+    func attachFailureFailsPromptWithoutLeakingContinuation() async throws {
+        // A failed `image.attach_bytes` (e.g. an old Hermes without the RPC) fails
+        // the turn via the existing failTurn path, and — crucially — leaks no
+        // continuation: a subsequent prompt on the same session still works.
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let image = ContentBlock.image(ImageContent(data: "aW1n", mimeType: "image/png"))
+        let promptTask = Task { try await client.prompt(sessionId: sid, content: [.text("x"), image]) }
+
+        let attach = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: attach) == "image.attach_bytes")
+        fake.pushInbound(errorFrame(id: idOf(attach), message: "unsupported"))
+
+        await #expect(throws: GatewayChatError.self) {
+            _ = try await promptTask.value
+        }
+
+        // The next (text-only) prompt must still reach `prompt.submit` and resolve.
+        let sentNext = fake.sent.count
+        let promptTask2 = Task { try await client.prompt(sessionId: sid, content: "again") }
+        let submit = try await fake.waitForSent(at: sentNext)
+        #expect(method(of: submit) == "prompt.submit")
+        fake.pushInbound(responseFrame(id: idOf(submit), result: ["status": .string("streaming")]))
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: sid, payload: ["status": .string("complete")]))
+        _ = try await promptTask2.value
+    }
+
+    @Test
+    func cancelDuringImageAttachDoesNotSubmit() async throws {
+        // Cancelling mid-attach must not go on to `prompt.submit`: `onCancel`
+        // already resolved the turn and sent `session.interrupt`, so a late
+        // submit would start a real turn the gateway never interrupts (its
+        // output would then stream into a UI that thinks the session is idle).
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let image = ContentBlock.image(ImageContent(data: "aW1n", mimeType: "image/png"))
+        let promptTask = Task { try await client.prompt(sessionId: sid, content: [.text("hi"), image]) }
+
+        // The attach frame is on the wire; the turn is now awaiting its ack.
+        let attach = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: attach) == "image.attach_bytes")
+
+        // Cancel before the attach acks — resolves the turn (cancelled) and sends
+        // session.interrupt.
+        promptTask.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await promptTask.value }
+
+        // Now ack the attach so the inner task resumes. It must hit the liveness
+        // guard and bail rather than submitting.
+        fake.pushInbound(responseFrame(id: idOf(attach), result: [:]))
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        let methods = fake.sent.map { method(of: $0) }
+        #expect(!methods.contains("prompt.submit"))
+        #expect(methods.contains("session.interrupt"))
+
+        // And no continuation leaked: a fresh prompt still runs.
+        let sentNext = fake.sent.count
+        let promptTask2 = Task { try await client.prompt(sessionId: sid, content: "again") }
+        let submit = try await fake.waitForSent(at: sentNext)
+        #expect(method(of: submit) == "prompt.submit")
+        fake.pushInbound(responseFrame(id: idOf(submit), result: ["status": .string("streaming")]))
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: sid, payload: ["status": .string("complete")]))
+        _ = try await promptTask2.value
+    }
+
+    @Test
+    func lateAttachAckAfterCancelAndNewTurnDoesNotSubmitStaleTurn() async throws {
+        // Cancel turn A mid-attach, start turn B, THEN let A's attach ack land
+        // late. A's stale unstructured task must recognise it's no longer the live
+        // turn (token mismatch) and bail — it must not submit A's old text (which
+        // would collide with B and fail the wrong turn).
+        let (client, fake, sid) = try await makeReadySession()
+        let sentBefore = fake.sent.count
+
+        let image = ContentBlock.image(ImageContent(data: "aW1n", mimeType: "image/png"))
+        let turnA = Task { try await client.prompt(sessionId: sid, content: [.text("old"), image]) }
+
+        let attachA = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: attachA) == "image.attach_bytes")
+
+        // Cancel A before its attach acks.
+        turnA.cancel()
+        await #expect(throws: CancellationError.self) { _ = try await turnA.value }
+
+        // Start turn B (text-only) — it submits immediately under a new token.
+        let sentB = fake.sent.count
+        let turnB = Task { try await client.prompt(sessionId: sid, content: "new") }
+        let submitB = try await fake.waitForSent(at: sentB)
+        #expect(method(of: submitB) == "prompt.submit")
+        #expect(stringParam(submitB, "text") == "new")
+
+        // A's attach ack lands late — its stale task resumes and must bail.
+        fake.pushInbound(responseFrame(id: idOf(attachA), result: [:]))
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        // Exactly one submit total (B's); A never submitted "old".
+        let submits = fake.sent.filter { method(of: $0) == "prompt.submit" }
+        #expect(submits.count == 1)
+
+        // Turn B is unaffected and completes cleanly.
+        fake.pushInbound(responseFrame(id: idOf(submitB), result: ["status": .string("streaming")]))
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: sid, payload: ["status": .string("complete")]))
+        let response = try await turnB.value
+        #expect(response.stopReason == .endTurn)
+    }
+
+    @Test
+    func resumedSessionAttachAndSubmitCarryRuntimeId() async throws {
+        // On a resumed session the attach and the submit both target the gateway's
+        // runtime id (not the stored/bound id), so the image queues + consumes on
+        // the right session.
+        let (client, fake, _) = try await makeResumedSession(boundId: "stored-1", runtimeId: "rt-1")
+        let sentBefore = fake.sent.count
+
+        let image = ContentBlock.image(ImageContent(data: "aW1n", mimeType: "image/png"))
+        let promptTask = Task {
+            try await client.prompt(sessionId: "stored-1", content: [.text("hi"), image])
+        }
+
+        let attach = try await fake.waitForSent(at: sentBefore)
+        #expect(method(of: attach) == "image.attach_bytes")
+        #expect(stringParam(attach, "session_id") == "rt-1")
+        fake.pushInbound(responseFrame(id: idOf(attach), result: [:]))
+
+        let submit = try await fake.waitForSent(at: sentBefore + 1)
+        #expect(method(of: submit) == "prompt.submit")
+        #expect(stringParam(submit, "session_id") == "rt-1")
+        fake.pushInbound(responseFrame(id: idOf(submit), result: ["status": .string("streaming")]))
+        fake.pushInbound(eventFrame(type: "message.complete", sessionId: "rt-1", payload: ["status": .string("complete")]))
+        _ = try await promptTask.value
+    }
+
     // MARK: - Permissions
 
     @Test

@@ -42,6 +42,13 @@ public actor GatewayChatClient: ChatBackend {
     private var nextId = 1
     private var pending: [String: CheckedContinuation<JSONValue, Error>] = [:]
     private var turnContinuation: CheckedContinuation<PromptResponse, Error>?
+    /// Monotonic id for the current turn, bumped each time a turn is established.
+    /// The prompt's unstructured attach/submit task captures the value at launch
+    /// and re-checks it after every `await`, so a stale task (whose turn was
+    /// cancelled and replaced by a newer turn) recognises it is no longer live —
+    /// the bare `turnContinuation != nil` check can't tell *this* turn from a
+    /// successor that happens to be running. See `prompt(sessionId:content:)`.
+    private var turnToken = 0
     private var permissionCounter = 0
     /// Whether any `reasoning.delta` chunk streamed this turn — gates the
     /// redundant full-text `reasoning.available` emit. Reset on `message.start`.
@@ -145,24 +152,80 @@ public actor GatewayChatClient: ChatBackend {
     public func prompt(sessionId: SessionId, content: [ContentBlock]) async throws -> PromptResponse {
         guard turnContinuation == nil else { throw GatewayChatError.turnInProgress }
         let text = content.compactMap { $0.plainText }.joined()
+        // Image blocks ride a two-step flow: each is attached via
+        // `image.attach_bytes` *before* the `prompt.submit`, which Hermes then
+        // consumes from the session's queued-image state on the next turn.
+        let images: [ImageContent] = content.compactMap {
+            if case let .image(image) = $0 { return image }
+            return nil
+        }
         let runtime = runtimeSessionId ?? sessionId
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<PromptResponse, Error>) in
                 turnContinuation = cont
+                turnToken += 1
+                let token = turnToken
                 Task {
                     do {
+                        // Attach each image (in order) before submitting the text.
+                        // `content_base64` is a self-describing data URL; the
+                        // filename carries the mime-derived extension. Any throw
+                        // here (e.g. an old Hermes without the RPC) routes to
+                        // `failTurn` just like a submit failure — same single-
+                        // resolve, cancellation-safe path.
+                        //
+                        // The attach loop awaits each ack, so a cancel can race in
+                        // between frames: `onCancel` resolves the turn and sends
+                        // `session.interrupt`. This unstructured Task isn't part of
+                        // that cancellation, so after every await we re-check that
+                        // *this* turn is still live — `turnContinuation != nil` (the
+                        // turn wasn't cancelled with nothing replacing it) AND
+                        // `turnToken == token` (a newer turn hasn't started in the
+                        // meantime). Both are needed: a bare nil-check would let a
+                        // stale task whose turn was cancelled-then-replaced submit
+                        // the old text into the *new* turn. Once either fails we stop
+                        // attaching and never submit, so a turn the gateway was told
+                        // to interrupt can't start streaming into an idle-looking UI.
+                        // (Safe to read here: this Task inherits the actor's isolation.)
+                        for (index, image) in images.enumerated() {
+                            guard self.isTurnLive(token) else { return }
+                            let dataURL = "data:\(image.mimeType);base64,\(image.data)"
+                            let filename = "talaria-\(index + 1).\(Self.ext(forMime: image.mimeType))"
+                            _ = try await call("image.attach_bytes", ImageAttachParams(
+                                sessionId: runtime,
+                                contentBase64: dataURL,
+                                filename: filename
+                            ))
+                        }
+                        guard self.isTurnLive(token) else { return }
                         // The ack is `{status:"streaming"}`; the turn resolves on
                         // the later `message.complete` event. The ack still
                         // surfaces immediate failures (e.g. "session busy").
                         _ = try await call("prompt.submit", PromptParams(sessionId: runtime, text: text))
                     } catch {
-                        self.failTurn(error: error)
+                        // Only fail the turn if this is still that turn — a stale
+                        // task's error must not resolve a successor turn's continuation.
+                        if self.turnToken == token { self.failTurn(error: error) }
                     }
                 }
             }
         } onCancel: {
             Task { await self.cancelTurn(runtime: runtime) }
+        }
+    }
+
+    /// File extension for an image mime type, used to name attached images
+    /// (`talaria-1.png`). Falls back to `png` for unrecognised types.
+    private static func ext(forMime mime: String) -> String {
+        switch mime.lowercased() {
+        case "image/png": return "png"
+        case "image/jpeg", "image/jpg": return "jpg"
+        case "image/gif": return "gif"
+        case "image/webp": return "webp"
+        case "image/heic": return "heic"
+        case "image/tiff": return "tiff"
+        default: return "png"
         }
     }
 
@@ -557,6 +620,14 @@ public actor GatewayChatClient: ChatBackend {
         cont.resume(throwing: error)
     }
 
+    /// Whether the turn identified by `token` is still the live one: it wasn't
+    /// cancelled (a continuation is present) and no newer turn has superseded it
+    /// (the token still matches). The prompt's attach/submit task checks this
+    /// after every await to decide whether to keep going.
+    private func isTurnLive(_ token: Int) -> Bool {
+        turnContinuation != nil && turnToken == token
+    }
+
     private func cancelTurn(runtime: String) async {
         failTurn(error: CancellationError())
         _ = try? await sendFrame("session.interrupt", SessionIdParams(sessionId: runtime))
@@ -786,6 +857,17 @@ public actor GatewayChatClient: ChatBackend {
         enum CodingKeys: String, CodingKey {
             case sessionId = "session_id"
             case text
+        }
+    }
+
+    private struct ImageAttachParams: Codable, Sendable {
+        let sessionId: String
+        let contentBase64: String
+        let filename: String
+        enum CodingKeys: String, CodingKey {
+            case sessionId = "session_id"
+            case contentBase64 = "content_base64"
+            case filename
         }
     }
 

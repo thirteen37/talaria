@@ -53,6 +53,10 @@ struct ChatTranscriptMessage: Identifiable, Equatable {
     let id = UUID()
     var kind: Kind
     var text: String
+    /// Normalized image bytes echoed in a user bubble (the images sent with this
+    /// turn). Empty for every non-user message. Stored as already-normalized PNG/
+    /// JPEG data so the bubble's thumbnails reuse the exact bytes sent on the wire.
+    var images: [Data]
     var toolCallId: ToolCallId?
     var toolTitle: String?
     var toolStatus: ToolCallStatus?
@@ -61,6 +65,7 @@ struct ChatTranscriptMessage: Identifiable, Equatable {
     init(
         kind: Kind,
         text: String,
+        images: [Data] = [],
         toolCallId: ToolCallId? = nil,
         toolTitle: String? = nil,
         toolStatus: ToolCallStatus? = nil,
@@ -68,10 +73,29 @@ struct ChatTranscriptMessage: Identifiable, Equatable {
     ) {
         self.kind = kind
         self.text = text
+        self.images = images
         self.toolCallId = toolCallId
         self.toolTitle = toolTitle
         self.toolStatus = toolStatus
         self.toolContent = toolContent
+    }
+
+    /// Custom equality that compares everything **except** the raw `images` bytes
+    /// (only their count). `messages` is diffed with `==` on every mutation —
+    /// including each streamed token via `.onChange(of:)` — and a user turn's
+    /// images can be ~25 MB each; the synthesized `==` would memcmp those
+    /// unchanged, immutable bytes on the main thread every token. Images never
+    /// change after `append`, so excluding their contents is safe (mirrors why
+    /// `ComposerAttachment` keys equality on `id`).
+    static func == (lhs: ChatTranscriptMessage, rhs: ChatTranscriptMessage) -> Bool {
+        lhs.id == rhs.id
+            && lhs.kind == rhs.kind
+            && lhs.text == rhs.text
+            && lhs.toolCallId == rhs.toolCallId
+            && lhs.toolTitle == rhs.toolTitle
+            && lhs.toolStatus == rhs.toolStatus
+            && lhs.toolContent == rhs.toolContent
+            && lhs.images.count == rhs.images.count
     }
 
     /// A real user turn that "Undo back to here" can rewind to. Excludes locally

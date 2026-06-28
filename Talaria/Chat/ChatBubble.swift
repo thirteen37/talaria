@@ -52,10 +52,33 @@ struct ChatBubble: View {
 
                 MarkdownText(text: message.text, isStreaming: isStreaming)
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                if !message.images.isEmpty {
+                    imageThumbnails
+                }
             }
         }
         .padding(10)
         .background(message.kind.background, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    /// Echoed thumbnails of the images sent with this user turn — a horizontal
+    /// row of fixed 120×120 rounded tiles. No lightbox in v1. Each tile decodes
+    /// once (keyed on message id + index) via ``CachedThumbnail`` so the bubble
+    /// re-rendering on every streaming token doesn't re-decode the image.
+    private var imageThumbnails: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(message.images.enumerated()), id: \.offset) { offset, data in
+                    CachedThumbnail(
+                        data: data,
+                        id: "\(message.id)-\(offset)",
+                        size: 120,
+                        cornerRadius: 8
+                    )
+                }
+            }
+        }
     }
 
     #if os(macOS)

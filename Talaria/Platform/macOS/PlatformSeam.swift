@@ -1,6 +1,8 @@
 import AppKit
 import HermesKit
+import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 
 // macOS half of the platform seam. The iOS half lives in `Platform/iOS/` and
 // defines the same symbols; the `**/iOS/**` / `**/macOS/**` folder excludes in
@@ -80,6 +82,33 @@ extension View {
         }
     }
 
+    /// Image picker: macOS opens a multi-select `NSOpenPanel` (image types) when
+    /// `isPresented` flips true. Selected files are read and normalized off the
+    /// main actor, then delivered via `onPick`. Mirrors ``identityFilePicker``.
+    func imagePicker(
+        isPresented: Binding<Bool>,
+        onPick: @escaping @MainActor ([ComposerAttachment]) -> Void
+    ) -> some View {
+        onChange(of: isPresented.wrappedValue) { _, presenting in
+            guard presenting else { return }
+            isPresented.wrappedValue = false
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = false
+            panel.allowsMultipleSelection = true
+            panel.allowedContentTypes = [.image]
+            guard panel.runModal() == .OK else { return }
+            let urls = panel.urls
+            Task.detached {
+                let attachments = urls.compactMap { url -> ComposerAttachment? in
+                    guard let data = try? Data(contentsOf: url) else { return nil }
+                    return ComposerImage.normalize(data, displayName: url.lastPathComponent)
+                }
+                await onPick(attachments)
+            }
+        }
+    }
+
     /// Gear toolbar item that opens the profile editor. No-op on macOS — the
     /// app's `Settings` scene (⌘,) owns profile editing there.
     func platformSettingsToolbarItem(action: @escaping () -> Void) -> some View {
@@ -129,6 +158,68 @@ extension View {
         @ViewBuilder editor: @escaping () -> Editor
     ) -> some View {
         self
+    }
+}
+
+/// Composer image intake (macOS half of the seam). Normalization is shared via
+/// ``ImageNormalizer``; only the pasteboard read is platform-specific.
+enum ComposerImage {
+    /// Decode + downscale + re-encode raw bytes off the main actor. See
+    /// ``ImageNormalizer/normalize(_:displayName:)``.
+    static func normalize(_ raw: Data, displayName: String?) -> ComposerAttachment? {
+        ImageNormalizer.normalize(raw, displayName: displayName)
+    }
+
+    /// Raw image bytes on the general pasteboard, read on the main actor (the
+    /// pasteboard must be touched there) but **not** yet normalized — the caller
+    /// normalizes off-main so a large paste doesn't hitch the UI. Prefers raw
+    /// image data (a copied screenshot vends PNG/TIFF); falls back to `NSImage`
+    /// objects' TIFF bytes for apps that only vend the object representation.
+    @MainActor
+    static func pasteboardImageData() -> [Data] {
+        let pasteboard = NSPasteboard.general
+        for type in pasteboard.types ?? [] {
+            guard let utType = UTType(type.rawValue), utType.conforms(to: .image),
+                  let data = pasteboard.data(forType: type) else { continue }
+            // One paste yields one image, even though it's offered in several
+            // representations (e.g. png + tiff) — take the first usable one.
+            return [data]
+        }
+        guard let images = pasteboard.readObjects(forClasses: [NSImage.self]) as? [NSImage] else {
+            return []
+        }
+        return images.compactMap { $0.tiffRepresentation }
+    }
+}
+
+/// Paste-image control for the composer (macOS half): a visible button that
+/// reads images off `NSPasteboard`, plus a hidden ⌘⇧V shortcut (same hidden-
+/// button pattern as the composer's ⌘L focus button) so it never competes with
+/// the text field's own ⌘V.
+@MainActor
+func composerPasteControl(onPaste: @escaping @MainActor ([ComposerAttachment]) -> Void) -> some View {
+    // Read the raw bytes on the main actor, then normalize (decode/downscale/
+    // re-encode) off-main so a large paste — e.g. a Retina screenshot — doesn't
+    // hitch the UI, matching every other intake path.
+    func paste() {
+        let datas = ComposerImage.pasteboardImageData()
+        guard !datas.isEmpty else { return }
+        Task.detached {
+            let attachments = datas.compactMap { ComposerImage.normalize($0, displayName: nil) }
+            await onPaste(attachments)
+        }
+    }
+    return Button(action: paste) {
+        Image(systemName: "doc.on.clipboard")
+    }
+    .help("Paste image (⌘⇧V)")
+    .accessibilityLabel("Paste image")
+    .background {
+        Button("Paste image", action: paste)
+            .keyboardShortcut("v", modifiers: [.command, .shift])
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
     }
 }
 
