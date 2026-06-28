@@ -75,13 +75,13 @@ The macOS and iOS app targets compile the **same `Talaria/` source tree** with m
 - Any folder named `iOS/` under `Talaria/` is **iOS-target-only** (excluded from the macOS target).
 - Any folder named `macOS/` under `Talaria/` is **macOS-target-only** (excluded from the iOS target).
 
-This lets a seam file define the **same symbol** in both `macOS/` and `iOS/` folders without an `#if` — only one variant compiles per target. See paired files like `Talaria/Platform/{macOS,iOS}/PlatformSeam.swift` and `Talaria/System/{macOS,iOS}/LogConsoleToolbar.swift`. When adding platform-specific behavior, prefer this folder seam over inline `#if os(...)`.
+This lets a seam file define the **same symbol** in both `macOS/` and `iOS/` folders without an `#if` — only one variant compiles per target. See paired files like `Talaria/Platform/{macOS,iOS}/PlatformSeam.swift` and `Talaria/Manage/{macOS,iOS}/HindsightTransportSeam.swift`. When adding platform-specific behavior, prefer this folder seam over inline `#if os(...)`.
 
 ## Security constraints
 
 - The app is **not sandboxed** (it must spawn `hermes` and `ssh`); it ships with Hardened Runtime + Developer-ID signing + notarisation. `Talaria/Talaria.entitlements` is canonical — adding entitlements needs a blast-radius review.
 - Do not store SSH passphrases; delegate auth to system `ssh`, ssh-agent, and `~/.ssh/config` (macOS) or the host-key/identity stores (iOS).
-- Log protocol frames only at debug level; never log credential material.
+- Log protocol frames only at debug level; never log credential material. App logs use the `com.talaria.*` `os.Logger` subsystems and are read via macOS Console.app / sysdiagnose (there is no in-app log viewer) — see [docs/viewing-logs.md](docs/viewing-logs.md).
 
 ## UI conventions
 

@@ -3,8 +3,7 @@ import SwiftUI
 
 /// Compact iPhone window: a `NavigationStack` chat push with a top toolbar
 /// (Browse / All-sessions / Reconnect). Browse opens a modal sheet covering the
-/// full manage feature set; Settings is reached via Browse → Settings, and the
-/// app's own log console lives under Browse → System → App Logs. iOS-only.
+/// full manage feature set; Settings is reached via Browse → Settings. iOS-only.
 struct PhoneServerWindow: View {
     let profileId: UUID
 

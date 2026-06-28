@@ -477,7 +477,8 @@ final class ProfileSyncHarness {
     /// `hermes skills install`/`update` can exit 0 without taking effect. If the
     /// push reported success but the skill is still drifting after the re-fetch,
     /// surface a short, actionable banner; the full Hermes output (often just
-    /// progress noise) goes to the App Log rather than the banner.
+    /// progress noise) goes to the `os.Logger` (viewable in Console.app /
+    /// sysdiagnose — see `docs/viewing-logs.md`) rather than the banner.
     private func flagSilentSkillNoop(_ item: SkillDriftItem, profile: String, output: String) {
         guard let still = skillsDrift[profile]?.items.first(where: { $0.name == item.name }) else { return }
         let action: String
@@ -489,7 +490,7 @@ final class ProfileSyncHarness {
         if !output.isEmpty {
             AppLog.general.error("Skill sync no-op: \(action, privacy: .public) “\(item.name, privacy: .public)” in “\(profile, privacy: .public)” reported success without effect. Hermes output: \(output, privacy: .public)")
         }
-        banners?.surfaceError("profiles", "\(action) “\(item.name)” in “\(profile)” reported success \(result) (see App Logs).")
+        banners?.surfaceError("profiles", "\(action) “\(item.name)” in “\(profile)” reported success \(result).")
     }
 
     func syncAllSkills(profile: String) async {

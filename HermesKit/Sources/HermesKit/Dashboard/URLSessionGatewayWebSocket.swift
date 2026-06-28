@@ -11,7 +11,8 @@ import os
 /// delegate methods nor populates `task.response`, which is why a rejected
 /// upgrade only ever surfaced as an opaque `-1011 "bad response from the server"`.
 /// With the delegate we log the HTTP status / close code the server returned —
-/// see `HermesLog.gateway` (visible in the in-app log console).
+/// see `HermesLog.gateway` (visible in macOS Console.app under the
+/// `com.talaria.hermeskit` `gateway` category).
 public final class URLSessionGatewayWebSocket: NSObject, GatewayWebSocket, URLSessionWebSocketDelegate, @unchecked Sendable {
     public nonisolated let messages: AsyncThrowingStream<Data, Error>
 

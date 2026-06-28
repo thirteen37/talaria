@@ -2,9 +2,10 @@ import Foundation
 import os
 
 /// Shared loggers for HermesKit. All use a `com.talaria.hermeskit` subsystem
-/// so the host app's in-app log console (which reads `OSLogStore` for the
-/// current process) can surface them on-device — essential for debugging SSH
-/// connection failures on iOS where there's no attached Xcode console.
+/// so they surface in macOS Console.app / sysdiagnose alongside the host app's
+/// `com.talaria.*` loggers (filter `subsystem:com.talaria`) — essential for
+/// debugging SSH connection failures on iOS field builds with no attached Mac.
+/// See `docs/viewing-logs.md`.
 public enum HermesLog {
     public static let transport = Logger(subsystem: "com.talaria.hermeskit", category: "transport")
     public static let session = Logger(subsystem: "com.talaria.hermeskit", category: "session")
@@ -17,6 +18,7 @@ public enum HermesLog {
     /// Live-chat WebSocket gateway (`/api/ws`): connection lifecycle, the
     /// handshake result (incl. the HTTP status the server returned on a rejected
     /// upgrade — the one detail `-1011 "bad response"` otherwise hides), and the
-    /// JSON-RPC turn flow. Surfaced in the in-app log console.
+    /// JSON-RPC turn flow. Surfaced in macOS Console.app / sysdiagnose under
+    /// the `com.talaria.hermeskit` `gateway` category.
     public static let gateway = Logger(subsystem: "com.talaria.hermeskit", category: "gateway")
 }
