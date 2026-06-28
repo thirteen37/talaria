@@ -221,6 +221,7 @@ struct ChatView: View {
             } else {
                 Composer(
                     prompt: $viewModel.prompt,
+                    attachments: $viewModel.attachments,
                     isSending: viewModel.isSending,
                     isBlocked: viewModel.pendingPermission != nil,
                     blockedPlaceholder: viewModel.blockedPlaceholder,
@@ -573,6 +574,11 @@ final class LocalChatViewModel {
     }
 
     var prompt = ""
+    /// Images staged in the composer for the next turn. Sent (and echoed in the
+    /// user bubble) on a normal idle send; left staged across slash/busy sends,
+    /// which stay text-only. Cleared on dispatch, not on success — the echoed
+    /// bubble preserves what was sent.
+    var attachments: [ComposerAttachment] = []
     var messages: [ChatTranscriptMessage] = []
     /// Whether this chat has at least one agent (Hermes) response — drives the
     /// Edit menu's Copy Last Response enabled state without observers having to
@@ -719,8 +725,8 @@ final class LocalChatViewModel {
         }
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         // A parked permission overlay blocks every send, idle or busy. Empty
-        // input is always a no-op.
-        guard !text.isEmpty, pendingPermission == nil else {
+        // input — no text *and* no staged image — is always a no-op.
+        guard !text.isEmpty || !attachments.isEmpty, pendingPermission == nil else {
             return
         }
         guard let manager, let client = await manager.client(for: sessionId) else {
@@ -732,8 +738,11 @@ final class LocalChatViewModel {
         // While a turn is in flight we only accept the gateway's pending-input
         // set: a slash in `SlashCommand.pendingInputCommands`, or plain text
         // auto-wrapped as `/queue …`. Everything else is a no-op so a second
-        // normal turn can never race the live one.
+        // normal turn can never race the live one. Mid-turn sends are text-only
+        // (images can't ride a queue/steer), so an attachment-only send while
+        // busy is a no-op — the images stay staged for the next idle turn.
         if isSending {
+            guard !text.isEmpty else { return }
             await sendWhileBusy(text: text, client: client)
             return
         }
@@ -774,8 +783,12 @@ final class LocalChatViewModel {
             return
         }
 
+        // Normal idle send: text and/or staged images. Capture the attachments,
+        // clear both composer fields on dispatch, and run a content-aware turn.
+        let outgoing = attachments
         prompt = ""
-        await runPrompt(text: text, client: client, echoUser: true)
+        attachments = []
+        await runPrompt(text: text, attachments: outgoing, client: client, echoUser: true)
     }
 
     /// `UserDefaults` flag (per user, not per session/profile) gating the one-time
@@ -930,14 +943,33 @@ final class LocalChatViewModel {
         _ = await runHarnessSlash(name: "undo", arg: count > 1 ? String(count) : "", client: client)
     }
 
-    /// Runs one LLM turn. `echoUser` appends the user bubble for a normal send;
-    /// the slash `submit` path passes `false` because the command was already
-    /// echoed. Extracted so both callers share the streaming/turn lifecycle.
+    /// Text-only turn. Thin wrapper over the content-aware core so the slash
+    /// `.submit` handoff and ``drainNextQueuedPrompt(client:)`` stay image-free.
     private func runPrompt(text: String, client: any ChatBackend, echoUser: Bool) async {
+        await runPrompt(text: text, attachments: [], client: client, echoUser: echoUser)
+    }
+
+    /// Runs one LLM turn carrying text and/or staged images. `echoUser` appends
+    /// the user bubble (with thumbnails of `attachments`) for a normal send; the
+    /// slash `submit` path passes `false` because the command was already echoed.
+    /// Extracted so both callers share the streaming/turn lifecycle.
+    private func runPrompt(
+        text: String,
+        attachments: [ComposerAttachment],
+        client: any ChatBackend,
+        echoUser: Bool
+    ) async {
         resetStreamingMessages()
         if echoUser {
-            currentUserStreamMessageId = append(kind: .user, text: text)
+            currentUserStreamMessageId = append(kind: .user, text: text, images: attachments.map(\.data))
         }
+        // Build the content: the text block (omitted when empty so an image-only
+        // turn submits `text == ""`) plus one image block per staged attachment.
+        var content: [ContentBlock] = []
+        if !text.isEmpty {
+            content.append(.text(text))
+        }
+        content.append(contentsOf: attachments.map { $0.contentBlock() })
         isSending = true
         turnStartDate = Date()
         statusText = "Hermes is working in \(cwd)..."
@@ -956,15 +988,24 @@ final class LocalChatViewModel {
             // intact for the next clean turn.
             var completedCleanly = false
             do {
-                let response = try await client.prompt(sessionId: id, content: text)
-                self?.statusText = "Stopped: \(response.stopReason.rawValue)"
+                let response = try await client.prompt(sessionId: id, content: content)
+                // Show the *true* reason the turn ended — the raw gateway status
+                // (`end_turn`, `complete`, `max_tokens`, `aborted`, …) when the
+                // backend carried it, falling back to the typed stop reason. This
+                // stops every completion from being painted as a clean "end_turn".
+                let stoppedReason = response.gatewayStatus ?? response.stopReason.rawValue
+                self?.statusText = "Stopped: \(stoppedReason)"
                 // The "agent finished" notification is no longer fired here: the
                 // prompt resolves on the *first* `message.complete`, but Hermes
                 // chains continuation turns after it, so firing here lands the
                 // banner at the start of the final response. It's now event-driven
                 // and debounced in `SessionsStore` (armed by `armAgentFinished`),
                 // which coalesces across the chained turns and fires once.
-                completedCleanly = true
+                //
+                // Only a *clean* end drains the next queued prompt — a non-clean
+                // terminal status (max_tokens/aborted/…) must not, matching the
+                // suppressed "agent finished" banner so the two never disagree.
+                completedCleanly = response.isCleanTurnEnd
             } catch is CancellationError {
                 self?.statusText = "Cancelled"
                 // A cancelled turn must consume the arm so it doesn't carry over
@@ -1458,11 +1499,16 @@ final class LocalChatViewModel {
     }
 
     @discardableResult
-    private func append(kind: ChatTranscriptMessage.Kind, text: String, toolCallId: ToolCallId? = nil) -> UUID? {
-        guard !text.isEmpty else {
+    private func append(
+        kind: ChatTranscriptMessage.Kind,
+        text: String,
+        images: [Data] = [],
+        toolCallId: ToolCallId? = nil
+    ) -> UUID? {
+        guard !text.isEmpty || !images.isEmpty else {
             return nil
         }
-        let message = ChatTranscriptMessage(kind: kind, text: text, toolCallId: toolCallId)
+        let message = ChatTranscriptMessage(kind: kind, text: text, images: images, toolCallId: toolCallId)
         messages.append(message)
         // Guarded so it triggers observation only on the first agent response,
         // not on every later agent bubble (let alone every chunk).

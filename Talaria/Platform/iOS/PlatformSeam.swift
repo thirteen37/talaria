@@ -1,4 +1,5 @@
 import HermesKit
+import PhotosUI
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -74,6 +75,20 @@ extension View {
         }
     }
 
+    /// Image picker: iOS presents a `PhotosPicker` (images only, multi-select)
+    /// when `isPresented` flips true. Picked items load their `Data`, normalize
+    /// off the main actor, then deliver via `onPick`. Mirrors ``identityFilePicker``.
+    func imagePicker(
+        isPresented: Binding<Bool>,
+        onPick: @escaping @MainActor ([ComposerAttachment]) -> Void
+    ) -> some View {
+        // Hosted in a zero-size background `View` (not a `ViewModifier`) because
+        // this file's `Content` symbol collides with a UIKit type, so
+        // `ViewModifier.Content` mis-resolves — the same reason the scene-phase
+        // readers below are background views.
+        background(PhotosImagePickerHost(isPresented: isPresented, onPick: onPick))
+    }
+
     /// Reports whether this window is the one the user is actively looking at,
     /// so the store can suppress notifications for a chat already on screen. iOS
     /// reads `scenePhase`: `.active` ⇒ foreground, `.inactive`/`.background` ⇒
@@ -131,6 +146,66 @@ extension View {
         sheet(isPresented: isPresented) {
             editor()
         }
+    }
+}
+
+/// Composer image intake (iOS half of the seam). Normalization is shared via
+/// ``ImageNormalizer``; the pasteboard read is macOS-only (iOS pastes through
+/// `PasteButton` → ``loadComposerAttachments(from:onEach:)``), so this half
+/// exposes just `normalize`.
+enum ComposerImage {
+    /// Decode + downscale + re-encode raw bytes off the main actor. See
+    /// ``ImageNormalizer/normalize(_:displayName:)``.
+    static func normalize(_ raw: Data, displayName: String?) -> ComposerAttachment? {
+        ImageNormalizer.normalize(raw, displayName: displayName)
+    }
+}
+
+/// Paste-image control for the composer (iOS half): a `PasteButton` filtered to
+/// image content. Pasted providers load + normalize off the main actor (see
+/// ``loadComposerAttachments(from:onEach:)``), then deliver via `onPaste`.
+@MainActor
+@ViewBuilder
+func composerPasteControl(onPaste: @escaping @MainActor ([ComposerAttachment]) -> Void) -> some View {
+    PasteButton(supportedContentTypes: [.image]) { providers in
+        loadComposerAttachments(from: providers) { attachment in
+            onPaste([attachment])
+        }
+    }
+    .labelStyle(.iconOnly)
+    .help("Paste image")
+    .accessibilityLabel("Paste image")
+}
+
+/// `imagePicker` backing host: a zero-size background `View` that hosts the
+/// `PhotosPicker` selection state and loads each picked item's `Data`,
+/// normalizing off the main actor before handing results back. A `View` (not a
+/// `ViewModifier`) to avoid this file's `Content` symbol collision.
+private struct PhotosImagePickerHost: View {
+    @Binding var isPresented: Bool
+    let onPick: @MainActor ([ComposerAttachment]) -> Void
+    @State private var selection: [PhotosPickerItem] = []
+
+    var body: some View {
+        Color.clear
+            .photosPicker(isPresented: $isPresented, selection: $selection, matching: .images)
+            .onChange(of: selection) { _, items in
+                guard !items.isEmpty else { return }
+                let picked = items
+                selection = []
+                Task {
+                    var datas: [Data] = []
+                    for item in picked {
+                        if let data = try? await item.loadTransferable(type: Data.self) {
+                            datas.append(data)
+                        }
+                    }
+                    let attachments = await Task.detached {
+                        datas.compactMap { ComposerImage.normalize($0, displayName: nil) }
+                    }.value
+                    onPick(attachments)
+                }
+            }
     }
 }
 

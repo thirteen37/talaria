@@ -579,82 +579,103 @@ private struct SessionRow: View {
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            // Plain (non-Button) primary content so the row participates in
-            // `List(selection:)` ↑/↓ navigation instead of swallowing clicks.
-            // Opening is double-click on macOS (single-click selects + arrows) and
-            // single-tap on iOS, where there's no keyboard selection to preserve.
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    if summary.isActive {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 7, height: 7)
-                            .accessibilityLabel("Active")
-                    }
-                    Text(summary.title.isEmpty ? SessionIdFormatter.short(summary.id) : summary.title)
-                        .font(.body)
-                        .lineLimit(2)
+        // Plain (non-Button) primary content so the row participates in
+        // `List(selection:)` ↑/↓ navigation instead of swallowing clicks.
+        // Opening is double-click on macOS (single-click selects + arrows) and
+        // single-tap on iOS, where there's no keyboard selection to preserve.
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                if summary.isActive {
+                    Circle()
+                        .fill(.green)
+                        .frame(width: 7, height: 7)
+                        .accessibilityLabel("Active")
                 }
-                if let preview = summary.preview {
-                    Text(preview)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                Text(summary.title.isEmpty ? SessionIdFormatter.short(summary.id) : summary.title)
+                    .font(.body)
+                    .lineLimit(2)
+            }
+            // Reserve room for the top-trailing action overlay so a long
+            // title never slides under the hover icons. Only the title row
+            // is inset; the preview and metadata rows still span full width
+            // so the indicators stay flush against the row's trailing edge.
+            .padding(.trailing, actionClusterWidth)
+            if let preview = summary.preview {
+                Text(preview)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            metadata
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        #if os(macOS)
+        .onTapGesture(count: 2, perform: open)
+        #else
+        .onTapGesture(perform: open)
+        #endif
+        // Pointer-driven tap gestures aren't exposed to assistive tech
+        // (VoiceOver / Full Keyboard Access can't synthesize the macOS
+        // double-click), so restore button semantics + an activation action
+        // for the open path the gestures provide.
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { open() }
+        // Action icons float on top of the top-trailing corner instead of as
+        // siblings in flow, so they reserve no horizontal space in the metadata
+        // row — the indicators reach the true trailing edge and align identically
+        // across rows regardless of which buttons are present.
+        .overlay(alignment: .topTrailing) {
+            HStack(spacing: 8) {
+                if let openTUI {
+                    rowButton(
+                        systemImage: "terminal",
+                        help: tuiDisabled
+                            ? "Already open inline — close it to open as a terminal session"
+                            : "Open as a terminal (TUI) session",
+                        accessibility: "Open as TUI",
+                        action: openTUI
+                    )
+                    .disabled(tuiDisabled)
                 }
-                metadata
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            #if os(macOS)
-            .onTapGesture(count: 2, perform: open)
-            #else
-            .onTapGesture(perform: open)
-            #endif
-            // Pointer-driven tap gestures aren't exposed to assistive tech
-            // (VoiceOver / Full Keyboard Access can't synthesize the macOS
-            // double-click), so restore button semantics + an activation action
-            // for the open path the gestures provide.
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction { open() }
-
-            if let openTUI {
+                if let onRename {
+                    rowButton(
+                        systemImage: "pencil",
+                        help: "Rename this session",
+                        accessibility: "Rename session",
+                        action: onRename
+                    )
+                }
                 rowButton(
-                    systemImage: "terminal",
-                    help: tuiDisabled
-                        ? "Already open inline — close it to open as a terminal session"
-                        : "Open as a terminal (TUI) session",
-                    accessibility: "Open as TUI",
-                    action: openTUI
+                    systemImage: "square.and.arrow.up",
+                    help: "Export this session's transcript as JSONL",
+                    accessibility: "Export transcript",
+                    action: onExport
                 )
-                .disabled(tuiDisabled)
-            }
-            if let onRename {
                 rowButton(
-                    systemImage: "pencil",
-                    help: "Rename this session",
-                    accessibility: "Rename session",
-                    action: onRename
+                    systemImage: "trash",
+                    help: "Delete this session",
+                    accessibility: "Delete session",
+                    role: .destructive,
+                    action: onDelete
                 )
             }
-            rowButton(
-                systemImage: "square.and.arrow.up",
-                help: "Export this session's transcript as JSONL",
-                accessibility: "Export transcript",
-                action: onExport
-            )
-            rowButton(
-                systemImage: "trash",
-                help: "Delete this session",
-                accessibility: "Delete session",
-                role: .destructive,
-                action: onDelete
-            )
         }
         #if os(macOS)
         .onHover { isHovering = $0 }
         #endif
+    }
+
+    /// Approximate width of the top-trailing action overlay, used to inset the
+    /// title row so text never collides with the hover-revealed icons. Tracks the
+    /// buttons actually shown (TUI and rename are conditional) so short-cluster
+    /// rows don't waste title width.
+    private var actionClusterWidth: CGFloat {
+        let buttonCount = 2 + (openTUI != nil ? 1 : 0) + (onRename != nil ? 1 : 0)
+        let buttonWidth: CGFloat = 20
+        let spacing: CGFloat = 8
+        return CGFloat(buttonCount) * buttonWidth + CGFloat(buttonCount - 1) * spacing
     }
 
     /// A trailing-edge row action button. Always visible on iOS; hover-revealed
