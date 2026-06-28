@@ -1,8 +1,11 @@
 import HermesKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct Composer: View {
     @Binding var prompt: String
+    /// Images staged for the next turn, shown as a removable thumbnail strip.
+    @Binding var attachments: [ComposerAttachment]
     var isSending: Bool
     var isBlocked: Bool
     /// Placeholder shown while `isBlocked` — varies by the pending prompt kind
@@ -21,6 +24,10 @@ struct Composer: View {
     @State private var isSlashMenuDismissed = false
     @State private var slashMenuHeight: CGFloat = 0
     @State private var selectedCommandIndex = 0
+    /// Drives the platform image picker (`NSOpenPanel` / `PhotosPicker`).
+    @State private var isPickingImages = false
+    /// Highlights the composer while an image drag hovers over it.
+    @State private var isDropTargeted = false
     /// First Esc over a live turn arms the cancel (a hint appears); the second
     /// confirms. Guards against a stray Esc dropping a running turn or a
     /// half-typed message. Cleared by typing, when the turn ends, or after a
@@ -110,7 +117,45 @@ struct Composer: View {
     }
 
     var body: some View {
+        VStack(spacing: 8) {
+            if !attachments.isEmpty {
+                attachmentStrip
+            }
+            inputRow
+        }
+        .padding(12)
+        // Highlight the composer while an image drag hovers over it.
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6]))
+                    .padding(4)
+                    .allowsHitTesting(false)
+            }
+        }
+        // Attach via the platform picker (NSOpenPanel / PhotosPicker).
+        .imagePicker(isPresented: $isPickingImages) { addAttachments($0) }
+        // Drag-and-drop images onto the composer (both platforms).
+        .onDrop(of: [.image], isTargeted: $isDropTargeted) { providers in
+            loadComposerAttachments(from: providers) { addAttachment($0) }
+            return true
+        }
+    }
+
+    /// The text input row plus its leading attach/paste controls, send/cancel
+    /// buttons, slash-command menu, and the hidden ⌘L focus shortcut.
+    private var inputRow: some View {
         HStack(spacing: 8) {
+            if !isBlocked {
+                composerPasteControl { addAttachments($0) }
+
+                Button { isPickingImages = true } label: {
+                    Image(systemName: "photo.on.rectangle")
+                }
+                .help("Attach images")
+                .accessibilityLabel("Attach images")
+            }
+
             TextField(placeholder, text: $prompt, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...6)
@@ -231,7 +276,8 @@ struct Composer: View {
                 }
                 .help("Send")
                 .accessibilityLabel("Send")
-                .disabled(trimmedPrompt.isEmpty || isBlocked)
+                // Idle: send when there's text *or* a staged image.
+                .disabled((trimmedPrompt.isEmpty && attachments.isEmpty) || isBlocked)
             }
         }
         // Hidden, zero-size ⌘L shortcut layer: focuses the composer from anywhere
@@ -293,12 +339,61 @@ struct Composer: View {
                     .offset(y: -34)
             }
         }
-        .padding(12)
+    }
+
+    /// Horizontal strip of staged-image thumbnails, each with a remove (✕)
+    /// affordance. Shown only when at least one image is staged.
+    private var attachmentStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(attachments) { attachment in
+                    AttachmentThumbnail(attachment: attachment) {
+                        attachments.removeAll { $0.id == attachment.id }
+                    }
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func accept(_ command: AvailableCommand) {
         prompt = "/\(command.name) "
         isSlashMenuDismissed = true
+    }
+
+    /// Append normalized attachments staged from a picker/paste/drop.
+    private func addAttachments(_ new: [ComposerAttachment]) {
+        guard !new.isEmpty else { return }
+        attachments.append(contentsOf: new)
+    }
+
+    private func addAttachment(_ attachment: ComposerAttachment) {
+        attachments.append(attachment)
+    }
+}
+
+/// One staged-image tile in the composer's attachment strip: a cached 56×56
+/// thumbnail (decoded once via ``CachedThumbnail``, keyed on the attachment id)
+/// with a remove (✕) overlay.
+private struct AttachmentThumbnail: View {
+    let attachment: ComposerAttachment
+    let onRemove: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            CachedThumbnail(data: attachment.data, id: attachment.id, size: 56, cornerRadius: 6)
+
+            Button(action: onRemove) {
+                Image(systemName: "xmark.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .black.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+            .padding(2)
+            .help("Remove image")
+            .accessibilityLabel("Remove image")
+        }
     }
 }
 
