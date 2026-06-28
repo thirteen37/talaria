@@ -37,7 +37,7 @@ targets:
   Talaria:
     type: application
     platform: macOS
-    deploymentTarget: "14.0"
+    deploymentTarget: "26.0"
     sources:
       - path: Talaria
         excludes:
@@ -80,7 +80,7 @@ targets:
   TalariaIOS:
     type: application
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "26.0"
     sources:
       - path: Talaria
         excludes:
@@ -124,7 +124,7 @@ targets:
   TalariaTests:
     type: bundle.unit-test
     platform: macOS
-    deploymentTarget: "14.0"
+    deploymentTarget: "26.0"
     sources:
       - path: TalariaTests
     dependencies:
@@ -138,7 +138,7 @@ targets:
   TalariaIOSUITests:
     type: bundle.ui-testing
     platform: iOS
-    deploymentTarget: "17.0"
+    deploymentTarget: "26.0"
     sources:
       - path: TalariaUITests
     dependencies:

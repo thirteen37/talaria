@@ -193,6 +193,7 @@ extension ServerWindowHarness {
         doctor.cancelRun()
         updates?.stopBackgroundChecks()
         updates?.cancelApply()
+        updates?.cancelChangelogSummary()
         updates = nil
     }
 

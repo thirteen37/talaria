@@ -63,6 +63,15 @@ Required GitHub repo secrets (set in **Settings → Secrets → Actions**):
 - Private key lives in the login Keychain (item: `https://sparkle-project.org`).
 - Feed URL: `https://thirteen37.github.io/talaria/appcast.xml` (GitHub Pages).
 - Appcast source lives at `docs/appcast.xml` and is served by GitHub Pages from `main`/`docs/`.
+- **Each `<item>` must set `<sparkle:minimumSystemVersion>` to the build's macOS
+  deployment floor** (currently `26.0` — the app's chosen minimum, set in
+  `project.yml`). The AI changelog summarizer is fully gated (`#if
+  canImport(FoundationModels)` + `@available(macOS 26, …)`, degrading to the plain
+  subtitle) so it does **not** itself require the 26 floor — the floor is a
+  deliberate project decision. Whatever the floor is, the appcast must match it, or
+  Macs older than it are offered an update they can't launch. `scripts/release.sh`
+  prints the required value next to the ed25519 signature. Leave the older items
+  (1.1–1.3, floor `14.0`) untouched — those builds genuinely run on macOS 14.
 
 ### Sparkle footgun
 

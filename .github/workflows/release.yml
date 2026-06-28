@@ -21,7 +21,9 @@ permissions:
 jobs:
   release:
     name: Build, sign, notarise, publish
-    runs-on: macos-15
+    # macOS 26 SDK / Xcode 26 — the app targets macOS 26 (FoundationModels);
+    # macos-15 only ships Xcode 16 and can't resolve the swift-tools 6.2 package.
+    runs-on: macos-26
     environment: release
     env:
       VERSION: ${{ github.event.inputs.version || github.ref_name }}
@@ -37,6 +39,15 @@ jobs:
           # generate_release_notes pulls the commit log for the GitHub Release
           # body; it is not load-bearing for versioning.
           fetch-depth: 0
+
+      - name: Select Xcode 26
+        run: |
+          XC="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n1)"
+          if [[ -z "$XC" ]]; then
+            echo "::error::No Xcode 26 found on runner. Installed:"; ls -d /Applications/Xcode*.app; exit 1
+          fi
+          sudo xcode-select -s "$XC/Contents/Developer"
+          xcodebuild -version
 
       - name: Resolve version string
         run: |
