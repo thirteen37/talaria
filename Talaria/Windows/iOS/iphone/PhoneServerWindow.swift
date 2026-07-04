@@ -374,6 +374,9 @@ struct PhoneServerWindow: View {
         // Track this window's foreground state (to gate notifications) and
         // consume a tapped-notification route addressed to this profile.
         .chatNotificationRouting(harness: harness)
+        // Step 2 of the incoming Share Sheet hand-off: when this window's profile
+        // was picked, present its session picker and prefill the composer.
+        .incomingShareRouting(harness: harness)
         // Full-width banner strip across the top of the window: bridges
         // session/dashboard errors + the web-UI progress note from the sidebar.
         // The visible strip is hosted *inside* the NavigationStack on each

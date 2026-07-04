@@ -347,6 +347,10 @@ struct DesktopServerWindow: View {
         // Track this window's foreground state (to gate notifications) and
         // consume a tapped-notification route addressed to this profile.
         .chatNotificationRouting(harness: harness)
+        // Step 2 of the incoming Share Sheet hand-off (iPad; a no-op seam on
+        // macOS): when this window's profile was picked, present its session
+        // picker and prefill the composer.
+        .incomingShareRouting(harness: harness)
         // Bridges session/dashboard errors + the web-UI progress note from the
         // sidebar into the center, and publishes the center so detail surfaces
         // emit save successes here. The visible strip is hosted over the detail

@@ -22,6 +22,14 @@ struct TalariaApp: App {
             RootWindowScene(profileId: profileId, directory: directory, recents: recents, sidebarLayout: sidebarLayout, notificationSettings: notificationSettings, windowRestoration: windowRestoration) {
                 ServerWindowRoot(profileId: profileId)
             }
+            // Share Extension hand-off: `talaria://share?id=<uuid>` publishes the
+            // staged share to the coordinator; the window scene reacts by
+            // presenting the profile picker. Ignored for any non-share URL.
+            .onOpenURL { url in
+                if let route = PendingShareRoute(url: url) {
+                    IncomingShareCoordinator.shared.receive(route)
+                }
+            }
         } defaultValue: {
             // Last-opened profile wins on launch (see the macOS entry for the
             // synchronous-read rationale).

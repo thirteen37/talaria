@@ -8,10 +8,16 @@ struct ServerWindowRoot: View {
     let profileId: UUID
 
     var body: some View {
-        if Idiom.isPhone {
-            PhoneServerWindow(profileId: profileId)
-        } else {
-            DesktopServerWindow(profileId: profileId)
+        Group {
+            if Idiom.isPhone {
+                PhoneServerWindow(profileId: profileId)
+            } else {
+                DesktopServerWindow(profileId: profileId)
+            }
         }
+        // Step 1 of the incoming Share Sheet hand-off: present the profile picker
+        // when `talaria://share` arrives. The chosen window then presents the
+        // session picker via `incomingShareRouting` (applied inside the window).
+        .incomingShareProfilePicker()
     }
 }

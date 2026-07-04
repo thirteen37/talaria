@@ -42,6 +42,7 @@ targets:
       - path: Talaria
         excludes:
           - "Info-iOS.plist"
+          - "TalariaIOS.entitlements"
           # Convention: any `iOS/` folder under Talaria/ is iOS-target-only.
           # Lets seam files define the same symbol in macOS/ and iOS/ folders
           # without a collision (only one compiles per target) — no `#if`.
@@ -93,6 +94,14 @@ targets:
       - package: HermesKit
       - package: MarkdownUI
       - package: Highlightr
+      # Embeds the Share Extension into TalariaIOS.app/PlugIns. Explicit
+      # embed/codeSignOnCopy rather than relying on XcodeGen's per-product-type
+      # default, since a silently-missing embed would build fine but never
+      # register the extension with the Share Sheet on device.
+      - target: TalariaShareExtension
+        embed: true
+        codeSignOnCopy: true
+        removeHeadersOnCopy: true
     scheme:
       testTargets:
         - TalariaIOSUITests
@@ -120,6 +129,40 @@ targets:
         # Apple Development cert automatically.
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "9URLHJ84PY"
+        # App Group lets the Share Extension (below) hand shared text/images
+        # to this app via a container both processes can read. See
+        # docs/security.md.
+        CODE_SIGN_ENTITLEMENTS: Talaria/TalariaIOS.entitlements
+
+  # Thin "incoming share" extension: stages shared text/images from other
+  # apps into the App Group container and hands off to TalariaIOS via the
+  # `talaria://share` URL scheme. It never talks to Hermes/the dashboard
+  # itself — only the `HermesSharing` product (pure-Foundation App Group I/O),
+  # not the app's SwiftUI chat tree. It links `HermesSharing` *alone* rather
+  # than the full `HermesKit` so the NIO-SSH / swift-nio / Yams / sqlite3 graph
+  # never loads in this memory-constrained extension. See docs/architecture.md
+  # and docs/security.md.
+  TalariaShareExtension:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: TalariaShareExtension
+    dependencies:
+      - package: HermesKit
+        product: HermesSharing
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.lyx.Talaria.ShareExtension
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: TalariaShareExtension/Info.plist
+        MARKETING_VERSION: 2.0
+        CURRENT_PROJECT_VERSION: 1
+        SWIFT_VERSION: 6.0
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: "9URLHJ84PY"
+        CODE_SIGN_ENTITLEMENTS: TalariaShareExtension/TalariaShareExtension.entitlements
 
   TalariaTests:
     type: bundle.unit-test

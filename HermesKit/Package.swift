@@ -13,6 +13,15 @@ let package = Package(
             name: "HermesKit",
             targets: ["HermesKit"]
         ),
+        // Pure-Foundation App Group file I/O for the iOS Share Extension, which
+        // links this *instead of* HermesKit so it doesn't drag the NIO-SSH /
+        // swift-nio / Yams / sqlite3 graph into a memory-constrained extension.
+        // HermesKit re-exports it, so the app keeps reaching these types via
+        // `import HermesKit`. See docs/architecture.md.
+        .library(
+            name: "HermesSharing",
+            targets: ["HermesSharing"]
+        ),
     ],
     dependencies: [
         // Pure-Swift SSH client. Required so HermesKit can talk to a remote
@@ -28,9 +37,16 @@ let package = Package(
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.0.0"),
     ],
     targets: [
+        // Zero-dependency slice the Share Extension links on its own.
+        .target(
+            name: "HermesSharing"
+        ),
         .target(
             name: "HermesKit",
             dependencies: [
+                // Re-exported (`@_exported import HermesSharing`) so app code
+                // keeps reaching the Sharing types through `import HermesKit`.
+                "HermesSharing",
                 .product(name: "NIOSSH", package: "swift-nio-ssh"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
