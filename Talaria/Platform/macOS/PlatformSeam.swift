@@ -170,6 +170,23 @@ enum ComposerImage {
         ImageNormalizer.normalize(raw, displayName: displayName)
     }
 
+    /// Cheap check for whether the general pasteboard currently vends an
+    /// image type — a type-only read (`pasteboard.types` +
+    /// `UTType.conforms(to:)`), never `data(forType:)`/`readObjects`, so this
+    /// never triggers a pasteboard-access transparency prompt. Used to decide
+    /// discoverability (e.g. showing a "⌘V to paste" hint) without reading
+    /// the pasteboard's actual contents.
+    @MainActor
+    static var pasteboardHasImage: Bool {
+        let pasteboard = NSPasteboard.general
+        for type in pasteboard.types ?? [] {
+            if let utType = UTType(type.rawValue), utType.conforms(to: .image) {
+                return true
+            }
+        }
+        return false
+    }
+
     /// Raw image bytes on the general pasteboard, read on the main actor (the
     /// pasteboard must be touched there) but **not** yet normalized — the caller
     /// normalizes off-main so a large paste doesn't hitch the UI. Prefers raw
