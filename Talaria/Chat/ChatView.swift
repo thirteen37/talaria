@@ -1418,6 +1418,8 @@ final class LocalChatViewModel {
             appendStreaming(kind: .agent, text: chunk.content.plainText ?? "", stream: .agent)
         case let .agentThoughtChunk(chunk):
             appendStreaming(kind: .thought, text: chunk.content.plainText ?? "", stream: .thought)
+        case let .agentThoughtSnapshot(chunk):
+            replaceStreaming(kind: .thought, text: chunk.content.plainText ?? "", stream: .thought)
         case let .toolCall(toolCall):
             resetStreamingMessages()
             upsertToolMessage(
@@ -1526,6 +1528,26 @@ final class LocalChatViewModel {
         if let id = currentMessageId(for: stream),
            let index = messages.firstIndex(where: { $0.id == id }) {
             messages[index].text += text
+            return
+        }
+
+        let id = append(kind: kind, text: text)
+        setCurrentMessageId(id, for: stream)
+    }
+
+    /// Replace-semantic sibling of ``appendStreaming``: sets the active streaming
+    /// block's text to `text` instead of appending. Used for `reasoning.available`
+    /// snapshots (see ``SessionUpdate/agentThoughtSnapshot``), each carrying the full
+    /// current reasoning text, so repeated/reformatted snapshots overwrite the block
+    /// rather than stacking into a duplicated "Thinking" bubble.
+    private func replaceStreaming(kind: ChatTranscriptMessage.Kind, text: String, stream: StreamKind) {
+        guard !text.isEmpty else {
+            return
+        }
+
+        if let id = currentMessageId(for: stream),
+           let index = messages.firstIndex(where: { $0.id == id }) {
+            messages[index].text = text
             return
         }
 

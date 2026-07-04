@@ -76,10 +76,10 @@ public actor GatewayChatClient: ChatBackend {
     private var sawReasoningDelta = false
     /// Full text of the last `reasoning.available` emitted this turn. The gateway
     /// can emit `reasoning.available` more than once per turn, each carrying the
-    /// full cumulative text (desktop *replaces* the block), but Talaria's thought
-    /// stream only appends — so on a repeat we emit just the new suffix relative to
-    /// this, avoiding a duplicated/overlapping "Thinking" block. Reset on
-    /// `message.start`.
+    /// full cumulative text (desktop *replaces* the block). We now emit each snapshot
+    /// as an `.agentThoughtSnapshot` that *replaces* the active thought block, so this
+    /// is only used to dedup an identical repeat (skip a redundant re-render). Reset
+    /// on `message.start`.
     private var lastReasoningAvailableText = ""
     /// Whether a message cycle is in flight: set on `message.start`, cleared on
     /// `message.complete`. Tracks *every* turn — including the autonomous
@@ -491,25 +491,17 @@ public actor GatewayChatClient: ChatBackend {
             }
         case "reasoning.available":
             // `reasoning.available` carries the *full* reasoning text and has
-            // replace semantics on the desktop. Talaria's thought stream only
-            // appends, so emitting the full text after the incremental
-            // `reasoning.delta` chunks would duplicate the reasoning. Only emit
-            // it when no deltas streamed this turn (some models emit just the
-            // available block). The gateway can also emit it *more than once* per
-            // turn, each with the full cumulative text — since our stream appends,
-            // emit only the new suffix relative to the last one (skip an exact
-            // repeat, whose suffix is empty) so the block isn't duplicated.
-            if !sawReasoningDelta, let text = Self.string(p["text"]) {
-                if text.hasPrefix(lastReasoningAvailableText) {
-                    let suffix = String(text.dropFirst(lastReasoningAvailableText.count))
-                    if !suffix.isEmpty {
-                        emit(.agentThoughtChunk(Content(content: .text(suffix))))
-                    }
-                } else {
-                    // Not a simple growth of the prior snapshot (rare/defensive):
-                    // emit the full text, matching the no-prior-available behavior.
-                    emit(.agentThoughtChunk(Content(content: .text(text))))
-                }
+            // replace semantics on the desktop. We emit it as an
+            // `.agentThoughtSnapshot`, which *replaces* the active thought block —
+            // so repeated, reformatted, or lightly-revised snapshots overwrite the
+            // block instead of stacking into a duplicated "Thinking" bubble. Only
+            // emit when no `reasoning.delta` streamed this turn (some models emit
+            // just the available block; when deltas ran, they already built the
+            // block and the snapshot is dropped). Skip an identical repeat to avoid
+            // a redundant re-render.
+            if !sawReasoningDelta, let text = Self.string(p["text"]),
+               text != lastReasoningAvailableText {
+                emit(.agentThoughtSnapshot(Content(content: .text(text))))
                 lastReasoningAvailableText = text
             }
         case "tool.start":

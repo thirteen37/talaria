@@ -903,6 +903,12 @@ public enum SessionUpdate: Codable, Equatable, Sendable {
     case userMessageChunk(ContentChunk)
     case agentMessageChunk(ContentChunk)
     case agentThoughtChunk(ContentChunk)
+    /// Replace-semantic sibling of `agentThoughtChunk`: carries the *full* current
+    /// reasoning text and overwrites the active thought block rather than appending
+    /// to it. The gateway maps a `reasoning.available` event onto this (each event
+    /// carries the full cumulative snapshot; desktop replaces the block), so repeated
+    /// or reformatted snapshots can't stack into a duplicated "Thinking" block.
+    case agentThoughtSnapshot(ContentChunk)
     case toolCall(ToolCall)
     case toolCallUpdate(ToolCallUpdate)
     case plan(Plan)
@@ -933,6 +939,8 @@ public enum SessionUpdate: Codable, Equatable, Sendable {
             self = .agentMessageChunk(try decoder.decode(ContentChunk.self, from: data))
         case "agent_thought_chunk":
             self = .agentThoughtChunk(try decoder.decode(ContentChunk.self, from: data))
+        case "agent_thought_snapshot":
+            self = .agentThoughtSnapshot(try decoder.decode(ContentChunk.self, from: data))
         case "tool_call":
             self = .toolCall(try decoder.decode(ToolCall.self, from: data))
         case "tool_call_update":
@@ -967,6 +975,8 @@ public enum SessionUpdate: Codable, Equatable, Sendable {
             try chunk.encodeWithSessionUpdate("agent_message_chunk", to: encoder)
         case let .agentThoughtChunk(chunk):
             try chunk.encodeWithSessionUpdate("agent_thought_chunk", to: encoder)
+        case let .agentThoughtSnapshot(chunk):
+            try chunk.encodeWithSessionUpdate("agent_thought_snapshot", to: encoder)
         case let .toolCall(toolCall):
             try toolCall.encodeWithSessionUpdate("tool_call", to: encoder)
         case let .toolCallUpdate(update):
@@ -996,7 +1006,8 @@ public enum SessionUpdate: Codable, Equatable, Sendable {
 
     public var displayText: String? {
         switch self {
-        case let .userMessageChunk(chunk), let .agentMessageChunk(chunk), let .agentThoughtChunk(chunk):
+        case let .userMessageChunk(chunk), let .agentMessageChunk(chunk),
+             let .agentThoughtChunk(chunk), let .agentThoughtSnapshot(chunk):
             return chunk.content.plainText
         case let .toolCall(toolCall):
             return toolCall.title
