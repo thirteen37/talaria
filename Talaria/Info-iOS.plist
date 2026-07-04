@@ -36,6 +36,10 @@
          opaque NIO channel error. -->
     <key>NSLocalNetworkUsageDescription</key>
     <string>Talaria connects to your Hermes server over SSH, which may be on your local network.</string>
+    <!-- Required to capture a photo from the composer's Camera attachment
+         row. Without this key the app crashes on camera launch. -->
+    <key>NSCameraUsageDescription</key>
+    <string>Talaria uses the camera to attach a photo to your chat message.</string>
     <key>UILaunchScreen</key>
     <dict/>
     <key>UISupportedInterfaceOrientations</key>

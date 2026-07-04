@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import HermesKit
@@ -11,6 +12,23 @@ import UniformTypeIdentifiers
 /// and the ``ComposerAttachment`` → ``ContentBlock`` wire mapping.
 @Suite
 struct ComposerAttachmentTests {
+    @Test
+    @MainActor
+    func pasteboardHasImageReflectsPasteboardContents() {
+        let pasteboard = NSPasteboard.general
+
+        pasteboard.clearContents()
+        #expect(ComposerImage.pasteboardHasImage == false)
+
+        pasteboard.clearContents()
+        pasteboard.setData(Self.makePNG(width: 8, height: 8), forType: .png)
+        #expect(ComposerImage.pasteboardHasImage == true)
+
+        // Leave the pasteboard empty rather than the image data just staged —
+        // there's no meaningful prior state to restore on the shared general
+        // pasteboard.
+        pasteboard.clearContents()
+    }
     @Test
     func normalizeValidPNGReturnsPNGAttachment() {
         let png = Self.makePNG(width: 64, height: 48)

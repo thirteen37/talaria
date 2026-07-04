@@ -150,31 +150,22 @@ extension View {
 }
 
 /// Composer image intake (iOS half of the seam). Normalization is shared via
-/// ``ImageNormalizer``; the pasteboard read is macOS-only (iOS pastes through
-/// `PasteButton` → ``loadComposerAttachments(from:onEach:)``), so this half
-/// exposes just `normalize`.
+/// ``ImageNormalizer``; iOS attaches images via the attachment menu's rows
+/// (Photos/Camera/Files/Clipboard, see ``ComposerAttachmentButton``) rather
+/// than a paste gesture, so this half's own responsibility is just
+/// `normalize` plus the always-`false` ``pasteboardHasImage``.
 enum ComposerImage {
     /// Decode + downscale + re-encode raw bytes off the main actor. See
     /// ``ImageNormalizer/normalize(_:displayName:)``.
     static func normalize(_ raw: Data, displayName: String?) -> ComposerAttachment? {
         ImageNormalizer.normalize(raw, displayName: displayName)
     }
-}
 
-/// Paste-image control for the composer (iOS half): a `PasteButton` filtered to
-/// image content. Pasted providers load + normalize off the main actor (see
-/// ``loadComposerAttachments(from:onEach:)``), then deliver via `onPaste`.
-@MainActor
-@ViewBuilder
-func composerPasteControl(onPaste: @escaping @MainActor ([ComposerAttachment]) -> Void) -> some View {
-    PasteButton(supportedContentTypes: [.image]) { providers in
-        loadComposerAttachments(from: providers) { attachment in
-            onPaste([attachment])
-        }
-    }
-    .labelStyle(.iconOnly)
-    .help("Paste image")
-    .accessibilityLabel("Paste image")
+    /// Always `false` on iOS — the ⌘V discoverability hint (a "paste is
+    /// available" affordance) is macOS-only; iOS surfaces Clipboard as an
+    /// explicit menu row instead (see ``ComposerAttachmentButton``), gated on
+    /// `UIPasteboard.general.hasImages` directly at the call site.
+    @MainActor static var pasteboardHasImage: Bool { false }
 }
 
 /// `imagePicker` backing host: a zero-size background `View` that hosts the

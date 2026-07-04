@@ -35,10 +35,13 @@ struct Composer: View {
     @State private var isSlashMenuDismissed = false
     @State private var slashMenuHeight: CGFloat = 0
     @State private var selectedCommandIndex = 0
-    /// Drives the platform image picker (`NSOpenPanel` / `PhotosPicker`).
-    @State private var isPickingImages = false
     /// Highlights the composer while an image drag hovers over it.
     @State private var isDropTargeted = false
+    /// Whether the general pasteboard currently vends an image — drives the
+    /// "Paste image with ⌘V" placeholder hint. Refreshed on appear, when the
+    /// composer gains focus, and whenever the window comes to the foreground
+    /// (covers a copy made in another app while this window was backgrounded).
+    @State private var clipboardHasImage = false
     /// First Esc over a live turn arms the cancel (a hint appears); the second
     /// confirms. Guards against a stray Esc dropping a running turn or a
     /// half-typed message. Cleared by typing, when the turn ends, or after a
@@ -55,6 +58,7 @@ struct Composer: View {
     /// without a keyboard doesn't promise an unreachable chord.
     private var placeholder: String {
         if isBlocked { return blockedPlaceholder }
+        if clipboardHasImage { return "Paste image with ⌘V" }
         return Platform.showsKeyboardShortcutHints ? "Message Hermes (⌘L)" : "Message Hermes"
     }
 
@@ -144,12 +148,19 @@ struct Composer: View {
                     .allowsHitTesting(false)
             }
         }
-        // Attach via the platform picker (NSOpenPanel / PhotosPicker).
-        .imagePicker(isPresented: $isPickingImages) { addAttachments($0) }
         // Drag-and-drop images onto the composer (both platforms).
         .onDrop(of: [.image], isTargeted: $isDropTargeted) { providers in
             loadComposerAttachments(from: providers) { addAttachment($0) }
             return true
+        }
+        // ⌘V image paste while the composer holds focus (macOS only; a no-op
+        // on iOS, which surfaces paste as an explicit menu row instead).
+        .composerImagePaste(isComposerFocused: { inputFocused }) { addAttachments($0) }
+        .onAppear { clipboardHasImage = ComposerImage.pasteboardHasImage }
+        // A copy made in another app while this window was backgrounded should
+        // still be reflected once the window comes back to the foreground.
+        .trackWindowForeground { foreground in
+            if foreground { clipboardHasImage = ComposerImage.pasteboardHasImage }
         }
     }
 
@@ -158,13 +169,7 @@ struct Composer: View {
     private var inputRow: some View {
         HStack(spacing: 8) {
             if !isBlocked {
-                composerPasteControl { addAttachments($0) }
-
-                Button { isPickingImages = true } label: {
-                    Image(systemName: "photo.on.rectangle")
-                }
-                .help("Attach images")
-                .accessibilityLabel("Attach images")
+                ComposerAttachmentButton { addAttachments($0) }
             }
 
             TextField(placeholder, text: $prompt, axis: .vertical)
@@ -190,6 +195,9 @@ struct Composer: View {
                     // Report focus up so ChatView disables its window-wide page
                     // shortcuts while we own the keys (see `onPageUp`/`onPageDown`).
                     onFocusChange(focused)
+                    // Gaining focus is also a good moment to refresh the ⌘V
+                    // placeholder hint — the user is about to type/paste.
+                    if focused { clipboardHasImage = ComposerImage.pasteboardHasImage }
                 }
                 .task(id: escapeArmedToCancel) {
                     // Auto-disarm after a short window so the cancel reads as a
