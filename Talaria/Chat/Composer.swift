@@ -155,7 +155,7 @@ struct Composer: View {
         }
         // ⌘V image paste while the composer holds focus (macOS only; a no-op
         // on iOS, which surfaces paste as an explicit menu row instead).
-        .composerImagePaste { addAttachments($0) }
+        .composerImagePaste(isComposerFocused: { inputFocused }) { addAttachments($0) }
         .onAppear { clipboardHasImage = ComposerImage.pasteboardHasImage }
         // A copy made in another app while this window was backgrounded should
         // still be reflected once the window comes back to the foreground.

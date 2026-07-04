@@ -62,7 +62,15 @@ extension View {
     /// Clipboard row in ``ComposerAttachmentButton``'s menu covers pasting
     /// instead, matching the platform convention of an in-menu action rather
     /// than a keyboard shortcut most iOS devices can't invoke anyway.
-    func composerImagePaste(onPaste: @escaping @MainActor ([ComposerAttachment]) -> Void) -> some View {
+    /// `isComposerFocused` mirrors the macOS half's signature — there it
+    /// distinguishes the composer's own focus from some other text field's in
+    /// the same window (needed to avoid hijacking ⌘V meant for that other
+    /// field); here it's accepted but unused since there's no shared-window
+    /// key monitor to gate in the first place.
+    func composerImagePaste(
+        isComposerFocused: @escaping () -> Bool,
+        onPaste: @escaping @MainActor ([ComposerAttachment]) -> Void
+    ) -> some View {
         self
     }
 
