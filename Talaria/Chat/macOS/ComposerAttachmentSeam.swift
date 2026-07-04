@@ -80,7 +80,12 @@ private struct ComposerPasteMonitor: NSViewRepresentable {
             guard let hostWindow = window else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self, weak hostWindow] event in
                 guard let self, let hostWindow, event.window === hostWindow else { return event }
-                guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == [.command],
+                // Mask only the intent modifiers, not the full
+                // deviceIndependentFlagsMask — that mask also includes
+                // .capsLock, so leaving Caps Lock on would otherwise make
+                // this guard fail (intersection becomes [.command, .capsLock])
+                // and silently drop the image paste.
+                guard event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
                       event.charactersIgnoringModifiers?.lowercased() == "v" else { return event }
                 let datas = Self.pasteboardImageData()
                 guard !datas.isEmpty else { return event }
