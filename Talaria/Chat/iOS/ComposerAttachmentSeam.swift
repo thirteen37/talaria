@@ -82,8 +82,14 @@ extension View {
             guard case let .success(urls) = result else { return }
             Task.detached {
                 let attachments = urls.compactMap { url -> ComposerAttachment? in
-                    guard url.startAccessingSecurityScopedResource() else { return nil }
-                    defer { url.stopAccessingSecurityScopedResource() }
+                    // `startAccessingSecurityScopedResource()` returns `false`
+                    // both on genuine failure and for URLs that were never
+                    // security-scoped to begin with (e.g. a pick that's
+                    // already inside this app's own sandbox) — those are
+                    // still readable, so attempt the read regardless and only
+                    // balance the `stop` call when `start` actually succeeded.
+                    let didStart = url.startAccessingSecurityScopedResource()
+                    defer { if didStart { url.stopAccessingSecurityScopedResource() } }
                     guard let data = try? Data(contentsOf: url) else { return nil }
                     return ComposerImage.normalize(data, displayName: url.lastPathComponent)
                 }
