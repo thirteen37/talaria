@@ -140,23 +140,24 @@ struct GatewayChatClientTests {
 
     @Test
     func reasoningAvailableEmittedWhenNoDelta() async throws {
-        // Some models emit only reasoning.available (no deltas) — it must surface.
+        // Some models emit only reasoning.available (no deltas) — it must surface as
+        // a replace-semantic snapshot.
         let (client, fake, sid) = try await makeReadySession()
         var iterator = client.notifications.makeAsyncIterator()
 
         fake.pushInbound(eventFrame(type: "reasoning.available", sessionId: sid, payload: ["text": .string("full reasoning")]))
         let note = try await requireNext(&iterator)
         #expect(note == .sessionUpdate(SessionNotification(
-            sessionId: sid, update: .agentThoughtChunk(Content(content: .text("full reasoning")))
+            sessionId: sid, update: .agentThoughtSnapshot(Content(content: .text("full reasoning")))
         )))
     }
 
     @Test
-    func reasoningAvailableRepeatEmitsOnlyIncrementalSuffix() async throws {
+    func reasoningAvailableRepeatEmitsFullSnapshots() async throws {
         // The gateway can emit reasoning.available more than once per turn, each
-        // carrying the full cumulative text. Talaria's thought stream only appends,
-        // so a repeat must emit ONLY the new suffix (else the bubble concatenates
-        // overlapping snapshots — the stray, truncated "duplicate" Thinking block).
+        // carrying the full cumulative text. Each surfaces as a full-text
+        // .agentThoughtSnapshot that *replaces* the thought block (not a suffix), so
+        // the block always equals the latest snapshot — no overlapping concatenation.
         let (client, fake, sid) = try await makeReadySession()
         var iterator = client.notifications.makeAsyncIterator()
 
@@ -165,19 +166,41 @@ struct GatewayChatClientTests {
 
         let first = try await requireNext(&iterator)
         #expect(first == .sessionUpdate(SessionNotification(
-            sessionId: sid, update: .agentThoughtChunk(Content(content: .text("first part")))
+            sessionId: sid, update: .agentThoughtSnapshot(Content(content: .text("first part")))
         )))
         let second = try await requireNext(&iterator)
         #expect(second == .sessionUpdate(SessionNotification(
-            sessionId: sid, update: .agentThoughtChunk(Content(content: .text(" and second part")))
+            sessionId: sid, update: .agentThoughtSnapshot(Content(content: .text("first part and second part")))
+        )))
+    }
+
+    @Test
+    func reasoningAvailableNonPrefixReformatEmitsFullSnapshot() async throws {
+        // A reformatted snapshot that is NOT a byte-exact prefix-extension of the
+        // prior one (here whitespace: "a b" → "a  b") still emits a full snapshot.
+        // The old suffix-math path would have appended the whole second text on top
+        // of the first, recreating the duplicated Thinking block; replace can't.
+        let (client, fake, sid) = try await makeReadySession()
+        var iterator = client.notifications.makeAsyncIterator()
+
+        fake.pushInbound(eventFrame(type: "reasoning.available", sessionId: sid, payload: ["text": .string("a b")]))
+        fake.pushInbound(eventFrame(type: "reasoning.available", sessionId: sid, payload: ["text": .string("a  b")]))
+
+        let first = try await requireNext(&iterator)
+        #expect(first == .sessionUpdate(SessionNotification(
+            sessionId: sid, update: .agentThoughtSnapshot(Content(content: .text("a b")))
+        )))
+        let second = try await requireNext(&iterator)
+        #expect(second == .sessionUpdate(SessionNotification(
+            sessionId: sid, update: .agentThoughtSnapshot(Content(content: .text("a  b")))
         )))
     }
 
     @Test
     func reasoningAvailableExactRepeatEmitsNothingExtra() async throws {
-        // An identical reasoning.available snapshot (empty suffix) must be dropped:
-        // push available twice with the same text, then a message.delta marker, and
-        // assert only the first thought chunk + the marker surface.
+        // An identical reasoning.available snapshot is a redundant re-render and must
+        // be dropped: push available twice with the same text, then a message.delta
+        // marker, and assert only the first snapshot + the marker surface.
         let (client, fake, sid) = try await makeReadySession()
         var iterator = client.notifications.makeAsyncIterator()
 
@@ -187,7 +210,7 @@ struct GatewayChatClientTests {
 
         let first = try await requireNext(&iterator)
         #expect(first == .sessionUpdate(SessionNotification(
-            sessionId: sid, update: .agentThoughtChunk(Content(content: .text("same reasoning")))
+            sessionId: sid, update: .agentThoughtSnapshot(Content(content: .text("same reasoning")))
         )))
         let second = try await requireNext(&iterator)
         #expect(second == .sessionUpdate(SessionNotification(

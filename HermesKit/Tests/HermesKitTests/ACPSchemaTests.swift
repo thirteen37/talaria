@@ -132,6 +132,7 @@ struct ACPSchemaTests {
             .userMessageChunk(Content(content: .text("user"))),
             .agentMessageChunk(Content(content: .text("agent"))),
             .agentThoughtChunk(Content(content: .text("thought"))),
+            .agentThoughtSnapshot(Content(content: .text("full thought snapshot"))),
             .toolCall(ToolCall(toolCallId: "tool-1", title: "Read file", kind: .read, status: .pending)),
             .toolCallUpdate(ToolCallUpdate(toolCallId: "tool-1", title: "Read file", status: .completed)),
             .usageUpdate(UsageUpdate(size: 200_000, used: 12_345)),
