@@ -152,6 +152,50 @@ struct GatewayChatClientTests {
     }
 
     @Test
+    func reasoningAvailableRepeatEmitsOnlyIncrementalSuffix() async throws {
+        // The gateway can emit reasoning.available more than once per turn, each
+        // carrying the full cumulative text. Talaria's thought stream only appends,
+        // so a repeat must emit ONLY the new suffix (else the bubble concatenates
+        // overlapping snapshots — the stray, truncated "duplicate" Thinking block).
+        let (client, fake, sid) = try await makeReadySession()
+        var iterator = client.notifications.makeAsyncIterator()
+
+        fake.pushInbound(eventFrame(type: "reasoning.available", sessionId: sid, payload: ["text": .string("first part")]))
+        fake.pushInbound(eventFrame(type: "reasoning.available", sessionId: sid, payload: ["text": .string("first part and second part")]))
+
+        let first = try await requireNext(&iterator)
+        #expect(first == .sessionUpdate(SessionNotification(
+            sessionId: sid, update: .agentThoughtChunk(Content(content: .text("first part")))
+        )))
+        let second = try await requireNext(&iterator)
+        #expect(second == .sessionUpdate(SessionNotification(
+            sessionId: sid, update: .agentThoughtChunk(Content(content: .text(" and second part")))
+        )))
+    }
+
+    @Test
+    func reasoningAvailableExactRepeatEmitsNothingExtra() async throws {
+        // An identical reasoning.available snapshot (empty suffix) must be dropped:
+        // push available twice with the same text, then a message.delta marker, and
+        // assert only the first thought chunk + the marker surface.
+        let (client, fake, sid) = try await makeReadySession()
+        var iterator = client.notifications.makeAsyncIterator()
+
+        fake.pushInbound(eventFrame(type: "reasoning.available", sessionId: sid, payload: ["text": .string("same reasoning")]))
+        fake.pushInbound(eventFrame(type: "reasoning.available", sessionId: sid, payload: ["text": .string("same reasoning")]))
+        fake.pushInbound(eventFrame(type: "message.delta", sessionId: sid, payload: ["text": .string("answer")]))
+
+        let first = try await requireNext(&iterator)
+        #expect(first == .sessionUpdate(SessionNotification(
+            sessionId: sid, update: .agentThoughtChunk(Content(content: .text("same reasoning")))
+        )))
+        let second = try await requireNext(&iterator)
+        #expect(second == .sessionUpdate(SessionNotification(
+            sessionId: sid, update: .agentMessageChunk(Content(content: .text("answer")))
+        )))
+    }
+
+    @Test
     func thinkingDeltaIsIgnored() async throws {
         let (client, fake, sid) = try await makeReadySession()
         var iterator = client.notifications.makeAsyncIterator()

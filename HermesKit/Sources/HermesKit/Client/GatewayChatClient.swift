@@ -74,6 +74,13 @@ public actor GatewayChatClient: ChatBackend {
     /// Whether any `reasoning.delta` chunk streamed this turn — gates the
     /// redundant full-text `reasoning.available` emit. Reset on `message.start`.
     private var sawReasoningDelta = false
+    /// Full text of the last `reasoning.available` emitted this turn. The gateway
+    /// can emit `reasoning.available` more than once per turn, each carrying the
+    /// full cumulative text (desktop *replaces* the block), but Talaria's thought
+    /// stream only appends — so on a repeat we emit just the new suffix relative to
+    /// this, avoiding a duplicated/overlapping "Thinking" block. Reset on
+    /// `message.start`.
+    private var lastReasoningAvailableText = ""
     /// Whether a message cycle is in flight: set on `message.start`, cleared on
     /// `message.complete`. Tracks *every* turn — including the autonomous
     /// continuations Hermes chains after the prompt resolves (`turnContinuation`
@@ -488,9 +495,22 @@ public actor GatewayChatClient: ChatBackend {
             // appends, so emitting the full text after the incremental
             // `reasoning.delta` chunks would duplicate the reasoning. Only emit
             // it when no deltas streamed this turn (some models emit just the
-            // available block).
+            // available block). The gateway can also emit it *more than once* per
+            // turn, each with the full cumulative text — since our stream appends,
+            // emit only the new suffix relative to the last one (skip an exact
+            // repeat, whose suffix is empty) so the block isn't duplicated.
             if !sawReasoningDelta, let text = Self.string(p["text"]) {
-                emit(.agentThoughtChunk(Content(content: .text(text))))
+                if text.hasPrefix(lastReasoningAvailableText) {
+                    let suffix = String(text.dropFirst(lastReasoningAvailableText.count))
+                    if !suffix.isEmpty {
+                        emit(.agentThoughtChunk(Content(content: .text(suffix))))
+                    }
+                } else {
+                    // Not a simple growth of the prior snapshot (rare/defensive):
+                    // emit the full text, matching the no-prior-available behavior.
+                    emit(.agentThoughtChunk(Content(content: .text(text))))
+                }
+                lastReasoningAvailableText = text
             }
         case "tool.start":
             let toolId = Self.string(p["tool_id"]) ?? ""
@@ -579,6 +599,7 @@ public actor GatewayChatClient: ChatBackend {
             // Turn boundary: reset per-turn reasoning de-dup state. The UI's
             // busy/turn-started state is already driven by the in-flight prompt.
             sawReasoningDelta = false
+            lastReasoningAvailableText = ""
             messageCycleActive = true
             deltaCount = 0
             deltaChars = 0
