@@ -4,11 +4,6 @@ import SwiftUI
 // `Chat/iOS/ComposerAttachmentSeam.swift` and defines the same symbols; the
 // `**/iOS/**` / `**/macOS/**` folder excludes in `project.yml` compile only
 // one half per target, so neither needs `#if`.
-//
-// Additive for now: `composerPasteControl` and `ComposerImage
-// .pasteboardImageData()` in `Platform/macOS/PlatformSeam.swift` still exist
-// and are still wired into `Composer.swift`. A later task switches
-// `Composer.swift` over to these new symbols and removes the old ones.
 
 /// Attach-images button for the composer (macOS half): opens the existing
 /// `NSOpenPanel`-backed image picker. There is no visible paste button here —

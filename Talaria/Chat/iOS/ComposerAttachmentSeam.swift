@@ -6,10 +6,6 @@ import UniformTypeIdentifiers
 // `Chat/macOS/ComposerAttachmentSeam.swift` and defines the same symbols; the
 // `**/iOS/**` / `**/macOS/**` folder excludes in `project.yml` compile only
 // one half per target, so neither needs `#if`.
-//
-// Additive for now: `composerPasteControl` in `Platform/iOS/PlatformSeam.swift`
-// still exists and is still wired into `Composer.swift`. A later task switches
-// `Composer.swift` over to these new symbols and removes the old one.
 
 /// Attach-images control for the composer (iOS half): a single `Menu` (rather
 /// than macOS's single button) because iOS fans intake out over four sources —

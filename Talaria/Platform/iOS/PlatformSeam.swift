@@ -167,22 +167,6 @@ enum ComposerImage {
     @MainActor static var pasteboardHasImage: Bool { false }
 }
 
-/// Paste-image control for the composer (iOS half): a `PasteButton` filtered to
-/// image content. Pasted providers load + normalize off the main actor (see
-/// ``loadComposerAttachments(from:onEach:)``), then deliver via `onPaste`.
-@MainActor
-@ViewBuilder
-func composerPasteControl(onPaste: @escaping @MainActor ([ComposerAttachment]) -> Void) -> some View {
-    PasteButton(supportedContentTypes: [.image]) { providers in
-        loadComposerAttachments(from: providers) { attachment in
-            onPaste([attachment])
-        }
-    }
-    .labelStyle(.iconOnly)
-    .help("Paste image")
-    .accessibilityLabel("Paste image")
-}
-
 /// `imagePicker` backing host: a zero-size background `View` that hosts the
 /// `PhotosPicker` selection state and loads each picked item's `Data`,
 /// normalizing off the main actor before handing results back. A `View` (not a
