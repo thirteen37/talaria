@@ -159,6 +159,12 @@ enum ComposerImage {
     static func normalize(_ raw: Data, displayName: String?) -> ComposerAttachment? {
         ImageNormalizer.normalize(raw, displayName: displayName)
     }
+
+    /// Always `false` on iOS — the ⌘V discoverability hint (a "paste is
+    /// available" affordance) is macOS-only; iOS surfaces Clipboard as an
+    /// explicit menu row instead (see ``ComposerAttachmentButton``), gated on
+    /// `UIPasteboard.general.hasImages` directly at the call site.
+    @MainActor static var pasteboardHasImage: Bool { false }
 }
 
 /// Paste-image control for the composer (iOS half): a `PasteButton` filtered to
