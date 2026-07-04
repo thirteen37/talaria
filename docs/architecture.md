@@ -10,6 +10,7 @@ Talaria is a native SwiftUI front-end for Hermes (macOS and iOS app targets) bac
 - `Dashboard`: HTTP client, token/session handling, dashboard process supervision, spawn specs, update polling, and the chat WebSocket (`GatewayWebSocket` + `URLSessionGatewayWebSocket` / `NIOSSHGatewayWebSocket`).
 - `Hermes`: CLI fallbacks, version parsing, doctor/tool parsers, and capability gates.
 - `Profiles`: local and SSH server profiles.
+- `HermesSharing`: a separate zero-dependency SPM product holding the App Group file I/O for the iOS Share Extension (`PendingShareStore` / `PendingShareItem`). Split out so the memory-constrained extension links it *alone* rather than the full `HermesKit` graph (NIO-SSH, swift-nio, Yams, sqlite3); `HermesKit` `@_exported`-re-exports it, so app code reaches these types via `import HermesKit`.
 
 ## Read And Write Model
 
@@ -66,6 +67,21 @@ A TUI tab bypasses both the gateway chat path *and* the dashboard. Talaria spawn
 The launch command is assembled in `HermesKit` (`Transport/TUILaunchSpec.swift`, pure and unit-tested for exact command shape). The SwiftTerm view, the per-process lifetime, and a process-wide registry that keeps a terminal alive across tab switches (and reaps it on tab close and window teardown) live in a macOS-only app seam (`Chat/macOS/HermesTerminalView.swift`). SwiftTerm is a dependency of the macOS app target only — not the iOS target and not `HermesKit`, which stays UI-free. iOS has no local-process / PTY path, so TUI tabs cannot be created there; the shared code compiles via a seam stub.
 
 Only one mode runs per session id at a time: opening a session as a TUI is disabled while it is open inline (gateway chat), and opening a session inline focuses an existing TUI tab instead of starting a second `hermes` resuming the same session.
+
+## Incoming Share Sheet (iOS)
+
+The iOS app receives text/images shared from other apps via the system Share Sheet — incoming only (no share-out). It is the app's one cross-process file channel, and iOS-only (the macOS build compiles no-op seams).
+
+`TalariaShareExtension` is deliberately thin: `ShareViewController` reads the shared items (original bytes, no re-encode — normalization is deferred to the host app to stay under the extension's tight memory ceiling), stages them into a shared App Group container (`group.io.lyx.Talaria`) via `PendingShareStore`, then hands off to the host app with a `talaria://share?id=<uuid>` deep link (`extensionContext.open`, called before `completeRequest`). It never picks a profile/session or does any Hermes/dashboard/SSH work — so it links the pure-Foundation `HermesSharing` product alone, not the full `HermesKit`.
+
+The container layout is one subfolder per share — `PendingShares/<uuid>/manifest.json` + `image-N.dat` — so cleanup is a single directory delete. `PendingShareStore` (an actor) exposes `stage` (extension side), `pendingItem`/`loadImageData`/`consume` (host side), and `pruneStale` (both). `pruneStale` keys off the manifest's own timestamp, falling back to the directory's filesystem date so an *interrupted* stage (images written, the extension killed before the manifest) is still collected instead of leaking forever.
+
+Host-app pickup mirrors the notification deep-link idiom (`ChatNotifier` / `chatNotificationRouting`). `.onOpenURL` (in the iOS `TalariaApp`) parses the URL and publishes it to the `@Observable` `IncomingShareCoordinator.shared`. Then a two-step picker:
+
+1. **Profile** — a single window claims presentation (an ephemeral per-window token prevents iPad multi-window double-present) and shows `IncomingShareProfileSheet`. Picking a profile records it on the coordinator and opens/focuses that profile's window via `openWindow(value:)` — the same mechanism the notification path uses.
+2. **Session** — the target profile's window (`incomingShareRouting`, applied in the iPhone/iPad window roots; a `macOS/` no-op seam) presents `IncomingShareSessionSheet`, which lists that profile's sessions (via the window's existing `DashboardClient`) plus "New Session". Picking one opens/creates it through the existing `SessionsStore`, runs the staged images through the existing `ImageNormalizer` (off the main actor), and prefills the composer's `prompt`/`attachments` — **without sending** (`SessionsStore.prefillComposerFromShare`), so the user reviews before submitting.
+
+After a successful prefill (or a cancel) the staged share is deleted (`PendingShareStore.consume`). Both local and remote profiles are valid targets: the extension only ever touches App Group file I/O; all dashboard/SSH networking is the host app's always-present per-window machinery, invoked after hand-off. See `docs/security.md` for the App Group + `talaria://share` threat model.
 
 ## Window Model
 

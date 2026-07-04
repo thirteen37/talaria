@@ -20,6 +20,20 @@
     <string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key>
     <string>$(CURRENT_PROJECT_VERSION)</string>
+    <!-- Lets the Share Extension hand off a staged share via
+         `talaria://share?id=<uuid>` (opaque lookup key into the App Group
+         container — see docs/security.md). No other inbound use today. -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>io.lyx.Talaria.share</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>talaria</string>
+            </array>
+        </dict>
+    </array>
     <!-- Export-compliance self-classification. Set false to declare that the
          app uses only exempt encryption (standard SSH/TLS for transport, no
          proprietary crypto), which suppresses the per-upload TestFlight

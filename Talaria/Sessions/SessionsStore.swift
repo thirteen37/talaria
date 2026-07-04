@@ -829,6 +829,39 @@ final class SessionsStore {
         viewModels[id]
     }
 
+    /// Prefills a session's composer with an incoming Share Sheet hand-off:
+    /// sets its view model's `prompt` and image `attachments` without sending,
+    /// so the user reviews/edits before submitting. Appends to any text already
+    /// typed rather than clobbering it. Returns `false` — landing nothing — if the
+    /// session has no live view model or is **read-only** (a read-only session
+    /// renders a banner, not a `Composer`, so a prefill there would be invisible
+    /// and the share silently lost); the caller must then keep the staged share.
+    @discardableResult
+    func prefillComposerFromShare(
+        sessionId: SessionId,
+        text: String?,
+        attachments: [ComposerAttachment]
+    ) -> Bool {
+        guard let vm = viewModels[sessionId], !vm.isReadOnly else { return false }
+        if let text, !text.isEmpty {
+            vm.prompt = vm.prompt.isEmpty ? text : vm.prompt + "\n" + text
+        }
+        vm.attachments.append(contentsOf: attachments)
+        return true
+    }
+
+    /// Whether a session (by its list `source`) can accept a composer prefill.
+    /// Only *live-resumable* sources open with an editable `Composer`; others
+    /// (e.g. a one-shot `cli` run) open read-only via `openReadOnly`, where a
+    /// prefill is invisible. A nil source is treated as prefillable — the list
+    /// usually reports one, and `openExisting` opens a nil-source session live
+    /// (resolving the source only if needed). The incoming-share picker filters
+    /// on this so read-only sessions aren't offered as targets.
+    func canPrefill(source: String?) -> Bool {
+        guard let source else { return true }
+        return Self.liveResumableSources.contains(source.lowercased())
+    }
+
     private func ensureViewModel(
         id: SessionId,
         cwd: String,
