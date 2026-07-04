@@ -150,9 +150,10 @@ extension View {
 }
 
 /// Composer image intake (iOS half of the seam). Normalization is shared via
-/// ``ImageNormalizer``; the pasteboard read is macOS-only (iOS pastes through
-/// `PasteButton` → ``loadComposerAttachments(from:onEach:)``), so this half
-/// exposes just `normalize`.
+/// ``ImageNormalizer``; iOS attaches images via the attachment menu's rows
+/// (Photos/Camera/Files/Clipboard, see ``ComposerAttachmentButton``) rather
+/// than a paste gesture, so this half's own responsibility is just
+/// `normalize` plus the always-`false` ``pasteboardHasImage``.
 enum ComposerImage {
     /// Decode + downscale + re-encode raw bytes off the main actor. See
     /// ``ImageNormalizer/normalize(_:displayName:)``.
