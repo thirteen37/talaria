@@ -9,6 +9,13 @@ enum UITestFlags {
         arguments.contains("-uiTestMockServer")
     }
 
+    /// When set alongside ``mockServer``, the in-process ``MockChatBackend``
+    /// emits an `availableCommandsUpdate` on session start, reproducing the
+    /// real-remote condition where the composer's slash catalog is populated.
+    static var mockCommands: Bool {
+        arguments.contains("-uiTestMockCommands")
+    }
+
     /// Boots the app against deterministic, synthetic data for docs/marketing
     /// screenshots. This mode must not read a user's real profiles, sessions, or
     /// dashboard.

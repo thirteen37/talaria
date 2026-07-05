@@ -23,7 +23,31 @@ final class MockChatBackend: ChatBackend, @unchecked Sendable {
     func start(clientInfo: Implementation) async throws {}
 
     func newSession(cwd: String, mcpServers: [McpServer]) async throws -> NewSessionResponse {
-        NewSessionResponse(sessionId: sessionId)
+        if UITestFlags.mockCommands {
+            emitAvailableCommands()
+        }
+        return NewSessionResponse(sessionId: sessionId)
+    }
+
+    /// Reproduces the real-remote condition: the gateway populates the
+    /// composer's slash catalog via an `availableCommandsUpdate`. Uses a
+    /// representative slice of the Hermes command set (names with hyphens,
+    /// colons, and shared prefixes exercise the ranking/word-boundary paths).
+    private func emitAvailableCommands() {
+        let commands = [
+            AvailableCommand(name: "help", description: "Show help"),
+            AvailableCommand(name: "model", description: "Switch the active model"),
+            AvailableCommand(name: "queue", description: "Queue a message"),
+            AvailableCommand(name: "steer", description: "Steer the running turn"),
+            AvailableCommand(name: "background", description: "Run in the background"),
+            AvailableCommand(name: "compact", description: "Compact the context"),
+            AvailableCommand(name: "handoff", description: "Hand off to a platform"),
+            AvailableCommand(name: "session:rename", description: "Rename the session"),
+        ]
+        emit(.sessionUpdate(SessionNotification(
+            sessionId: sessionId,
+            update: .availableCommandsUpdate(AvailableCommandsUpdate(availableCommands: commands))
+        )))
     }
 
     func loadSession(sessionId: SessionId, cwd: String, mcpServers: [McpServer]) async throws -> LoadSessionResponse {

@@ -125,15 +125,19 @@ private struct ViewExtrasMenu: View {
     @FocusedValue(\.windowMenu) private var model
 
     var body: some View {
-        // SwiftUI does NOT auto-provide a "Show/Hide Sidebar" ⌃⌘S View-menu
-        // command for our `NavigationSplitView(columnVisibility:)` (verified
-        // against a running build — the View menu has no system sidebar item, and
-        // `columnVisibility` was never toggled by any other code), so this is the
-        // sole ⌃⌘S owner, not a duplicate. The toggle writes the window's bound
-        // visibility, so even on an OS that did add the system command they'd stay
-        // in sync.
+        // ⌃⌘S sidebar toggle. On iOS/iPadOS the split-view controller *already*
+        // registers a system ⌃⌘S "Show Sidebar" (`toggleSidebar:`) command;
+        // adding our own then produces two ⌃⌘S key commands, and when UIKit
+        // rebuilds the main menu from the responder chain (the first
+        // hardware-key event — e.g. typing the first character in the composer)
+        // its strict `UIMenuBuilder` aborts with "Replacement elements contain
+        // duplicates", crashing the app. So the explicit shortcut is macOS-only
+        // (where SwiftUI does not auto-provide it for our
+        // `NavigationSplitView(columnVisibility:)`); iOS relies on the system
+        // command, which drives the same bound `columnVisibility`. The menu item
+        // itself stays on both for discoverability.
         Button("Toggle Sidebar") { model?.toggleSidebar() }
-            .keyboardShortcut("s", modifiers: [.command, .control])
+            .keyboardShortcut(Self.sidebarShortcut)
             .disabled(model == nil)
 
         Button("Next Session") { model?.selectNextSession() }
@@ -143,6 +147,17 @@ private struct ViewExtrasMenu: View {
         Button("Previous Session") { model?.selectPreviousSession() }
             .keyboardShortcut(.tab, modifiers: [.control, .shift])
             .disabled(model == nil)
+    }
+
+    /// The explicit ⌃⌘S shortcut, macOS-only. `nil` on iOS/iPadOS so we don't
+    /// duplicate the split view's system-provided ⌃⌘S "Show Sidebar" command
+    /// (see the note in `body` — the duplicate crashes UIKit's menu builder).
+    private static var sidebarShortcut: KeyboardShortcut? {
+        #if os(macOS)
+        KeyboardShortcut("s", modifiers: [.command, .control])
+        #else
+        nil
+        #endif
     }
 }
 
