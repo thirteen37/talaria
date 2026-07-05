@@ -137,7 +137,24 @@ extension View {
     /// frame is remembered for the window opened *for* that server (the primary
     /// flow, since opening a server spawns a window under its own id).
     func rememberWindowFrame(for profileId: UUID) -> some View {
-        background(WindowFrameAutosaver(profileId: profileId))
+        rememberWindowFrame(named: "ServerWindow-\(profileId.uuidString)")
+    }
+
+    /// Remembers this window's size and position under an explicit autosave name.
+    /// Used by popped-out chat windows, which key on session id (not profile) so
+    /// each pop-out — and the profile-keyed main window — gets its own frame slot
+    /// instead of fighting over one.
+    func rememberWindowFrame(named name: String) -> some View {
+        background(WindowFrameAutosaver(autosaveName: name))
+    }
+
+    /// Registers `harness` in the process-wide ``LiveHarnessRegistry`` for the
+    /// duration this modifier is mounted, so a popped-out chat window can find and
+    /// share its live connection, and deregisters on teardown so the pop-out closes
+    /// with its source window. A nil harness (not built yet) is a no-op. The iOS
+    /// mirror is a no-op — pop-out is macOS-only.
+    func trackLiveHarness(_ harness: ServerWindowHarness?) -> some View {
+        background(LiveHarnessRegistrar(harness: harness))
     }
 
     /// No-op on macOS — desktop SSH connections aren't suspended when the app
@@ -328,24 +345,65 @@ private struct WindowForegroundReader: View {
 /// Attaches a per-profile frame-autosave name to the host window the first time
 /// the backing view joins a window. Restores the saved frame, then enables
 /// AppKit's automatic save-on-move/resize.
-private struct WindowFrameAutosaver: NSViewRepresentable {
-    let profileId: UUID
+/// Keeps ``LiveHarnessRegistry`` in sync with a window's current
+/// ``ServerWindowHarness`` across its whole lifetime (macOS pop-out support).
+///
+/// The subtlety is the **in-window server switch**: `switchProfile` nils the
+/// harness and rebuilds it under a *different* `profile.id`, so simply
+/// re-registering the new one would strand the old profile's registry slot —
+/// leaving a pop-out on it resolving a torn-down store and rendering a zombie
+/// chat over a dead connection. To prevent that, this view remembers the
+/// previously-registered instance (held strongly, only until the swap so the
+/// deregister's identity check still matches) and deregisters it before
+/// registering the replacement. That mutation notifies the `@Observable`
+/// registry, so any pop-out on the vacated profile re-evaluates and dismisses —
+/// honoring "the pop-out closes with its source." A Hermes-profile switch reuses
+/// the same key, so it still ends with the fresh harness registered and its
+/// pop-out dismissing against the new empty store.
+private struct LiveHarnessRegistrar: View {
+    let harness: ServerWindowHarness?
+    @State private var registered: ServerWindowHarness?
 
-    func makeNSView(context: Context) -> NSView { FrameAutosaveView(profileId: profileId) }
+    var body: some View {
+        Color.clear
+            .onAppear { sync() }
+            .onChange(of: harness.map(ObjectIdentifier.init)) { _, _ in sync() }
+            .onDisappear {
+                if let registered { LiveHarnessRegistry.shared.deregister(registered) }
+                registered = nil
+            }
+    }
+
+    /// Deregisters the prior (now-replaced) harness before registering the
+    /// current one, so a swap to a different profile frees the old registry slot.
+    private func sync() {
+        if let registered, registered !== harness {
+            LiveHarnessRegistry.shared.deregister(registered)
+        }
+        if let harness {
+            LiveHarnessRegistry.shared.register(harness)
+        }
+        registered = harness
+    }
+}
+
+private struct WindowFrameAutosaver: NSViewRepresentable {
+    let autosaveName: String
+
+    func makeNSView(context: Context) -> NSView { FrameAutosaveView(autosaveName: autosaveName) }
     func updateNSView(_ nsView: NSView, context: Context) {}
 
     private final class FrameAutosaveView: NSView {
-        let profileId: UUID
-        init(profileId: UUID) { self.profileId = profileId; super.init(frame: .zero) }
+        let autosaveName: String
+        init(autosaveName: String) { self.autosaveName = autosaveName; super.init(frame: .zero) }
         required init?(coder: NSCoder) { fatalError() }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             guard let window else { return }
-            let name = "ServerWindow-\(profileId.uuidString)"
             // Restore the saved frame (if any), then enable automatic persistence.
-            window.setFrameUsingName(NSWindow.FrameAutosaveName(name))
-            window.setFrameAutosaveName(NSWindow.FrameAutosaveName(name))
+            window.setFrameUsingName(NSWindow.FrameAutosaveName(autosaveName))
+            window.setFrameAutosaveName(NSWindow.FrameAutosaveName(autosaveName))
         }
     }
 }

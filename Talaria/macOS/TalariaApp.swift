@@ -37,6 +37,31 @@ struct TalariaApp: App {
             WindowCommands(recents: recents)
         }
 
+        // Popped-out single-chat windows. Keyed by `{profileId, sessionId}` so
+        // popping the same session twice focuses the existing window instead of
+        // spawning a duplicate. `RootWindowScene` supplies the shared environment
+        // and a session-keyed frame slot (so pop-outs don't fight the main
+        // window's profile-keyed frame). The window resolves and shares the source
+        // window's live harness via `LiveHarnessRegistry` — no new connection.
+        WindowGroup(for: PoppedChatRoute.self) { $route in
+            if let route {
+                RootWindowScene(
+                    profileId: route.profileId,
+                    directory: directory,
+                    recents: recents,
+                    sidebarLayout: sidebarLayout,
+                    notificationSettings: notificationSettings,
+                    frameAutosaveName: "PoppedChatWindow-\(route.sessionId)",
+                    // A pop-out only mirrors an already-open session (resolved from
+                    // the live harness), so skip the primary-window launch work:
+                    // no redundant directory reload, and don't reorder recents.
+                    runsLaunchTask: false
+                ) {
+                    PoppedChatWindow(route: route)
+                }
+            }
+        }
+
         Settings {
             SettingsScene()
                 .environment(directory)

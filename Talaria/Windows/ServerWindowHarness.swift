@@ -223,11 +223,13 @@ final class ServerWindowHarness {
     }
 
     /// Builds a harness backed by an in-process ``MockACPTransport`` for UI
-    /// tests — no SSH, no admin runner, no snapshot.
-    static func makeMock() -> ServerWindowHarness {
+    /// tests — no SSH, no admin runner, no snapshot. `profileId` overrides the
+    /// generated profile id so tests can pin two mock harnesses to the same
+    /// profile (e.g. the registry's stale-vs-live eviction case).
+    static func makeMock(profileId: UUID = UUID()) -> ServerWindowHarness {
         let manager = SessionManager(backendFactory: { MockChatBackend() })
         let store = SessionsStore(manager: manager, adminRunner: nil)
-        let profile = ServerProfile(name: "Mock Server", kind: .ssh, host: "mock.local")
+        let profile = ServerProfile(id: profileId, name: "Mock Server", kind: .ssh, host: "mock.local")
         return ServerWindowHarness(store: store, profile: profile)
     }
 

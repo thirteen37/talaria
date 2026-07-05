@@ -10,6 +10,20 @@ struct ChatView: View {
     /// active session. Optional + defaulted so preview/test construction keeps
     /// compiling; the toolbar is gated on it being present.
     var store: SessionsStore? = nil
+    /// True when this view is a popped-out standalone window (`PoppedChatWindow`,
+    /// macOS) mirroring the *same* shared view model as its source tab. Drives an
+    /// independent composer draft and hides the Pop Out affordance (a pop-out
+    /// can't be popped again). Default false keeps every existing call site
+    /// unchanged.
+    var isDetached: Bool = false
+
+    /// Composer draft for a detached window, kept view-local so the pop-out and
+    /// its source tab type independently over the one shared view model. Unused
+    /// (and never bound) when `!isDetached`.
+    @State private var detachedDraft = ""
+    /// Opens the pop-out `WindowGroup(for: PoppedChatRoute.self)` (macOS). Unused
+    /// on iOS, where the Pop Out button is compiled out.
+    @Environment(\.openWindow) private var openWindow
 
     @State private var isRenaming = false
     @State private var renameText = ""
@@ -220,13 +234,22 @@ struct ChatView: View {
                 ReadOnlyComposerBanner()
             } else {
                 Composer(
-                    prompt: $viewModel.prompt,
+                    // A detached window types into its own view-local draft; the
+                    // source tab keeps binding the shared view model's `prompt`.
+                    prompt: isDetached ? $detachedDraft : $viewModel.prompt,
                     attachments: $viewModel.attachments,
                     isSending: viewModel.isSending,
                     isBlocked: viewModel.pendingPermission != nil,
                     blockedPlaceholder: viewModel.blockedPlaceholder,
                     availableCommands: viewModel.availableCommands,
-                    send: { Task { await viewModel.sendPrompt() } },
+                    send: {
+                        if isDetached {
+                            let text = detachedDraft
+                            Task { await viewModel.sendPrompt(text: text, clearComposer: { detachedDraft = "" }) }
+                        } else {
+                            Task { await viewModel.sendPrompt() }
+                        }
+                    },
                     cancel: { Task { await viewModel.cancel() } },
                     // Forward page keys while the composer holds focus; the
                     // window-wide `chatShortcuts` layer covers focus elsewhere.
@@ -423,6 +446,24 @@ struct ChatView: View {
     private var manageToolbarContent: some ToolbarContent {
         if let store {
             ToolbarItemGroup(placement: .primaryAction) {
+                #if os(macOS)
+                // Mirror this session into its own standalone window. Shown only on
+                // a source view (never a pop-out) and only once the harness has a
+                // profile id to route by. The pop-out shares this window's live
+                // view model, so it opens no new connection. `ChatView` only ever
+                // renders `.acp` sessions (TUI tabs route elsewhere), so no kind
+                // gate is needed.
+                if !isDetached, let profileId = store.profileId {
+                    Button {
+                        openWindow(value: PoppedChatRoute(profileId: profileId, sessionId: viewModel.sessionId))
+                    } label: {
+                        Label("Pop Out", systemImage: "macwindow.on.rectangle")
+                    }
+                    .help("Open this session in its own window")
+                    .accessibilityLabel("Pop out session")
+                }
+                #endif
+
                 if store.supportsRename {
                     Button {
                         renameText = viewModel.title ?? ""
@@ -720,10 +761,21 @@ final class LocalChatViewModel {
     }
 
     func sendPrompt() async {
+        await sendPrompt(text: prompt, clearComposer: { [weak self] in self?.prompt = "" })
+    }
+
+    /// Sends `rawText` as a turn (idle) or a mid-turn pending-input dispatch
+    /// (busy). The source composer is cleared through `clearComposer` at the point
+    /// the input is consumed — never by mutating `self.prompt` directly — so a
+    /// **detached** pop-out window can pass its own view-local draft's setter and a
+    /// detached send leaves the source window's `prompt` untouched. The plain
+    /// ``sendPrompt()`` passes the shared-composer setter. Staged `attachments`
+    /// stay on the shared view model in v1 (a detached window shares them).
+    func sendPrompt(text rawText: String, clearComposer: @escaping () -> Void) async {
         guard !isReadOnly else {
             return
         }
-        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         // A parked permission overlay blocks every send, idle or busy. Empty
         // input — no text *and* no staged image — is always a no-op.
         guard !text.isEmpty || !attachments.isEmpty, pendingPermission == nil else {
@@ -743,7 +795,7 @@ final class LocalChatViewModel {
         // busy is a no-op — the images stay staged for the next idle turn.
         if isSending {
             guard !text.isEmpty else { return }
-            await sendWhileBusy(text: text, client: client)
+            await sendWhileBusy(text: text, client: client, clearComposer: clearComposer)
             return
         }
 
@@ -751,7 +803,7 @@ final class LocalChatViewModel {
         // a native Talaria action), never sent to the LLM. Echo the typed command
         // as a user bubble, then route it.
         if text.hasPrefix("/") {
-            prompt = ""
+            clearComposer()
             _ = append(kind: .user, text: text)
             let parsed = SlashCommand(parsing: text)
             // Mark the session busy for the duration of the slash dispatch: it
@@ -786,7 +838,7 @@ final class LocalChatViewModel {
         // Normal idle send: text and/or staged images. Capture the attachments,
         // clear both composer fields on dispatch, and run a content-aware turn.
         let outgoing = attachments
-        prompt = ""
+        clearComposer()
         attachments = []
         await runPrompt(text: text, attachments: outgoing, client: client, echoUser: true)
     }
@@ -802,7 +854,7 @@ final class LocalChatViewModel {
     /// (`isSending`, `turnStartDate`, `statusText`, `markTurnStarted`) — the
     /// running turn owns those — and surfaces feedback as an inline `.event`
     /// line rather than a new user bubble, so the streaming transcript stays clean.
-    private func sendWhileBusy(text: String, client: any ChatBackend) async {
+    private func sendWhileBusy(text: String, client: any ChatBackend, clearComposer: @escaping () -> Void) async {
         let name: String
         let arg: String
         let isAutoQueue: Bool
@@ -812,7 +864,7 @@ final class LocalChatViewModel {
             // than queueing (concurrency is the whole point), and never touch the
             // live turn's busy state.
             if parsed.isBackground {
-                prompt = ""
+                clearComposer()
                 await startBackgroundPrompt(text: parsed.arg, client: client)
                 return
             }
@@ -833,7 +885,7 @@ final class LocalChatViewModel {
             isAutoQueue = true
         }
 
-        prompt = ""
+        clearComposer()
         if isAutoQueue {
             appendAutoQueueFeedback()
         } else if let marker = Self.busyDispatchMarker(name: name, arg: arg) {
