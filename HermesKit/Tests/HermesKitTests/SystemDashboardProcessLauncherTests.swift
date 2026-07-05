@@ -107,6 +107,31 @@ struct DashboardWatchdogTests {
         return nil
     }
 
+    /// Awaits the watchdog `Process`'s own exit, bounded by `timeout`.
+    ///
+    /// Replaces Foundation's synchronous `Process.waitUntilExit()`, which — called
+    /// from these `async` tests — spins the calling (Swift-concurrency cooperative)
+    /// thread's run loop and can hang the entire suite indefinitely: its
+    /// run-loop-based child reaping never gets re-driven from an async context, so
+    /// the wait never returns even though the process has exited (confirmed: the
+    /// watchdog itself exits in ~2s in isolation). `isRunning` is instead flipped by
+    /// Foundation's `PROC_EXIT` dispatch source on a global queue, off the calling
+    /// thread, so polling it asynchronously observes the exit without blocking a
+    /// cooperative thread. Force-kills on timeout so a genuinely stuck process fails
+    /// the test loudly rather than wedging the run.
+    @discardableResult
+    private func awaitWatchdogExit(_ process: Process, timeout: TimeInterval = 10.0) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while process.isRunning {
+            if Date() >= deadline {
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                return false
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return true
+    }
+
     /// Polls `kill(pid, 0)` until the process is gone (ESRCH) or the timeout
     /// elapses. Returns whether it died in time.
     private func waitForProcessGone(pid: pid_t, timeout: TimeInterval) async -> Bool {
@@ -134,7 +159,7 @@ struct DashboardWatchdogTests {
         try heartbeat.fileHandleForWriting.close()
 
         #expect(await waitForProcessGone(pid: pid, timeout: 10.0))
-        process.waitUntilExit()
+        #expect(await awaitWatchdogExit(process))
     }
 
     @Test
@@ -153,7 +178,7 @@ struct DashboardWatchdogTests {
         process.terminate()
 
         #expect(await waitForProcessGone(pid: pid, timeout: 10.0))
-        process.waitUntilExit()
+        #expect(await awaitWatchdogExit(process))
     }
 
     @Test
@@ -172,7 +197,7 @@ struct DashboardWatchdogTests {
         try heartbeat.fileHandleForWriting.close()
 
         #expect(await waitForProcessGone(pid: pid, timeout: 15.0))
-        process.waitUntilExit()
+        #expect(await awaitWatchdogExit(process))
     }
 
     @Test
@@ -191,7 +216,7 @@ struct DashboardWatchdogTests {
         process.terminate()
 
         #expect(await waitForProcessGone(pid: pid, timeout: 15.0))
-        process.waitUntilExit()
+        #expect(await awaitWatchdogExit(process))
     }
 
     @Test
@@ -200,7 +225,7 @@ struct DashboardWatchdogTests {
         // Child exits 17 on its own — the watchdog must surface that status so
         // the supervisor still detects a dashboard crash.
         let process = try spawnUnderWatchdog(child: "exit 17", heartbeat: heartbeat)
-        process.waitUntilExit()
+        #expect(await awaitWatchdogExit(process))
         #expect(process.terminationStatus == 17)
         try? heartbeat.fileHandleForWriting.close()
     }
