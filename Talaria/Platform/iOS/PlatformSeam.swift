@@ -103,6 +103,15 @@ extension View {
     /// seam so the shared call site compiles `#if`-free.
     func rememberWindowFrame(for profileId: UUID) -> some View { self }
 
+    /// No-op on iOS/iPadOS — mirror of the macOS explicit-name overload used by
+    /// popped-out chat windows (a macOS-only surface).
+    func rememberWindowFrame(named name: String) -> some View { self }
+
+    /// No-op on iOS/iPadOS — pop-out chat windows are macOS-only, so there's no
+    /// live-harness registry to track. Mirrors the macOS seam so the shared
+    /// `DesktopServerWindow` call site compiles `#if`-free.
+    func trackLiveHarness(_ harness: ServerWindowHarness?) -> some View { self }
+
     /// Fires `action` when the app returns from a real backgrounding (a
     /// `.background` → `.active` round-trip), so the window can probe and, if
     /// needed, rebuild its suspended SSH connection. A bare `.inactive` blip

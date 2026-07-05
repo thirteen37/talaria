@@ -114,6 +114,10 @@ struct DesktopServerWindow: View {
             // refcount when the window closes.
             controller.tearDown()
         }
+        // Publish this window's live harness so a popped-out chat window can share
+        // its connection, and deregister on close so the pop-out dismisses with the
+        // source window. No-op seam on iOS/iPad (pop-out is macOS-only).
+        .trackLiveHarness(controller.harness)
     }
 
     @ViewBuilder

@@ -16,20 +16,30 @@ struct RootWindowScene<Content: View>: View {
     /// be killed-and-restored); nil on macOS, where the windows read it as the
     /// optional `nil` form and the save/restore wiring stays inert.
     var windowRestoration: WindowRestorationStore? = nil
+    /// Explicit window-frame autosave name. Nil → key the frame by launch
+    /// `profileId` (the main window). Popped-out chat windows pass a session-keyed
+    /// name so they don't share the main window's (profile-keyed) frame slot.
+    var frameAutosaveName: String? = nil
+    /// Whether to run the launch task (reload the profile directory, record the
+    /// profile as recently-opened). True for a primary window opened *for* a
+    /// profile; false for a derived window (a chat pop-out) that only mirrors an
+    /// already-open session — there, `directory.reload()` is a redundant disk read
+    /// and `recents.record` would wrongly reorder the recent-servers list.
+    var runsLaunchTask: Bool = true
     @ViewBuilder var content: () -> Content
 
     @Environment(\.openWindow) private var openWindow
     private var notifier: ChatNotifier { .shared }
 
     var body: some View {
-        content()
-            .rememberWindowFrame(for: profileId)
+        framedContent()
             .environment(directory)
             .environment(recents)
             .environment(sidebarLayout)
             .environment(notificationSettings)
             .environment(windowRestoration)
             .task {
+                guard runsLaunchTask else { return }
                 await directory.reload()
                 recents.record(profileId)
             }
@@ -46,6 +56,19 @@ struct RootWindowScene<Content: View>: View {
             // window would never be opened.
             .onAppear { focusWindow(for: notifier.pendingRoute) }
             .onChange(of: notifier.pendingRoute) { _, route in focusWindow(for: route) }
+    }
+
+    /// The window content with its frame autosave applied: an explicit
+    /// session-keyed name when given (pop-out windows), else the launch-profile
+    /// default. `frameAutosaveName` is constant per scene, so the conditional
+    /// never re-keys a live window.
+    @ViewBuilder
+    private func framedContent() -> some View {
+        if let frameAutosaveName {
+            content().rememberWindowFrame(named: frameAutosaveName)
+        } else {
+            content().rememberWindowFrame(for: profileId)
+        }
     }
 
     private func focusWindow(for route: NotificationRoute?) {
