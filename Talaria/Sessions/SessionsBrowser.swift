@@ -578,6 +578,17 @@ private struct SessionRow: View {
 
     @State private var isHovering = false
 
+    /// On a compact-width scene the metadata strip wraps onto two lines; regular
+    /// width (and macOS, where this resolves to `.regular`) keeps the single-line
+    /// layout. `horizontalSizeClass` is a scene-level trait, not per-column, so
+    /// this is really "the whole scene is compact": iPhone always, and iPad only
+    /// in Slide Over / a narrow multitasking window — a regular-width iPad reports
+    /// `.regular` even for a narrow split-view column. That's fine here: on the
+    /// desktop/iPad window this row lives in the wide detail column (`BrowseDetail`),
+    /// never a narrow sidebar, so the truncation this two-line layout fixes only
+    /// occurs when the scene is genuinely compact.
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
     var body: some View {
         // Plain (non-Button) primary content so the row participates in
         // `List(selection:)` ↑/↓ navigation instead of swallowing clicks.
@@ -699,38 +710,61 @@ private struct SessionRow: View {
         #endif
     }
 
-    /// Compact, secondary metadata strip under the title/preview. Identity
-    /// (time, source, model) sits on the left; the numeric stats (message/tool
-    /// counts, tokens, cost) are pushed to the trailing edge so the row reads as
-    /// two balanced groups instead of one long left-stacked run. Every element
-    /// is conditional, so the lean search-result shape (all new fields nil) and
-    /// older servers render exactly the title + time as before.
+    /// Identity fields (time, source, model). In a compact-width scene these get
+    /// their own line above the stats; on regular width they sit left of a `Spacer`.
+    @ViewBuilder
+    private var identityGroup: some View {
+        if let time = summary.displayTime {
+            Text(time, style: .relative)
+        }
+        if let source = summary.source, !source.isEmpty {
+            chip(source)
+        }
+        if let model = summary.model, !model.isEmpty {
+            chip(model)
+        }
+    }
+
+    /// Numeric stats (message/tool counts, tokens, cost). In a compact-width scene
+    /// these get their own line below identity; on regular width they're trailing.
+    @ViewBuilder
+    private var statsGroup: some View {
+        if let count = summary.messageCount, count > 0 {
+            Label("\(count)", systemImage: "bubble.left.and.bubble.right")
+        }
+        if let tools = summary.toolCallCount, tools > 0 {
+            Label("\(tools)", systemImage: "wrench.and.screwdriver")
+        }
+        if let tokens = summary.tokenTotal, tokens > 0 {
+            Text(Self.tokenLabel(tokens))
+        }
+        if let cost = summary.costDisplay {
+            Text(cost)
+        }
+    }
+
+    /// Compact, secondary metadata strip under the title/preview. Identity (time,
+    /// source, model) and the numeric stats (message/tool counts, tokens, cost)
+    /// read as two balanced groups instead of one long left-stacked run: in a
+    /// compact-width scene they stack onto two lines so nothing truncates on the
+    /// narrow iPhone width; on regular width identity sits left and the stats are
+    /// pushed to the trailing edge by a `Spacer`. Every element is conditional, so
+    /// the lean search-result shape (all new fields nil) and older servers render
+    /// exactly the title + time as before.
     @ViewBuilder
     private var metadata: some View {
-        HStack(spacing: 6) {
-            if let time = summary.displayTime {
-                Text(time, style: .relative)
-            }
-            if let source = summary.source, !source.isEmpty {
-                chip(source)
-            }
-            if let model = summary.model, !model.isEmpty {
-                chip(model)
-            }
-
-            Spacer(minLength: 12)
-
-            if let count = summary.messageCount, count > 0 {
-                Label("\(count)", systemImage: "bubble.left.and.bubble.right")
-            }
-            if let tools = summary.toolCallCount, tools > 0 {
-                Label("\(tools)", systemImage: "wrench.and.screwdriver")
-            }
-            if let tokens = summary.tokenTotal, tokens > 0 {
-                Text(Self.tokenLabel(tokens))
-            }
-            if let cost = summary.costDisplay {
-                Text(cost)
+        Group {
+            if horizontalSizeClass == .compact {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) { identityGroup }
+                    HStack(spacing: 10) { statsGroup }
+                }
+            } else {
+                HStack(spacing: 6) {
+                    identityGroup
+                    Spacer(minLength: 12)
+                    statsGroup
+                }
             }
         }
         .font(.caption2)
